@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect, useRef, useCallback, useLayoutEffect } from "react";
 import { motion, useAnimationControls } from "framer-motion";
+import * as THREE from "three";
 
 const K={c:"#00F2FE",r:"#FF3366",g:"#00FF88",gold:"#FFD700",pu:"#BD00FF",co:"#0044EE",bg:"#04060D",pan:"#060A12",brd:"#0A1D33",dim:"#2A5070",hi:"#A8D0EC",tx:"#4A7090"};
 const CAP=10000;
@@ -209,102 +210,187 @@ function BootSequence({onDone}:{onDone:()=>void}){
   );
 }
 
-function Globe({trades,blackSwan,whaleAlert,totalPnL,tradeCount}:{trades:Trade[],blackSwan:boolean,whaleAlert:boolean,totalPnL:number,tradeCount:number}){
+function Globe3D({trades,blackSwan,whaleAlert,totalPnL,tradeCount}:{trades:Trade[],blackSwan:boolean,whaleAlert:boolean,totalPnL:number,tradeCount:number}){
+  const mountRef=useRef<HTMLDivElement>(null);
   const [moneyLabels,setMoneyLabels]=useState<MoneyLabel[]>([]);
-  const [rot,setRot]=useState(0);
-  const W=280,H=270,R=108,CX=W/2,CY=H/2-8;
-  const CITIES:Array<[number,number,string]>=[[W*.28,H*.38,"NYC"],[W*.50,H*.34,"LON"],[W*.76,H*.38,"TYO"],[W*.73,H*.53,"SGP"],[W*.63,H*.43,"DXB"],[W*.74,H*.45,"HKG"]];
-  const recent=trades.slice(0,6);
-  useEffect(()=>{const iv=setInterval(()=>setRot(r=>(r+.25)%360),50);return()=>clearInterval(iv);},[]);
+  const W=280,H=248;
   const prevLen=useRef(0);
+  const CITIES_2D:Array<[number,number,string]>=[[W*.28,H*.38,"NYC"],[W*.50,H*.34,"LON"],[W*.76,H*.38,"TYO"],[W*.73,H*.53,"SGP"],[W*.63,H*.43,"DXB"],[W*.74,H*.45,"HKG"]];
   useEffect(()=>{
     if(trades.length>prevLen.current){
       const t=trades[0];
       if(t&&t.pnl!==0){
-        const city=CITIES[Math.floor(Math.random()*CITIES.length)];
+        const city=CITIES_2D[Math.floor(Math.random()*CITIES_2D.length)];
         setMoneyLabels(p=>[...p.slice(-6),{id:Math.random().toString(36).slice(2),x:city[0]+(Math.random()-.5)*18,y:city[1]+(Math.random()-.5)*12,val:t.pnl,born:Date.now()}]);
       }
       prevLen.current=trades.length;
     }
   });
   useEffect(()=>{const iv=setInterval(()=>setMoneyLabels(p=>p.filter(m=>Date.now()-m.born<2800)),100);return()=>clearInterval(iv);},[]);
-  const lonLines=Array.from({length:8},(_,i)=>i*(360/8)+rot);
-  const latLines=[-55,-35,-15,0,15,35,55].map(lat=>{const y=CY-lat/90*R*.9;const rx=R*Math.cos(lat*Math.PI/180);return{y,rx,ry:Math.max(2,rx*.2)};});
+  useEffect(()=>{
+    const mount=mountRef.current;if(!mount)return;
+    const scene=new THREE.Scene();
+    const camera=new THREE.PerspectiveCamera(55,W/H,.1,100);
+    camera.position.z=2.6;
+    const renderer=new THREE.WebGLRenderer({antialias:true,alpha:true});
+    renderer.setSize(W,H);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
+    renderer.setClearColor(0x000000,0);
+    mount.appendChild(renderer.domElement);
+    const mainHex=blackSwan?K.r:K.c;
+    const dimHex=blackSwan?"#1A0004":"#001428";
+    const mainCol=new THREE.Color(mainHex);
+    const dimCol=new THREE.Color(dimHex);
+    // 3000 particle globe — Fibonacci lattice
+    const N=3000;
+    const pPos=new Float32Array(N*3);
+    const pCol=new Float32Array(N*3);
+    for(let i=0;i<N;i++){
+      const phi=Math.acos(1-2*(i+.5)/N);
+      const theta=Math.PI*(1+Math.sqrt(5))*i;
+      const x=Math.sin(phi)*Math.cos(theta),y=Math.sin(phi)*Math.sin(theta),z=Math.cos(phi);
+      pPos[i*3]=x;pPos[i*3+1]=y;pPos[i*3+2]=z;
+      const t=Math.pow(Math.random(),.5);
+      const m=dimCol.clone().lerp(mainCol,t*.55);
+      pCol[i*3]=m.r;pCol[i*3+1]=m.g;pCol[i*3+2]=m.b;
+    }
+    const pGeo=new THREE.BufferGeometry();
+    pGeo.setAttribute("position",new THREE.BufferAttribute(pPos,3));
+    pGeo.setAttribute("color",new THREE.BufferAttribute(pCol,3));
+    const pMat=new THREE.PointsMaterial({size:.024,vertexColors:true,transparent:true,opacity:.88,sizeAttenuation:true});
+    const globe=new THREE.Points(pGeo,pMat);
+    scene.add(globe);
+    // Latitude rings
+    const ringMat=new THREE.LineBasicMaterial({color:mainCol,transparent:true,opacity:.2});
+    [-0.5,0,0.5].forEach(yp=>{
+      const r=Math.sqrt(1-yp*yp);
+      const pts=Array.from({length:65},(_,i2)=>new THREE.Vector3(r*Math.cos(i2/64*Math.PI*2),yp,r*Math.sin(i2/64*Math.PI*2)));
+      scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),ringMat.clone()));
+    });
+    // City nodes
+    const cityLatLon:Array<[number,number]>=[[40.7,-74],[51.5,0],[35.7,139.7],[1.3,103.8],[25.2,55.3],[22.3,114.2]];
+    const cPos2=new Float32Array(cityLatLon.length*3);
+    const cCol2=new Float32Array(cityLatLon.length*3);
+    cityLatLon.forEach(([lat,lon],i)=>{
+      const phi2=(90-lat)*Math.PI/180,th=(lon+180)*Math.PI/180;
+      cPos2[i*3]=Math.sin(phi2)*Math.cos(th);cPos2[i*3+1]=Math.cos(phi2);cPos2[i*3+2]=Math.sin(phi2)*Math.sin(th);
+      const cc=new THREE.Color(blackSwan?K.r:K.g);
+      cCol2[i*3]=cc.r;cCol2[i*3+1]=cc.g;cCol2[i*3+2]=cc.b;
+    });
+    const cGeo=new THREE.BufferGeometry();
+    cGeo.setAttribute("position",new THREE.BufferAttribute(cPos2,3));
+    cGeo.setAttribute("color",new THREE.BufferAttribute(cCol2,3));
+    const cMat=new THREE.PointsMaterial({size:.062,vertexColors:true,transparent:true,opacity:.92});
+    scene.add(new THREE.Points(cGeo,cMat));
+    // Central AI eye — wireframe sphere
+    const eyeGeo=new THREE.SphereGeometry(.11,12,8);
+    const eyeMat=new THREE.MeshBasicMaterial({color:mainCol,transparent:true,opacity:.38,wireframe:true});
+    const eye=new THREE.Mesh(eyeGeo,eyeMat);
+    scene.add(eye);
+    const light=new THREE.PointLight(mainCol,.8,4);
+    scene.add(light);
+    let af:number;let angle=0;
+    const tick=()=>{af=requestAnimationFrame(tick);angle+=.003;globe.rotation.y=angle;eye.rotation.y=angle*2;renderer.render(scene,camera);};
+    tick();
+    return()=>{
+      cancelAnimationFrame(af);
+      if(mount.contains(renderer.domElement))mount.removeChild(renderer.domElement);
+      renderer.dispose();pGeo.dispose();pMat.dispose();cGeo.dispose();cMat.dispose();eyeGeo.dispose();eyeMat.dispose();
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[blackSwan]);
   const pnl=totalPnL;
   return(
-    <svg width={W} height={H} style={{display:"block",overflow:"visible"}}>
-      <defs>
-        <radialGradient id="gbg" cx="50%" cy="40%" r="50%">
-          <stop offset="0%" stopColor={blackSwan?"#1A0308":"#03091A"} stopOpacity="1"/>
-          <stop offset="100%" stopColor={blackSwan?"#0C0203":"#010408"} stopOpacity="1"/>
-        </radialGradient>
-        <radialGradient id="eye" cx="50%" cy="50%" r="50%">
-          <stop offset="0%" stopColor="#FFFFFF" stopOpacity=".95"/>
-          <stop offset="25%" stopColor={K.c} stopOpacity=".8"/>
-          <stop offset="65%" stopColor="#7B00FF" stopOpacity=".4"/>
-          <stop offset="100%" stopColor="#7B00FF" stopOpacity="0"/>
-        </radialGradient>
-        <radialGradient id="gedge" cx="50%" cy="50%" r="50%">
-          <stop offset="65%" stopColor="transparent"/>
-          <stop offset="100%" stopColor={blackSwan?K.r:K.c} stopOpacity=".18"/>
-        </radialGradient>
-        <filter id="ggf"><feGaussianBlur stdDeviation="2.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
-        <clipPath id="gc"><circle cx={CX} cy={CY} r={R}/></clipPath>
-      </defs>
-      <circle cx={CX} cy={CY} r={R+2} fill="none" stroke={blackSwan?K.r:K.c} strokeWidth=".5" opacity=".25"/>
-      <circle cx={CX} cy={CY} r={R} fill="url(#gbg)"/>
-      {whaleAlert&&<circle cx={CX} cy={CY} r={R+14} fill="none" stroke={K.pu} strokeWidth="1.8" opacity=".5" style={{animation:"breathe 1s ease-in-out infinite"}}/>}
-      {blackSwan&&<circle cx={CX} cy={CY} r={R+8} fill="none" stroke={K.r} strokeWidth="1.2" opacity=".4" style={{animation:"shockwave 1.5s ease-out infinite"}}/>}
-      <g clipPath="url(#gc)">
-        {latLines.map((l,i)=><ellipse key={i} cx={CX} cy={l.y} rx={l.rx} ry={l.ry} fill="none" stroke={blackSwan?K.r+"80":K.brd} strokeWidth=".5" opacity=".55"/>)}
-        {lonLines.map((angle,i)=>{
-          const rad=angle*Math.PI/180;
-          const sx=CX+R*Math.sin(rad),ex=CX-R*Math.sin(rad);
-          return<line key={i} x1={sx} y1={CY-R*.95} x2={ex} y2={CY+R*.95} stroke={blackSwan?K.r+"50":K.brd} strokeWidth=".4" opacity=".4"/>;
-        })}
-        {recent.map((t,i)=>{
-          const c1=CITIES[i%6],c2=CITIES[(i+2)%6];
-          const mx=(c1[0]+c2[0])/2,my=(c1[1]+c2[1])/2-22;
-          const col=t.side==="BUY"?K.g:K.r;
-          return<path key={t.id} d={`M${c1[0]},${c1[1]} Q${mx},${my} ${c2[0]},${c2[1]}`} fill="none" stroke={col} strokeWidth="1.3" opacity=".75" strokeDasharray="4 3" style={{animation:`arcFlow ${1.4+i*.25}s linear infinite`}}/>;
-        })}
-        {recent.length===0&&CITIES.slice(0,4).map((_,i)=>{
-          const c1=CITIES[i],c2=CITIES[(i+2)%6];
-          const mx=(c1[0]+c2[0])/2,my=(c1[1]+c2[1])/2-18;
-          return<path key={i} d={`M${c1[0]},${c1[1]} Q${mx},${my} ${c2[0]},${c2[1]}`} fill="none" stroke={K.c} strokeWidth=".7" opacity=".25" strokeDasharray="3 5" style={{animation:`arcFlow ${2+i*.6}s linear infinite`}}/>;
-        })}
-        {CITIES.map(([x,y,name],i)=>(
-          <g key={i}>
-            <circle cx={x} cy={y} r={8} fill="none" stroke={K.c} strokeWidth=".3" opacity=".3" style={{animation:"breathe 2s ease-in-out infinite"}}/>
-            <circle cx={x} cy={y} r={3.5} fill={K.c+"20"} stroke={K.c} strokeWidth=".8" opacity=".7"/>
-            <circle cx={x} cy={y} r={1.5} fill={K.c} opacity=".9"/>
-            <text x={x} y={y-9} textAnchor="middle" fontSize="6" fill={K.hi} opacity=".55" fontFamily="monospace">{name}</text>
-          </g>
-        ))}
-        <g filter="url(#ggf)" style={{animation:"breathe 3s ease-in-out infinite"}}>
-          <circle cx={CX} cy={CY} r={24} fill="url(#eye)" opacity=".85"/>
-          <circle cx={CX} cy={CY} r={17} fill="none" stroke={K.c} strokeWidth=".7" opacity=".5"/>
-          <circle cx={CX} cy={CY} r={9} fill={K.c} opacity=".25"/>
-          <circle cx={CX-6} cy={CY-6} r={3.5} fill="#fff" opacity=".55"/>
-        </g>
-        {moneyLabels.map(m=>(
-          <text key={m.id} x={m.x} y={m.y} textAnchor="middle" fontSize="9" fontFamily="monospace" fontWeight="700" fill={m.val>=0?K.g:K.r} style={{animation:"moneyFloat 2.8s ease-out forwards"}}>
-            {m.val>=0?"+$":"-$"}{f2(Math.abs(m.val))}
-          </text>
-        ))}
-        <circle cx={CX} cy={CY} r={R} fill="url(#gedge)"/>
-      </g>
-      <text x={CX} y={H-24} textAnchor="middle" fontSize="13" fontFamily="monospace" fontWeight="700" fill={pnl>=0?K.g:K.r} style={{filter:`drop-shadow(0 0 6px ${pnl>=0?K.g:K.r})`}}>
-        {pnl>=0?"+$":"-$"}{f2(Math.abs(pnl))}
-      </text>
-      <text x={CX} y={H-10} textAnchor="middle" fontSize="7.5" fontFamily="monospace" fill={K.dim}>TOTAL P&amp;L · {tradeCount} TRADES</text>
-      {([["ASIA",K.c,W*.12],["EU",K.gold,W*.5],["US",K.g,W*.88]] as Array<[string,string,number]>).map(([label,col,x])=>(
-        <g key={label}>
-          <circle cx={x} cy={H-40} r={3} fill={col} opacity=".75" style={{animation:"breathe 2s ease-in-out infinite"}}/>
-          <text x={x} y={H-30} textAnchor="middle" fontSize="6" fill={col} fontFamily="monospace" opacity=".8">{label}</text>
-        </g>
+    <div style={{position:"relative",width:W,height:270}}>
+      <div ref={mountRef} style={{position:"absolute",top:0,left:0,width:W,height:H}}/>
+      {whaleAlert&&<div style={{position:"absolute",top:(H/2-108)+"px",left:(W/2-108)+"px",width:216,height:216,borderRadius:"50%",border:"2px solid "+K.pu,animation:"breathe 1s ease-in-out infinite",pointerEvents:"none"}}/>}
+      {blackSwan&&<div style={{position:"absolute",top:(H/2-116)+"px",left:(W/2-116)+"px",width:232,height:232,borderRadius:"50%",border:"1.2px solid "+K.r,animation:"shockwave 1.5s ease-out infinite",pointerEvents:"none"}}/>}
+      {moneyLabels.map(m=>(
+        <div key={m.id} style={{position:"absolute",left:m.x,top:m.y,fontSize:9,fontFamily:"monospace",fontWeight:700,color:m.val>=0?K.g:K.r,animation:"moneyFloat 2.8s ease-out forwards",pointerEvents:"none",transform:"translateX(-50%)",whiteSpace:"nowrap"}}>
+          {m.val>=0?"+$":"-$"}{f2(Math.abs(m.val))}
+        </div>
       ))}
-    </svg>
+      <div style={{position:"absolute",bottom:0,left:0,right:0,textAlign:"center",pointerEvents:"none"}}>
+        <div style={{fontSize:13,fontFamily:"monospace",fontWeight:700,color:pnl>=0?K.g:K.r,filter:`drop-shadow(0 0 6px ${pnl>=0?K.g:K.r})`}}>
+          {pnl>=0?"+$":"-$"}{f2(Math.abs(pnl))}
+        </div>
+        <div style={{fontSize:7.5,fontFamily:"monospace",color:K.dim}}>TOTAL P&L · {tradeCount} TRADES</div>
+      </div>
+    </div>
+  );
+}
+
+
+function WireframeFace({id,cx,cy,r,col,on,dis,isAegis,isSell,seed,label,conf}:{id:string,cx:number,cy:number,r:number,col:string,on:boolean,dis:boolean,isAegis:boolean,isSell:boolean,seed:number,label:string,conf:number|null}){
+  const hw=r*.9,hh=r;
+  const pts=[
+    [cx,cy-hh*.88],
+    [cx-hw*.62,cy-hh*.36],
+    [cx+hw*.62,cy-hh*.36],
+    [cx-hw*.8,cy+hh*.2],
+    [cx+hw*.8,cy+hh*.2],
+    [cx-hw*.46,cy+hh*.75],
+    [cx+hw*.46,cy+hh*.75],
+    [cx,cy+hh*.88],
+  ];
+  const edges=[[0,1],[0,2],[1,2],[1,3],[2,4],[3,5],[4,6],[5,7],[6,7],[1,4],[2,3],[3,6],[4,5]];
+  const eyeL=[cx-hw*.3,cy-hh*.2];
+  const eyeR=[cx+hw*.3,cy-hh*.2];
+  const er=r*.2;
+  const isC=r>20;
+  return(
+    <>
+      <circle cx={cx} cy={cy} r={r+10} fill={col} opacity={on&&!dis?.06:.015}/>
+      <ellipse cx={cx} cy={cy} rx={hw} ry={hh} fill={col+"14"} stroke={col} strokeWidth={on?1.8:.6} opacity={on&&!dis?1:.4} strokeDasharray={dis?"3 2":"none"}/>
+      {on&&!dis&&<ellipse cx={cx} cy={cy} rx={hw+5} ry={hh+5} fill="none" stroke={col} strokeWidth=".5" opacity=".26"/>}
+      {isAegis&&isSell&&!dis&&<ellipse cx={cx} cy={cy} rx={hw+9} ry={hh+9} fill="none" stroke={K.r} strokeWidth="1.2" opacity=".5" style={{animation:"breathe .8s ease-in-out infinite"}}/>}
+      <g stroke={col} strokeWidth=".55" opacity={on&&!dis?.55:.16}>
+        {edges.map(([a,b],ei)=><line key={ei} x1={pts[a][0]} y1={pts[a][1]} x2={pts[b][0]} y2={pts[b][1]}/>)}
+      </g>
+      {on&&!dis&&pts.slice(0,6).map(([px,py],vi)=>(
+        <circle key={vi} cx={px} cy={py} r={0.85} fill={col} opacity={0.7}/>
+      ))}
+      <polygon points={`${eyeL[0]},${eyeL[1]-er} ${eyeL[0]+er},${eyeL[1]} ${eyeL[0]},${eyeL[1]+er} ${eyeL[0]-er},${eyeL[1]}`} fill={col} opacity={on&&!dis?.88:.2}/>
+      <polygon points={`${eyeR[0]},${eyeR[1]-er} ${eyeR[0]+er},${eyeR[1]} ${eyeR[0]},${eyeR[1]+er} ${eyeR[0]-er},${eyeR[1]}`} fill={col} opacity={on&&!dis?.88:.2}/>
+      {on&&!dis&&(
+        <g clipPath={`url(#acp${id})`}>
+          <rect x={cx-hw+0.5} width={hw*2-1} height={1.8} fill={col} opacity={0.52} y={cy-hh}>
+            <animateTransform attributeName="transform" type="translate" from="0 0" to={`0 ${hh*2}`} dur="1.8s" repeatCount="indefinite" additive="sum" begin={`${(seed%9)*0.2}s`}/>
+          </rect>
+        </g>
+      )}
+      {isAegis&&isSell&&!dis&&(
+        <>
+          <ellipse cx={cx-2} cy={cy+1} rx={hw} ry={hh} fill="none" stroke={K.r} strokeWidth={1} opacity={0.55} style={{animation:"glitch 0.12s step-start infinite"}}/>
+          <ellipse cx={cx+2} cy={cy-1} rx={hw} ry={hh} fill="none" stroke={K.r} strokeWidth={0.5} opacity={0.3} style={{animation:"glitch 0.18s step-start infinite"}}/>
+        </>
+      )}
+      <text x={cx} y={cy+(isC?5:3.5)} textAnchor="middle" fontSize={isC?8:6} fontFamily="monospace" fill={dis?K.dim:on?col:K.tx} fontWeight="700">{label}</text>
+      {conf!==null&&!dis&&<text x={cx} y={cy+r+12} textAnchor="middle" fontSize="7" fontFamily="monospace" fill={col} opacity=".8">{conf}%</text>}
+    </>
+  );
+}
+
+function ElectricArc({x1,y1,x2,y2,col,active}:{x1:number,y1:number,x2:number,y2:number,col:string,active:boolean}){
+  if(!active)return<line x1={x1} y1={y1} x2={x2} y2={y2} stroke={K.brd} strokeWidth=".5" opacity=".3"/>;
+  const dx=x2-x1,dy=y2-y1,len=Math.max(Math.sqrt(dx*dx+dy*dy),1);
+  const nx=-dy/len,ny=dx/len;
+  const off=len*.09;
+  const mx=(x1+x2)/2,my=(y1+y2)/2;
+  const cx1=mx+nx*off,cy1=my+ny*off;
+  const cx2=mx-nx*off*.6,cy2=my-ny*off*.6;
+  const cx3=mx+nx*off*.3,cy3=my+ny*off*.3;
+  const p1=`M${x1},${y1} Q${cx1},${cy1} ${x2},${y2}`;
+  const p2=`M${x1},${y1} Q${cx2},${cy2} ${x2},${y2}`;
+  const p3=`M${x1},${y1} Q${cx3},${cy3} ${x2},${y2}`;
+  return(
+    <g style={{animation:"arcFlicker 0.7s ease-in-out infinite"}}>
+      <path d={p1} fill="none" stroke={col} strokeWidth="1.4" opacity=".75"/>
+      <path d={p2} fill="none" stroke={col} strokeWidth=".5" opacity=".4"/>
+      <path d={p3} fill="none" stroke={col} strokeWidth=".3" opacity=".2"/>
+      <circle r="2" fill={col} opacity=".9"><animateMotion dur="0.85s" repeatCount="indefinite" path={p1}/></circle>
+      <circle r="1.3" fill="#fff" opacity=".75"><animateMotion dur="1.05s" repeatCount="indefinite" path={p2} begin="0.45s"/></circle>
+    </g>
   );
 }
 
@@ -318,66 +404,24 @@ function SwarmGraph({st,debate,disabled,swarmRef}:{st:{[k:string]:AgentState},de
         <defs>
           <filter id="agf"><feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
           <filter id="agfS"><feGaussianBlur stdDeviation="2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
-          {AGENTS.map(({id,lv})=>{const n=nm[id];const rv=id==="consensus"?22:lv===1?17:lv===2?13:11;return<clipPath key={id} id={`acp${id}`}><circle cx={n.pos.x} cy={n.pos.y} r={rv-0.5}/></clipPath>;})}
+          {AGENTS.map(({id,lv})=>{const n=nm[id];const r=id==="consensus"?22:lv===1?17:lv===2?13:11;const hw=r*.9,hh=r;return<clipPath key={id} id={`acp${id}`}><ellipse cx={n.pos.x} cy={n.pos.y} rx={hw-.5} ry={hh-.5}/></clipPath>;})}
         </defs>
         {CONNS.map(([a,b])=>{
           const pa=nm[a]?.pos,pb=nm[b]?.pos;if(!pa||!pb)return null;
           const deb=debate.includes(a)&&debate.includes(b);
           const dis=disabled.has(a)||disabled.has(b);
-          return<line key={a+b} x1={pa.x} y1={pa.y} x2={pb.x} y2={pb.y} stroke={dis?"#050810":deb?K.c:K.brd} strokeWidth={deb?1.8:.5} opacity={dis?.07:deb?.9:.3} strokeDasharray={deb?"4 3":"none"}/>;
+          if(dis)return<line key={a+b} x1={pa.x} y1={pa.y} x2={pb.x} y2={pb.y} stroke="#050810" strokeWidth=".5" opacity=".07"/>;
+          return<ElectricArc key={a+b} x1={pa.x} y1={pa.y} x2={pb.x} y2={pb.y} col={deb?K.c:K.brd} active={deb}/>;
         })}
         {AGENTS.map(({id,s,lv})=>{
           const n=nm[id],ag=st[id]||{on:false,conf:null,sig:null,th:""};
-          const dis=disabled.has(id),isC=id==="consensus",isAegis=id==="aegis";
-          const r=isC?22:lv===1?17:lv===2?13:11;
-          const col=dis?"#101820":ag.sig==="BUY"?K.g:ag.sig==="SELL"?K.r:isC?K.c:K.co;
+          const dis=disabled.has(id),isAegis=id==="aegis";
+          const r=id==="consensus"?22:lv===1?17:lv===2?13:11;
+          const col=dis?"#101820":ag.sig==="BUY"?K.g:ag.sig==="SELL"?K.r:id==="consensus"?K.c:K.co;
           const seed=id.split("").reduce((a,c)=>a+c.charCodeAt(0),0);
-          const sn=(x:number)=>(((seed*x*2654435761)>>>0)%100)/100;
-          const ar=r*.75;
-          const avPts=[
-            [n.pos.x-ar*.25+sn(1)*ar*.2,n.pos.y-ar*.75],
-            [n.pos.x+ar*.25+sn(2)*ar*.2,n.pos.y-ar*.75],
-            [n.pos.x-ar*.55,n.pos.y-ar*.15],
-            [n.pos.x+ar*.55,n.pos.y-ar*.15],
-            [n.pos.x-ar*.32,n.pos.y+ar*.38],
-            [n.pos.x+ar*.32,n.pos.y+ar*.38],
-            [n.pos.x,n.pos.y+ar*.82],
-          ];
-          const edges=[[0,1],[0,2],[1,3],[2,3],[2,4],[3,5],[4,6],[5,6],[0,3],[1,2],[4,5]];
-          const eyeL=[n.pos.x-ar*.3,n.pos.y-ar*.12];
-          const eyeR=[n.pos.x+ar*.3,n.pos.y-ar*.12];
           return(
             <g key={id} filter={ag.on&&!dis?"url(#agf)":undefined} opacity={dis?.18:1} style={{cursor:"pointer"}} onMouseEnter={()=>setHov(id)} onMouseLeave={()=>setHov(null)}>
-              <circle cx={n.pos.x} cy={n.pos.y} r={r+10} fill={col} opacity={ag.on?.06:.015}/>
-              <circle cx={n.pos.x} cy={n.pos.y} r={r} fill={col+"14"} stroke={col} strokeWidth={ag.on?1.8:.6} opacity={ag.on?1:.4} strokeDasharray={dis?"3 2":"none"}/>
-              {ag.on&&!dis&&<circle cx={n.pos.x} cy={n.pos.y} r={r+5} fill="none" stroke={col} strokeWidth=".5" opacity=".3"/>}
-              {isAegis&&ag.sig==="SELL"&&!dis&&<circle cx={n.pos.x} cy={n.pos.y} r={r+9} fill="none" stroke={K.r} strokeWidth="1.2" opacity=".5" style={{animation:"breathe .8s ease-in-out infinite"}}/>}
-              <g stroke={col} strokeWidth=".55" opacity={ag.on&&!dis?.6:.18} filter={ag.on&&!dis?"url(#agfS)":undefined}>
-                {edges.map(([a,b],ei)=><line key={ei} x1={avPts[a][0]} y1={avPts[a][1]} x2={avPts[b][0]} y2={avPts[b][1]}/>)}
-              </g>
-              {/* Mesh node dots */}
-              {ag.on&&!dis&&avPts.slice(0,5).map(([px,py],vi)=>(
-                <circle key={vi} cx={px} cy={py} r={0.9} fill={col} opacity={0.75}/>
-              ))}
-              {/* Cybernetic scan line */}
-              {ag.on&&!dis&&(
-                <g clipPath={`url(#acp${id})`}>
-                  <rect x={n.pos.x-r+0.5} width={r*2-1} height={1.5} fill={col} opacity={0.5} y={n.pos.y-r}>
-                    <animateTransform attributeName="transform" type="translate" from="0 0" to={`0 ${r*2}`} dur="1.8s" repeatCount="indefinite" additive="sum" begin={`${(seed%9)*0.2}s`}/>
-                  </rect>
-                </g>
-              )}
-              {/* AEGIS conflict glitch */}
-              {isAegis&&ag.sig==="SELL"&&!dis&&(
-                <>
-                  <circle cx={n.pos.x-2} cy={n.pos.y+1} r={r} fill="none" stroke={K.r} strokeWidth={1} opacity={0.55} style={{animation:"glitch 0.12s step-start infinite"}}/>
-                  <circle cx={n.pos.x+2} cy={n.pos.y-1} r={r} fill="none" stroke={K.r} strokeWidth={0.5} opacity={0.3} style={{animation:"glitch 0.18s step-start infinite"}}/>
-                </>
-              )}
-              <polygon points={`${eyeL[0]},${eyeL[1]-2.5} ${eyeL[0]+2.5},${eyeL[1]} ${eyeL[0]},${eyeL[1]+2.5} ${eyeL[0]-2.5},${eyeL[1]}`} fill={col} opacity={ag.on&&!dis?.85:.2}/>
-              <polygon points={`${eyeR[0]},${eyeR[1]-2.5} ${eyeR[0]+2.5},${eyeR[1]} ${eyeR[0]},${eyeR[1]+2.5} ${eyeR[0]-2.5},${eyeR[1]}`} fill={col} opacity={ag.on&&!dis?.85:.2}/>
-              <text x={n.pos.x} y={n.pos.y+(isC?5:3.5)} textAnchor="middle" fontSize={isC?8:6} fontFamily="monospace" fill={dis?K.dim:ag.on?col:K.tx} fontWeight="700">{s}</text>
-              {ag.conf&&!dis&&<text x={n.pos.x} y={n.pos.y+r+12} textAnchor="middle" fontSize="7" fontFamily="monospace" fill={col} opacity=".8">{ag.conf}%</text>}
+              <WireframeFace id={id} cx={n.pos.x} cy={n.pos.y} r={r} col={col} on={ag.on} dis={dis} isAegis={isAegis} isSell={ag.sig==="SELL"} seed={seed} label={s} conf={ag.conf}/>
             </g>
           );
         })}
@@ -769,6 +813,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
         @keyframes swan{0%,100%{box-shadow:0 0 0 rgba(255,51,102,.2)}50%{box-shadow:0 0 24px rgba(255,51,102,.5)}}
         @keyframes odometerRoll{from{transform:translateY(-100%);opacity:0}to{transform:translateY(0);opacity:1}}
         @keyframes glitch{0%,100%{transform:translate(0)}25%{transform:translate(-2px,1px)}50%{transform:translate(2px,-1px)}75%{transform:translate(-1px,-2px)}}
+        @keyframes arcFlicker{0%,100%{opacity:1}20%{opacity:.65}40%{opacity:.88}60%{opacity:.7}80%{opacity:.92}}
         .tab{background:none;border:none;cursor:pointer;font-family:inherit;font-size:10px;letter-spacing:.1em;padding:7px 14px;color:#1E3A55;transition:all .2s;text-transform:uppercase;border-bottom:2px solid transparent}
         .tab:hover{color:${K.c}}.tab.on{color:${K.c};border-bottom-color:${K.c}}
         .tr:hover{background:#060B14}
@@ -855,7 +900,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
           <div style={{gridRow:"1/3",display:"flex",flexDirection:"column",gap:6,overflow:"hidden"}}>
             <div className="panel" style={{display:"flex",flexDirection:"column",alignItems:"center",padding:"8px 4px 6px"}}>
               <div style={{fontSize:8,color:K.dim,letterSpacing:".12em",marginBottom:4,alignSelf:"flex-start",paddingLeft:6}}>◉ GLOBAL MACRO SPHERE</div>
-              <Globe trades={trades} blackSwan={blackSwan} whaleAlert={whaleAlert} totalPnL={totalPnL} tradeCount={trades.length}/>
+              <Globe3D trades={trades} blackSwan={blackSwan} whaleAlert={whaleAlert} totalPnL={totalPnL} tradeCount={trades.length}/>
             </div>
             <div className="panel" style={{flex:1,overflow:"hidden",display:"flex",flexDirection:"column"}}>
               <div style={{fontSize:8,color:K.dim,padding:"6px 10px 4px",borderBottom:"1px solid #060A14",letterSpacing:".12em"}}>◉ LIVE MARKET</div>
