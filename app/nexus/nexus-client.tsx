@@ -1,5 +1,6 @@
 "use client";
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useLayoutEffect } from "react";
+import { motion, useAnimationControls } from "framer-motion";
 
 const K={c:"#00F2FE",r:"#FF3366",g:"#00FF88",gold:"#FFD700",pu:"#BD00FF",co:"#0044EE",bg:"#04060D",pan:"#060A12",brd:"#0A1D33",dim:"#2A5070",hi:"#A8D0EC",tx:"#4A7090"};
 const CAP=10000;
@@ -7,6 +8,29 @@ const f2=(n:number,d=2)=>Number(n).toLocaleString("en-US",{minimumFractionDigits
 const fP=(n:number)=>`${n>=0?"+":""}${f2(n)}%`;
 const fU=(n:number)=>`${n>=0?"+":"-"}$${f2(Math.abs(n))}`;
 const ts=()=>new Date().toLocaleTimeString("en-US",{hour12:false});
+
+function OdometerChar({ch,col}:{ch:string,col:string}){
+  const prevCh=useRef(ch);
+  const [key,setKey]=useState(0);
+  const [current,setCurrent]=useState(ch);
+  useEffect(()=>{
+    if(ch!==prevCh.current){prevCh.current=ch;setCurrent(ch);setKey(k=>k+1);}
+  },[ch]);
+  if(!/\d/.test(ch))return<span style={{color:col}}>{current}</span>;
+  return(
+    <span style={{display:"inline-block",overflow:"hidden",height:"1.1em",lineHeight:"1.1em",verticalAlign:"bottom",minWidth:"0.58em",textAlign:"center"}}>
+      <span key={key} style={{display:"block",animation:"odometerRoll 0.4s cubic-bezier(0.4,0,0.2,1) both",color:col}}>{current}</span>
+    </span>
+  );
+}
+function Odometer({value,col,style}:{value:string,col:string,style?:React.CSSProperties}){
+  const chars=value.split("");
+  return(
+    <span style={{display:"inline-flex",alignItems:"baseline",fontVariantNumeric:"tabular-nums",...style}}>
+      {chars.map((ch,i)=><OdometerChar key={chars.length-i} ch={ch} col={col}/>)}
+    </span>
+  );
+}
 
 const SYMS:{[k:string]:{base:number,vol:number,col:string,icon:string}}={
   SOL:{base:178.4,vol:.0028,col:K.c,icon:"◎"},
@@ -98,7 +122,7 @@ type AgentState={on:boolean,conf:number|null,sig:string|null,th:string};
 type Position={qty:number,avg:number};
 type Trade={id:string,sym:string,side:string,qty:number,price:number,pnl:number,conf:number,t:string};
 type LogEntry={t:string,ag:string,msg:string,col:string};
-type WinCard={id:string,sym:string,pnl:number,pct:number,price:number,agent:string,t:string};
+type WinCard={id:string,sym:string,pnl:number,pct:number,price:number,agent:string,t:string,origin?:{x:number,y:number}};
 type EdgeToast={id:string,type:string,icon:string,col:string,title:string,body:string};
 type MoneyLabel={id:string,x:number,y:number,val:number,born:number};
 
@@ -284,16 +308,17 @@ function Globe({trades,blackSwan,whaleAlert,totalPnL,tradeCount}:{trades:Trade[]
   );
 }
 
-function SwarmGraph({st,debate,disabled}:{st:{[k:string]:AgentState},debate:string[],disabled:Set<string>}){
+function SwarmGraph({st,debate,disabled,swarmRef}:{st:{[k:string]:AgentState},debate:string[],disabled:Set<string>,swarmRef?:React.RefObject<HTMLDivElement|null>}){
   const [hov,setHov]=useState<string|null>(null);
   const nm:{[k:string]:{pos:{x:number,y:number},id:string,name:string,s:string,lv:number,ag:number}}={};
   for(const a of AGENTS)nm[a.id]={...a,pos:gpos(a)};
   return(
-    <div style={{position:"relative",display:"inline-block"}}>
+    <div ref={swarmRef} style={{position:"relative",display:"inline-block"}}>
       <svg width="480" height="440" style={{display:"block"}}>
         <defs>
           <filter id="agf"><feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
           <filter id="agfS"><feGaussianBlur stdDeviation="2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+          {AGENTS.map(({id,lv})=>{const n=nm[id];const rv=id==="consensus"?22:lv===1?17:lv===2?13:11;return<clipPath key={id} id={`acp${id}`}><circle cx={n.pos.x} cy={n.pos.y} r={rv-0.5}/></clipPath>;})}
         </defs>
         {CONNS.map(([a,b])=>{
           const pa=nm[a]?.pos,pb=nm[b]?.pos;if(!pa||!pb)return null;
@@ -330,6 +355,25 @@ function SwarmGraph({st,debate,disabled}:{st:{[k:string]:AgentState},debate:stri
               <g stroke={col} strokeWidth=".55" opacity={ag.on&&!dis?.6:.18} filter={ag.on&&!dis?"url(#agfS)":undefined}>
                 {edges.map(([a,b],ei)=><line key={ei} x1={avPts[a][0]} y1={avPts[a][1]} x2={avPts[b][0]} y2={avPts[b][1]}/>)}
               </g>
+              {/* Mesh node dots */}
+              {ag.on&&!dis&&avPts.slice(0,5).map(([px,py],vi)=>(
+                <circle key={vi} cx={px} cy={py} r={0.9} fill={col} opacity={0.75}/>
+              ))}
+              {/* Cybernetic scan line */}
+              {ag.on&&!dis&&(
+                <g clipPath={`url(#acp${id})`}>
+                  <rect x={n.pos.x-r+0.5} width={r*2-1} height={1.5} fill={col} opacity={0.5} y={n.pos.y-r}>
+                    <animateTransform attributeName="transform" type="translate" from="0 0" to={`0 ${r*2}`} dur="1.8s" repeatCount="indefinite" additive="sum" begin={`${(seed%9)*0.2}s`}/>
+                  </rect>
+                </g>
+              )}
+              {/* AEGIS conflict glitch */}
+              {isAegis&&ag.sig==="SELL"&&!dis&&(
+                <>
+                  <circle cx={n.pos.x-2} cy={n.pos.y+1} r={r} fill="none" stroke={K.r} strokeWidth={1} opacity={0.55} style={{animation:"glitch 0.12s step-start infinite"}}/>
+                  <circle cx={n.pos.x+2} cy={n.pos.y-1} r={r} fill="none" stroke={K.r} strokeWidth={0.5} opacity={0.3} style={{animation:"glitch 0.18s step-start infinite"}}/>
+                </>
+              )}
               <polygon points={`${eyeL[0]},${eyeL[1]-2.5} ${eyeL[0]+2.5},${eyeL[1]} ${eyeL[0]},${eyeL[1]+2.5} ${eyeL[0]-2.5},${eyeL[1]}`} fill={col} opacity={ag.on&&!dis?.85:.2}/>
               <polygon points={`${eyeR[0]},${eyeR[1]-2.5} ${eyeR[0]+2.5},${eyeR[1]} ${eyeR[0]},${eyeR[1]+2.5} ${eyeR[0]-2.5},${eyeR[1]}`} fill={col} opacity={ag.on&&!dis?.85:.2}/>
               <text x={n.pos.x} y={n.pos.y+(isC?5:3.5)} textAnchor="middle" fontSize={isC?8:6} fontFamily="monospace" fill={dis?K.dim:ag.on?col:K.tx} fontWeight="700">{s}</text>
@@ -395,9 +439,27 @@ function ConsensusBar({agSt}:{agSt:{[k:string]:AgentState}}){
 
 function WinCardEl({card,onDone}:{card:WinCard,onDone:()=>void}){
   useEffect(()=>{const t=setTimeout(onDone,3600);return()=>clearTimeout(t);},[onDone]);
+  const ref=useRef<HTMLDivElement>(null);
+  const controls=useAnimationControls();
   const pos=card.pnl>=0,col=pos?K.g:K.r;
+
+  useLayoutEffect(()=>{
+    if(card.origin&&ref.current){
+      const rect=ref.current.getBoundingClientRect();
+      const dx=card.origin.x-(rect.left+rect.width/2);
+      const dy=card.origin.y-(rect.top+rect.height/2);
+      controls.set({x:dx,y:dy,scale:0,opacity:0,filter:"blur(8px)"});
+      controls.start({x:0,y:0,scale:1,opacity:1,filter:"blur(0px)",transition:{duration:0.6,ease:[0.33,1,0.68,1]}});
+    }else{
+      controls.set({opacity:0,scale:0.85,x:40});
+      controls.start({opacity:1,scale:1,x:0,transition:{duration:0.35,ease:[0.33,1,0.68,1]}});
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[]);
+
   return(
-    <div style={{width:210,padding:"11px 15px",background:"linear-gradient(135deg,"+K.pan+" 0%,"+col+"0E 100%)",border:"1px solid "+col+"55",borderRadius:3,boxShadow:"0 4px 22px "+col+"30",animation:"winCardIn .35s ease forwards"}}>
+    <motion.div ref={ref} animate={controls}
+      style={{width:210,padding:"11px 15px",background:"linear-gradient(135deg,"+K.pan+" 0%,"+col+"0E 100%)",border:"1px solid "+col+"55",borderRadius:3,boxShadow:"0 4px 22px "+col+"30"}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
         <span style={{color:col,fontSize:11,fontWeight:700}}>{pos?"▲ PROFIT":"▼ LOSS"} · {card.sym}</span>
         <span style={{fontSize:8,color:K.dim}}>{card.agent}</span>
@@ -413,7 +475,7 @@ function WinCardEl({card,onDone}:{card:WinCard,onDone:()=>void}){
       <div style={{height:2,borderRadius:1,background:"#05090E",overflow:"hidden"}}>
         <div style={{height:"100%",background:col,width:"100%",animation:"confBar 3.6s linear forwards"}}/>
       </div>
-    </div>
+    </motion.div>
   );
 }
 
@@ -484,6 +546,7 @@ export default function NEXUS(){
   const [beatChoice,setBeatChoice]=useState<{sym:string,side:string}|null>(null);
   const [beatResult,setBeatResult]=useState<string|null>(null);
   const logRef=useRef<HTMLDivElement>(null);
+  const swarmRef=useRef<HTMLDivElement>(null);
   const entropyRef=useRef(entropy);
   useEffect(()=>{entropyRef.current=entropy;},[entropy]);
 
@@ -523,7 +586,13 @@ export default function NEXUS(){
   },[prices,running]);
 
   const addWinCard=(sym:string,pnl:number,pct:number,price:number,agent:string)=>{
-    const card:WinCard={id:Math.random().toString(36).slice(2),sym,pnl,pct,price,agent,t:ts()};
+    const origin=(()=>{
+      const el=swarmRef.current;if(!el)return undefined;
+      const rect=el.getBoundingClientRect();
+      const scale=rect.width/480;
+      return{x:rect.left+GCX*scale,y:rect.top+GCY*scale};
+    })();
+    const card:WinCard={id:Math.random().toString(36).slice(2),sym,pnl,pct,price,agent,t:ts(),origin};
     setWinCards(prev=>[...prev.slice(-3),card]);
     setTrades(t=>[{id:card.id,sym,side:pnl>=0?"SELL":"SELL",qty:0,price,pnl,conf:80,t:card.t},...t.slice(0,99)]);
   };
@@ -698,6 +767,8 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
         @keyframes shockwave{0%{r:60;opacity:.5}100%{r:108;opacity:0}}
         @keyframes agentPulse{0%,100%{opacity:1}50%{opacity:.15}}
         @keyframes swan{0%,100%{box-shadow:0 0 0 rgba(255,51,102,.2)}50%{box-shadow:0 0 24px rgba(255,51,102,.5)}}
+        @keyframes odometerRoll{from{transform:translateY(-100%);opacity:0}to{transform:translateY(0);opacity:1}}
+        @keyframes glitch{0%,100%{transform:translate(0)}25%{transform:translate(-2px,1px)}50%{transform:translate(2px,-1px)}75%{transform:translate(-1px,-2px)}}
         .tab{background:none;border:none;cursor:pointer;font-family:inherit;font-size:10px;letter-spacing:.1em;padding:7px 14px;color:#1E3A55;transition:all .2s;text-transform:uppercase;border-bottom:2px solid transparent}
         .tab:hover{color:${K.c}}.tab.on{color:${K.c};border-bottom-color:${K.c}}
         .tr:hover{background:#060B14}
@@ -736,7 +807,9 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
           {([{l:"EQUITY",v:"$"+f2(port.equity),col:totalPnL>=0?K.g:K.r},{l:"P&L",v:fU(totalPnL)+" ("+fP(pct)+")",col:totalPnL>=0?K.g:K.r},{l:"DD",v:"-"+f2(dd)+"%",col:dd>5?K.r:K.gold}]).map((x,i)=>(
             <div key={i} style={{textAlign:"right"}}>
               <div style={{fontSize:8,color:"#102030"}}>{x.l}</div>
-              <div style={{fontSize:12,fontWeight:600,color:x.col}}>{x.v}</div>
+              <div style={{fontSize:12,fontWeight:600,display:"flex",justifyContent:"flex-end"}}>
+                <Odometer value={x.v} col={x.col} style={{textShadow:i<2?`0 0 8px ${x.col}60`:undefined}}/>
+              </div>
             </div>
           ))}
           <div style={{display:"flex",gap:5}}>
@@ -836,7 +909,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
                 </div>
               </div>
               <div style={{flex:1,display:"flex",justifyContent:"center",alignItems:"center",padding:4}}>
-                <SwarmGraph st={agSt} debate={debate} disabled={disabled}/>
+                <SwarmGraph st={agSt} debate={debate} disabled={disabled} swarmRef={swarmRef}/>
               </div>
             </div>
             <ConsensusBar agSt={agSt}/>
