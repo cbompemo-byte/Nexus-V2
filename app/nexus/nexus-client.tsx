@@ -363,48 +363,54 @@ function Globe3D({trades,blackSwan,whaleAlert,totalPnL,tradeCount}:{trades:Trade
 }
 
 
-function CyberFace({id,cx,cy,size,col,active,conflict}:{id:string,cx:number,cy:number,size:number,col:string,active:boolean,conflict:boolean}){
-  const x=cx-size/2,y=cy-size/2;
+// All skull coordinates are mapped directly into parent SVG space — no nested <svg>, no transform scaling issues.
+function CyberFace({cx,cy,size,col,active,conflict}:{cx:number,cy:number,size:number,col:string,active:boolean,conflict:boolean}){
+  const s=size/40;
+  const X=(x:number)=>cx+(x-20)*s;
+  const Y=(y:number)=>cy+(y-18)*s;
+  const R=(r:number)=>r*s;
+  const elPts=[[13,17],[16,14],[19,17],[16,20]].map(([x,y])=>`${X(x)},${Y(y)}`).join(" ");
+  const erPts=[[21,17],[24,14],[27,17],[24,20]].map(([x,y])=>`${X(x)},${Y(y)}`).join(" ");
+  const dots:Array<[number,number]>=[[20,6],[8,20],[32,20],[16,17],[24,17],[20,32]];
   return(
-    <svg x={x} y={y} width={size} height={size} viewBox="0 0 40 40" overflow="hidden">
-      <defs><clipPath id={`cf${id}`}><ellipse cx="20" cy="18" rx="12" ry="14"/></clipPath></defs>
+    <>
       {/* Aura */}
-      <ellipse cx="20" cy="18" rx="14" ry="16" fill={col} fillOpacity={active?.06:.015} stroke="none"/>
+      <ellipse cx={X(20)} cy={Y(18)} rx={R(15)} ry={R(17)} fill={col} fillOpacity={active?.07:.025}/>
       {/* Head outline */}
-      <ellipse cx="20" cy="18" rx="12" ry="14" fill={col+"08"} stroke={col} strokeWidth="0.8" opacity={active?1:0.4}/>
+      <ellipse cx={X(20)} cy={Y(18)} rx={R(12)} ry={R(14)} fill={col+"12"} stroke={col} strokeWidth={active?1.5:1} opacity={active?1:.5}/>
       {/* Cheekbones */}
-      <line x1="8" y1="20" x2="14" y2="24" stroke={col} strokeWidth="0.6" opacity={active?.8:.3}/>
-      <line x1="32" y1="20" x2="26" y2="24" stroke={col} strokeWidth="0.6" opacity={active?.8:.3}/>
+      <line x1={X(8)} y1={Y(20)} x2={X(14)} y2={Y(24)} stroke={col} strokeWidth="1" opacity={active?.85:.4}/>
+      <line x1={X(32)} y1={Y(20)} x2={X(26)} y2={Y(24)} stroke={col} strokeWidth="1" opacity={active?.85:.4}/>
       {/* Forehead mesh */}
-      <line x1="12" y1="10" x2="20" y2="6" stroke={col} strokeWidth="0.5" opacity={active?.7:.25}/>
-      <line x1="28" y1="10" x2="20" y2="6" stroke={col} strokeWidth="0.5" opacity={active?.7:.25}/>
-      <line x1="14" y1="8" x2="26" y2="8" stroke={col} strokeWidth="0.4" opacity={active?.6:.2}/>
+      <line x1={X(12)} y1={Y(10)} x2={X(20)} y2={Y(6)} stroke={col} strokeWidth=".9" opacity={active?.75:.35}/>
+      <line x1={X(28)} y1={Y(10)} x2={X(20)} y2={Y(6)} stroke={col} strokeWidth=".9" opacity={active?.75:.35}/>
+      <line x1={X(14)} y1={Y(8)} x2={X(26)} y2={Y(8)} stroke={col} strokeWidth=".7" opacity={active?.65:.3}/>
       {/* Eyes — diamond */}
-      <polygon points="13,17 16,14 19,17 16,20" fill={col+"20"} stroke={col} strokeWidth="0.8" opacity={active?1:.35}/>
-      <polygon points="21,17 24,14 27,17 24,20" fill={col+"20"} stroke={col} strokeWidth="0.8" opacity={active?1:.35}/>
+      <polygon points={elPts} fill={col+"30"} stroke={col} strokeWidth="1" opacity={active?1:.45}/>
+      <polygon points={erPts} fill={col+"30"} stroke={col} strokeWidth="1" opacity={active?1:.45}/>
       {/* Nose bridge */}
-      <line x1="20" y1="17" x2="20" y2="24" stroke={col} strokeWidth="0.5" opacity={active?.6:.2}/>
+      <line x1={X(20)} y1={Y(17)} x2={X(20)} y2={Y(24)} stroke={col} strokeWidth=".8" opacity={active?.65:.3}/>
       {/* Jaw */}
-      <line x1="10" y1="26" x2="20" y2="32" stroke={col} strokeWidth="0.6" opacity={active?.8:.3}/>
-      <line x1="30" y1="26" x2="20" y2="32" stroke={col} strokeWidth="0.6" opacity={active?.8:.3}/>
-      <line x1="14" y1="29" x2="26" y2="29" stroke={col} strokeWidth="0.4" opacity={active?.6:.2}/>
+      <line x1={X(10)} y1={Y(26)} x2={X(20)} y2={Y(32)} stroke={col} strokeWidth="1" opacity={active?.85:.4}/>
+      <line x1={X(30)} y1={Y(26)} x2={X(20)} y2={Y(32)} stroke={col} strokeWidth="1" opacity={active?.85:.4}/>
+      <line x1={X(14)} y1={Y(29)} x2={X(26)} y2={Y(29)} stroke={col} strokeWidth=".7" opacity={active?.65:.3}/>
       {/* Chin */}
-      <ellipse cx="20" cy="32" rx="6" ry="2" fill="none" stroke={col} strokeWidth="0.5" opacity={active?.7:.25}/>
-      {/* Scan line — animateTransform for correct viewBox units */}
+      <ellipse cx={X(20)} cy={Y(32)} rx={R(6)} ry={R(2)} fill="none" stroke={col} strokeWidth=".9" opacity={active?.75:.35}/>
+      {/* Scan line */}
       {active&&(
-        <line x1="8" y1="4" x2="32" y2="4" stroke={col} strokeWidth="0.8" opacity="0.6" clipPath={`url(#cf${id})`}>
-          <animateTransform attributeName="transform" type="translate" from="0 0" to="0 28" dur="1.2s" repeatCount="indefinite" additive="sum"/>
+        <line x1={X(9)} y1={Y(4)} x2={X(31)} y2={Y(4)} stroke={col} strokeWidth="1.2" opacity=".6">
+          <animateTransform attributeName="transform" type="translate" from="0 0" to={`0 ${R(28)}`} dur="1.2s" repeatCount="indefinite" additive="sum"/>
         </line>
       )}
-      {/* Conflict glitch rect */}
+      {/* Conflict glitch */}
       {conflict&&(
-        <rect x="8" y="10" width="24" height="20" fill="none" stroke="#FF3366" strokeWidth="0.5" style={{animation:"glitch 0.15s infinite"}}/>
+        <rect x={X(8)} y={Y(10)} width={R(24)} height={R(20)} fill="none" stroke="#FF3366" strokeWidth=".8" style={{animation:"glitch 0.15s infinite"}}/>
       )}
       {/* Vertex dots */}
-      {([[20,6],[8,20],[32,20],[16,17],[24,17],[20,32]] as Array<[number,number]>).map(([vx,vy],i)=>(
-        <circle key={i} cx={vx} cy={vy} r="1" fill={col} opacity={active?.9:.35}/>
+      {dots.map(([dx,dy],i)=>(
+        <circle key={i} cx={X(dx)} cy={Y(dy)} r={active?R(1.5):R(1)} fill={col} opacity={active?.95:.45}/>
       ))}
-    </svg>
+    </>
   );
 }
 
@@ -462,7 +468,7 @@ function SwarmGraph({st,debate,disabled,swarmRef}:{st:{[k:string]:AgentState},de
           const conflict=isAegis&&ag.sig==="SELL"&&!dis;
           return(
             <g key={id} filter={active?"url(#faceglow)":undefined} opacity={dis?.18:1} style={{cursor:"pointer"}} onMouseEnter={()=>setHov(id)} onMouseLeave={()=>setHov(null)}>
-              <CyberFace id={id} cx={n.pos.x} cy={n.pos.y} size={r*2} col={col} active={active} conflict={conflict}/>
+              <CyberFace cx={n.pos.x} cy={n.pos.y} size={r*2} col={col} active={active} conflict={conflict}/>
               <text x={n.pos.x} y={n.pos.y+(id==="consensus"?5:3.5)} textAnchor="middle" fontSize={id==="consensus"?8:6} fontFamily="monospace" fill={dis?K.dim:active?col:K.tx} fontWeight="700">{s}</text>
               {ag.conf!==null&&!dis&&<text x={n.pos.x} y={n.pos.y+r+12} textAnchor="middle" fontSize="7" fontFamily="monospace" fill={col} opacity=".8">{ag.conf}%</text>}
             </g>
