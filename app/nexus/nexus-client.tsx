@@ -230,19 +230,30 @@ function Globe3D({trades,blackSwan,whaleAlert,totalPnL,tradeCount}:{trades:Trade
   useEffect(()=>{
     const mount=mountRef.current;if(!mount)return;
     const scene=new THREE.Scene();
-    const camera=new THREE.PerspectiveCamera(55,W/H,.1,100);
-    camera.position.z=2.6;
+    const camera=new THREE.PerspectiveCamera(50,W/H,.1,100);
+    camera.position.z=2.85;
     const renderer=new THREE.WebGLRenderer({antialias:true,alpha:true});
     renderer.setSize(W,H);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
     renderer.setClearColor(0x000000,0);
     mount.appendChild(renderer.domElement);
     const mainHex=blackSwan?K.r:K.c;
-    const dimHex=blackSwan?"#1A0004":"#001428";
     const mainCol=new THREE.Color(mainHex);
-    const dimCol=new THREE.Color(dimHex);
-    // 3000 particle globe — Fibonacci lattice
-    const N=3000;
+    const brightCol=new THREE.Color(blackSwan?"#FF8899":"#80F8FF");
+    const dimCol=new THREE.Color(blackSwan?"#280008":"#003055");
+
+    // Tilted globe group — axial tilt reveals true 3D depth as it rotates
+    const globeGroup=new THREE.Group();
+    globeGroup.rotation.z=0.22;
+    scene.add(globeGroup);
+
+    // SOLID CORE — opaque sphere occludes back-hemisphere particles naturally via depth testing
+    const coreGeo=new THREE.SphereGeometry(.975,48,48);
+    const coreMat=new THREE.MeshBasicMaterial({color:0x040810});
+    globeGroup.add(new THREE.Mesh(coreGeo,coreMat));
+
+    // PARTICLES — 5000, Fibonacci lattice, front-biased brightness
+    const N=5000;
     const pPos=new Float32Array(N*3);
     const pCol=new Float32Array(N*3);
     for(let i=0;i<N;i++){
@@ -250,24 +261,38 @@ function Globe3D({trades,blackSwan,whaleAlert,totalPnL,tradeCount}:{trades:Trade
       const theta=Math.PI*(1+Math.sqrt(5))*i;
       const x=Math.sin(phi)*Math.cos(theta),y=Math.sin(phi)*Math.sin(theta),z=Math.cos(phi);
       pPos[i*3]=x;pPos[i*3+1]=y;pPos[i*3+2]=z;
-      const t=Math.pow(Math.random(),.5);
-      const m=dimCol.clone().lerp(mainCol,t*.55);
-      pCol[i*3]=m.r;pCol[i*3+1]=m.g;pCol[i*3+2]=m.b;
+      const front=Math.pow(Math.max(0,(z+1)/2),.6);
+      const rnd=Math.random();
+      const mix=dimCol.clone().lerp(mainCol,front*.6+rnd*.4).lerp(brightCol,front*.18);
+      pCol[i*3]=mix.r;pCol[i*3+1]=mix.g;pCol[i*3+2]=mix.b;
     }
     const pGeo=new THREE.BufferGeometry();
     pGeo.setAttribute("position",new THREE.BufferAttribute(pPos,3));
     pGeo.setAttribute("color",new THREE.BufferAttribute(pCol,3));
-    const pMat=new THREE.PointsMaterial({size:.024,vertexColors:true,transparent:true,opacity:.88,sizeAttenuation:true});
+    const pMat=new THREE.PointsMaterial({size:.026,vertexColors:true,transparent:true,opacity:.92,sizeAttenuation:true,depthWrite:false});
     const globe=new THREE.Points(pGeo,pMat);
-    scene.add(globe);
-    // Latitude rings
-    const ringMat=new THREE.LineBasicMaterial({color:mainCol,transparent:true,opacity:.2});
-    [-0.5,0,0.5].forEach(yp=>{
-      const r=Math.sqrt(1-yp*yp);
-      const pts=Array.from({length:65},(_,i2)=>new THREE.Vector3(r*Math.cos(i2/64*Math.PI*2),yp,r*Math.sin(i2/64*Math.PI*2)));
-      scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),ringMat.clone()));
+    globeGroup.add(globe);
+
+    // LATITUDE RINGS — 5 rings
+    const latYs=[-0.65,-0.35,0,0.35,0.65];
+    latYs.forEach(yp=>{
+      const r=Math.sqrt(Math.max(0,1-yp*yp));
+      const pts=Array.from({length:65},(_,j)=>new THREE.Vector3(r*Math.cos(j/64*Math.PI*2),yp,r*Math.sin(j/64*Math.PI*2)));
+      const op=yp===0?.32:.16;
+      globeGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),new THREE.LineBasicMaterial({color:mainCol,transparent:true,opacity:op})));
     });
-    // City nodes
+
+    // MERIDIAN LINES — 8 longitude lines
+    for(let m=0;m<8;m++){
+      const th=m*Math.PI/8;
+      const pts=Array.from({length:33},(_,j)=>{
+        const p=j/32*Math.PI;
+        return new THREE.Vector3(Math.sin(p)*Math.cos(th),Math.cos(p),Math.sin(p)*Math.sin(th));
+      });
+      globeGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),new THREE.LineBasicMaterial({color:mainCol,transparent:true,opacity:.1})));
+    }
+
+    // CITY NODES — bright pulsing dots on surface
     const cityLatLon:Array<[number,number]>=[[40.7,-74],[51.5,0],[35.7,139.7],[1.3,103.8],[25.2,55.3],[22.3,114.2]];
     const cPos2=new Float32Array(cityLatLon.length*3);
     const cCol2=new Float32Array(cityLatLon.length*3);
@@ -280,22 +305,39 @@ function Globe3D({trades,blackSwan,whaleAlert,totalPnL,tradeCount}:{trades:Trade
     const cGeo=new THREE.BufferGeometry();
     cGeo.setAttribute("position",new THREE.BufferAttribute(cPos2,3));
     cGeo.setAttribute("color",new THREE.BufferAttribute(cCol2,3));
-    const cMat=new THREE.PointsMaterial({size:.062,vertexColors:true,transparent:true,opacity:.92});
-    scene.add(new THREE.Points(cGeo,cMat));
-    // Central AI eye — wireframe sphere
-    const eyeGeo=new THREE.SphereGeometry(.11,12,8);
-    const eyeMat=new THREE.MeshBasicMaterial({color:mainCol,transparent:true,opacity:.38,wireframe:true});
+    const cMat=new THREE.PointsMaterial({size:.092,vertexColors:true,transparent:true,opacity:.95,depthWrite:false});
+    globeGroup.add(new THREE.Points(cGeo,cMat));
+
+    // ATMOSPHERE — two backside shells create edge glow without geometry
+    [{r:1.05,op:.055},{r:1.12,op:.025}].forEach(({r,op})=>{
+      const g=new THREE.SphereGeometry(r,32,32);
+      const m=new THREE.MeshBasicMaterial({color:mainCol,transparent:true,opacity:op,side:THREE.BackSide,depthWrite:false});
+      scene.add(new THREE.Mesh(g,m));
+    });
+
+    // INNER EYE — pulsing wireframe core
+    const eyeGeo=new THREE.SphereGeometry(.13,14,10);
+    const eyeMat=new THREE.MeshBasicMaterial({color:mainCol,transparent:true,opacity:.45,wireframe:true});
     const eye=new THREE.Mesh(eyeGeo,eyeMat);
     scene.add(eye);
-    const light=new THREE.PointLight(mainCol,.8,4);
+    const light=new THREE.PointLight(mainCol,1.1,3.5);
     scene.add(light);
-    let af:number;let angle=0;
-    const tick=()=>{af=requestAnimationFrame(tick);angle+=.003;globe.rotation.y=angle;eye.rotation.y=angle*2;renderer.render(scene,camera);};
+
+    let af:number,angle=0;
+    const tick=()=>{
+      af=requestAnimationFrame(tick);
+      angle+=.0045;
+      globeGroup.rotation.y=angle;
+      eye.rotation.y=angle*1.8;
+      eye.scale.setScalar(.88+Math.sin(angle*2.5)*.12);
+      renderer.render(scene,camera);
+    };
     tick();
     return()=>{
       cancelAnimationFrame(af);
       if(mount.contains(renderer.domElement))mount.removeChild(renderer.domElement);
-      renderer.dispose();pGeo.dispose();pMat.dispose();cGeo.dispose();cMat.dispose();eyeGeo.dispose();eyeMat.dispose();
+      renderer.dispose();
+      pGeo.dispose();pMat.dispose();cGeo.dispose();cMat.dispose();coreGeo.dispose();coreMat.dispose();eyeGeo.dispose();eyeMat.dispose();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[blackSwan]);
