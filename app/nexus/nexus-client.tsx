@@ -321,75 +321,73 @@ function Globe3D({trades,blackSwan,whaleAlert,totalPnL,tradeCount}:{trades:Trade
 }
 
 
-function WireframeFace({id,cx,cy,r,col,on,dis,isAegis,isSell,seed,label,conf}:{id:string,cx:number,cy:number,r:number,col:string,on:boolean,dis:boolean,isAegis:boolean,isSell:boolean,seed:number,label:string,conf:number|null}){
-  const hw=r*.9,hh=r;
-  const pts=[
-    [cx,cy-hh*.88],
-    [cx-hw*.62,cy-hh*.36],
-    [cx+hw*.62,cy-hh*.36],
-    [cx-hw*.8,cy+hh*.2],
-    [cx+hw*.8,cy+hh*.2],
-    [cx-hw*.46,cy+hh*.75],
-    [cx+hw*.46,cy+hh*.75],
-    [cx,cy+hh*.88],
-  ];
-  const edges=[[0,1],[0,2],[1,2],[1,3],[2,4],[3,5],[4,6],[5,7],[6,7],[1,4],[2,3],[3,6],[4,5]];
-  const eyeL=[cx-hw*.3,cy-hh*.2];
-  const eyeR=[cx+hw*.3,cy-hh*.2];
-  const er=r*.2;
-  const isC=r>20;
+function CyberFace({id,cx,cy,size,col,active,conflict}:{id:string,cx:number,cy:number,size:number,col:string,active:boolean,conflict:boolean}){
+  const x=cx-size/2,y=cy-size/2;
   return(
-    <>
-      <circle cx={cx} cy={cy} r={r+10} fill={col} opacity={on&&!dis?.06:.015}/>
-      <ellipse cx={cx} cy={cy} rx={hw} ry={hh} fill={col+"14"} stroke={col} strokeWidth={on?1.8:.6} opacity={on&&!dis?1:.4} strokeDasharray={dis?"3 2":"none"}/>
-      {on&&!dis&&<ellipse cx={cx} cy={cy} rx={hw+5} ry={hh+5} fill="none" stroke={col} strokeWidth=".5" opacity=".26"/>}
-      {isAegis&&isSell&&!dis&&<ellipse cx={cx} cy={cy} rx={hw+9} ry={hh+9} fill="none" stroke={K.r} strokeWidth="1.2" opacity=".5" style={{animation:"breathe .8s ease-in-out infinite"}}/>}
-      <g stroke={col} strokeWidth=".55" opacity={on&&!dis?.55:.16}>
-        {edges.map(([a,b],ei)=><line key={ei} x1={pts[a][0]} y1={pts[a][1]} x2={pts[b][0]} y2={pts[b][1]}/>)}
-      </g>
-      {on&&!dis&&pts.slice(0,6).map(([px,py],vi)=>(
-        <circle key={vi} cx={px} cy={py} r={0.85} fill={col} opacity={0.7}/>
+    <svg x={x} y={y} width={size} height={size} viewBox="0 0 40 40" overflow="hidden">
+      <defs><clipPath id={`cf${id}`}><ellipse cx="20" cy="18" rx="12" ry="14"/></clipPath></defs>
+      {/* Aura */}
+      <ellipse cx="20" cy="18" rx="14" ry="16" fill={col} fillOpacity={active?.06:.015} stroke="none"/>
+      {/* Head outline */}
+      <ellipse cx="20" cy="18" rx="12" ry="14" fill={col+"08"} stroke={col} strokeWidth="0.8" opacity={active?1:0.4}/>
+      {/* Cheekbones */}
+      <line x1="8" y1="20" x2="14" y2="24" stroke={col} strokeWidth="0.6" opacity={active?.8:.3}/>
+      <line x1="32" y1="20" x2="26" y2="24" stroke={col} strokeWidth="0.6" opacity={active?.8:.3}/>
+      {/* Forehead mesh */}
+      <line x1="12" y1="10" x2="20" y2="6" stroke={col} strokeWidth="0.5" opacity={active?.7:.25}/>
+      <line x1="28" y1="10" x2="20" y2="6" stroke={col} strokeWidth="0.5" opacity={active?.7:.25}/>
+      <line x1="14" y1="8" x2="26" y2="8" stroke={col} strokeWidth="0.4" opacity={active?.6:.2}/>
+      {/* Eyes — diamond */}
+      <polygon points="13,17 16,14 19,17 16,20" fill={col+"20"} stroke={col} strokeWidth="0.8" opacity={active?1:.35}/>
+      <polygon points="21,17 24,14 27,17 24,20" fill={col+"20"} stroke={col} strokeWidth="0.8" opacity={active?1:.35}/>
+      {/* Nose bridge */}
+      <line x1="20" y1="17" x2="20" y2="24" stroke={col} strokeWidth="0.5" opacity={active?.6:.2}/>
+      {/* Jaw */}
+      <line x1="10" y1="26" x2="20" y2="32" stroke={col} strokeWidth="0.6" opacity={active?.8:.3}/>
+      <line x1="30" y1="26" x2="20" y2="32" stroke={col} strokeWidth="0.6" opacity={active?.8:.3}/>
+      <line x1="14" y1="29" x2="26" y2="29" stroke={col} strokeWidth="0.4" opacity={active?.6:.2}/>
+      {/* Chin */}
+      <ellipse cx="20" cy="32" rx="6" ry="2" fill="none" stroke={col} strokeWidth="0.5" opacity={active?.7:.25}/>
+      {/* Scan line — animateTransform for correct viewBox units */}
+      {active&&(
+        <line x1="8" y1="4" x2="32" y2="4" stroke={col} strokeWidth="0.8" opacity="0.6" clipPath={`url(#cf${id})`}>
+          <animateTransform attributeName="transform" type="translate" from="0 0" to="0 28" dur="1.2s" repeatCount="indefinite" additive="sum"/>
+        </line>
+      )}
+      {/* Conflict glitch rect */}
+      {conflict&&(
+        <rect x="8" y="10" width="24" height="20" fill="none" stroke="#FF3366" strokeWidth="0.5" style={{animation:"glitch 0.15s infinite"}}/>
+      )}
+      {/* Vertex dots */}
+      {([[20,6],[8,20],[32,20],[16,17],[24,17],[20,32]] as Array<[number,number]>).map(([vx,vy],i)=>(
+        <circle key={i} cx={vx} cy={vy} r="1" fill={col} opacity={active?.9:.35}/>
       ))}
-      <polygon points={`${eyeL[0]},${eyeL[1]-er} ${eyeL[0]+er},${eyeL[1]} ${eyeL[0]},${eyeL[1]+er} ${eyeL[0]-er},${eyeL[1]}`} fill={col} opacity={on&&!dis?.88:.2}/>
-      <polygon points={`${eyeR[0]},${eyeR[1]-er} ${eyeR[0]+er},${eyeR[1]} ${eyeR[0]},${eyeR[1]+er} ${eyeR[0]-er},${eyeR[1]}`} fill={col} opacity={on&&!dis?.88:.2}/>
-      {on&&!dis&&(
-        <g clipPath={`url(#acp${id})`}>
-          <rect x={cx-hw+0.5} width={hw*2-1} height={1.8} fill={col} opacity={0.52} y={cy-hh}>
-            <animateTransform attributeName="transform" type="translate" from="0 0" to={`0 ${hh*2}`} dur="1.8s" repeatCount="indefinite" additive="sum" begin={`${(seed%9)*0.2}s`}/>
-          </rect>
-        </g>
-      )}
-      {isAegis&&isSell&&!dis&&(
-        <>
-          <ellipse cx={cx-2} cy={cy+1} rx={hw} ry={hh} fill="none" stroke={K.r} strokeWidth={1} opacity={0.55} style={{animation:"glitch 0.12s step-start infinite"}}/>
-          <ellipse cx={cx+2} cy={cy-1} rx={hw} ry={hh} fill="none" stroke={K.r} strokeWidth={0.5} opacity={0.3} style={{animation:"glitch 0.18s step-start infinite"}}/>
-        </>
-      )}
-      <text x={cx} y={cy+(isC?5:3.5)} textAnchor="middle" fontSize={isC?8:6} fontFamily="monospace" fill={dis?K.dim:on?col:K.tx} fontWeight="700">{label}</text>
-      {conf!==null&&!dis&&<text x={cx} y={cy+r+12} textAnchor="middle" fontSize="7" fontFamily="monospace" fill={col} opacity=".8">{conf}%</text>}
-    </>
+    </svg>
   );
 }
 
 function ElectricArc({x1,y1,x2,y2,col,active}:{x1:number,y1:number,x2:number,y2:number,col:string,active:boolean}){
-  if(!active)return<line x1={x1} y1={y1} x2={x2} y2={y2} stroke={K.brd} strokeWidth=".5" opacity=".3"/>;
-  const dx=x2-x1,dy=y2-y1,len=Math.max(Math.sqrt(dx*dx+dy*dy),1);
-  const nx=-dy/len,ny=dx/len;
-  const off=len*.09;
+  const [flicker,setFlicker]=useState(1);
+  const offsetRef=useRef((Math.random()-.5)*8);
+  const durRef=useRef(`${.32+Math.random()*.35}s`);
+  useEffect(()=>{
+    if(!active)return;
+    const iv=setInterval(()=>setFlicker(.6+Math.random()*.4),80);
+    return()=>clearInterval(iv);
+  },[active]);
   const mx=(x1+x2)/2,my=(y1+y2)/2;
-  const cx1=mx+nx*off,cy1=my+ny*off;
-  const cx2=mx-nx*off*.6,cy2=my-ny*off*.6;
-  const cx3=mx+nx*off*.3,cy3=my+ny*off*.3;
-  const p1=`M${x1},${y1} Q${cx1},${cy1} ${x2},${y2}`;
-  const p2=`M${x1},${y1} Q${cx2},${cy2} ${x2},${y2}`;
-  const p3=`M${x1},${y1} Q${cx3},${cy3} ${x2},${y2}`;
+  const off=active?offsetRef.current:0;
+  const d=`M${x1},${y1} Q${mx+off},${my+off} ${x2},${y2}`;
+  if(!active)return<path d={d} fill="none" stroke={col} strokeWidth=".4" opacity=".08"/>;
   return(
-    <g style={{animation:"arcFlicker 0.7s ease-in-out infinite"}}>
-      <path d={p1} fill="none" stroke={col} strokeWidth="1.4" opacity=".75"/>
-      <path d={p2} fill="none" stroke={col} strokeWidth=".5" opacity=".4"/>
-      <path d={p3} fill="none" stroke={col} strokeWidth=".3" opacity=".2"/>
-      <circle r="2" fill={col} opacity=".9"><animateMotion dur="0.85s" repeatCount="indefinite" path={p1}/></circle>
-      <circle r="1.3" fill="#fff" opacity=".75"><animateMotion dur="1.05s" repeatCount="indefinite" path={p2} begin="0.45s"/></circle>
+    <g opacity={flicker}>
+      <path d={d} fill="none" stroke={col} strokeWidth="6" opacity=".06"/>
+      <path d={d} fill="none" stroke={col} strokeWidth="2.5" opacity=".3"/>
+      <path d={d} fill="none" stroke={col} strokeWidth="1" opacity=".95" filter="url(#arcglow)"/>
+      <path d={d} fill="none" stroke="white" strokeWidth=".4" opacity=".7"/>
+      <circle r="2" fill="white" opacity=".9" filter="url(#arcglow)">
+        <animateMotion dur={durRef.current} repeatCount="indefinite" path={d}/>
+      </circle>
     </g>
   );
 }
@@ -403,8 +401,8 @@ function SwarmGraph({st,debate,disabled,swarmRef}:{st:{[k:string]:AgentState},de
       <svg width="480" height="440" style={{display:"block"}}>
         <defs>
           <filter id="agf"><feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
-          <filter id="agfS"><feGaussianBlur stdDeviation="2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
-          {AGENTS.map(({id,lv})=>{const n=nm[id];const r=id==="consensus"?22:lv===1?17:lv===2?13:11;const hw=r*.9,hh=r;return<clipPath key={id} id={`acp${id}`}><ellipse cx={n.pos.x} cy={n.pos.y} rx={hw-.5} ry={hh-.5}/></clipPath>;})}
+          <filter id="arcglow"><feGaussianBlur stdDeviation="2" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+          <filter id="faceglow"><feGaussianBlur stdDeviation="3" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
         </defs>
         {CONNS.map(([a,b])=>{
           const pa=nm[a]?.pos,pb=nm[b]?.pos;if(!pa||!pb)return null;
@@ -418,10 +416,13 @@ function SwarmGraph({st,debate,disabled,swarmRef}:{st:{[k:string]:AgentState},de
           const dis=disabled.has(id),isAegis=id==="aegis";
           const r=id==="consensus"?22:lv===1?17:lv===2?13:11;
           const col=dis?"#101820":ag.sig==="BUY"?K.g:ag.sig==="SELL"?K.r:id==="consensus"?K.c:K.co;
-          const seed=id.split("").reduce((a,c)=>a+c.charCodeAt(0),0);
+          const active=ag.on&&!dis;
+          const conflict=isAegis&&ag.sig==="SELL"&&!dis;
           return(
-            <g key={id} filter={ag.on&&!dis?"url(#agf)":undefined} opacity={dis?.18:1} style={{cursor:"pointer"}} onMouseEnter={()=>setHov(id)} onMouseLeave={()=>setHov(null)}>
-              <WireframeFace id={id} cx={n.pos.x} cy={n.pos.y} r={r} col={col} on={ag.on} dis={dis} isAegis={isAegis} isSell={ag.sig==="SELL"} seed={seed} label={s} conf={ag.conf}/>
+            <g key={id} filter={active?"url(#faceglow)":undefined} opacity={dis?.18:1} style={{cursor:"pointer"}} onMouseEnter={()=>setHov(id)} onMouseLeave={()=>setHov(null)}>
+              <CyberFace id={id} cx={n.pos.x} cy={n.pos.y} size={r*2} col={col} active={active} conflict={conflict}/>
+              <text x={n.pos.x} y={n.pos.y+(id==="consensus"?5:3.5)} textAnchor="middle" fontSize={id==="consensus"?8:6} fontFamily="monospace" fill={dis?K.dim:active?col:K.tx} fontWeight="700">{s}</text>
+              {ag.conf!==null&&!dis&&<text x={n.pos.x} y={n.pos.y+r+12} textAnchor="middle" fontSize="7" fontFamily="monospace" fill={col} opacity=".8">{ag.conf}%</text>}
             </g>
           );
         })}
@@ -812,8 +813,8 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
         @keyframes agentPulse{0%,100%{opacity:1}50%{opacity:.15}}
         @keyframes swan{0%,100%{box-shadow:0 0 0 rgba(255,51,102,.2)}50%{box-shadow:0 0 24px rgba(255,51,102,.5)}}
         @keyframes odometerRoll{from{transform:translateY(-100%);opacity:0}to{transform:translateY(0);opacity:1}}
-        @keyframes glitch{0%,100%{transform:translate(0)}25%{transform:translate(-2px,1px)}50%{transform:translate(2px,-1px)}75%{transform:translate(-1px,-2px)}}
-        @keyframes arcFlicker{0%,100%{opacity:1}20%{opacity:.65}40%{opacity:.88}60%{opacity:.7}80%{opacity:.92}}
+        @keyframes glitch{0%{transform:translateX(0)}25%{transform:translateX(-2px) skewX(2deg)}75%{transform:translateX(2px) skewX(-2deg)}100%{transform:translateX(0)}}
+        @keyframes scan{0%{transform:translateY(4px)}100%{transform:translateY(36px)}}
         .tab{background:none;border:none;cursor:pointer;font-family:inherit;font-size:10px;letter-spacing:.1em;padding:7px 14px;color:#1E3A55;transition:all .2s;text-transform:uppercase;border-bottom:2px solid transparent}
         .tab:hover{color:${K.c}}.tab.on{color:${K.c};border-bottom-color:${K.c}}
         .tr:hover{background:#060B14}
