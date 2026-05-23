@@ -363,7 +363,6 @@ function Globe3D({trades,blackSwan,whaleAlert,totalPnL,tradeCount}:{trades:Trade
 }
 
 
-// All skull coordinates are mapped directly into parent SVG space — no nested <svg>, no transform scaling issues.
 function CyberFace({cx,cy,size,col,active,conflict}:{cx:number,cy:number,size:number,col:string,active:boolean,conflict:boolean}){
   const s=size/40;
   const X=(x:number)=>cx+(x-20)*s;
@@ -371,44 +370,89 @@ function CyberFace({cx,cy,size,col,active,conflict}:{cx:number,cy:number,size:nu
   const R=(r:number)=>r*s;
   const elPts=[[13,17],[16,14],[19,17],[16,20]].map(([x,y])=>`${X(x)},${Y(y)}`).join(" ");
   const erPts=[[21,17],[24,14],[27,17],[24,20]].map(([x,y])=>`${X(x)},${Y(y)}`).join(" ");
-  const dots:Array<[number,number]>=[[20,6],[8,20],[32,20],[16,17],[24,17],[20,32]];
+  const ao=active?1:.62;
+  const sw=active?1.5:1;
+  const nodes:Array<[number,number]>=[[20,6],[8,14],[32,14],[16,17],[24,17],[14,29],[26,29],[20,32]];
   return(
     <>
-      {/* Aura */}
-      <ellipse cx={X(20)} cy={Y(18)} rx={R(15)} ry={R(17)} fill={col} fillOpacity={active?.07:.025}/>
-      {/* Head outline */}
-      <ellipse cx={X(20)} cy={Y(18)} rx={R(12)} ry={R(14)} fill={col+"12"} stroke={col} strokeWidth={active?1.5:1} opacity={active?1:.5}/>
-      {/* Cheekbones */}
-      <line x1={X(8)} y1={Y(20)} x2={X(14)} y2={Y(24)} stroke={col} strokeWidth="1" opacity={active?.85:.4}/>
-      <line x1={X(32)} y1={Y(20)} x2={X(26)} y2={Y(24)} stroke={col} strokeWidth="1" opacity={active?.85:.4}/>
-      {/* Forehead mesh */}
-      <line x1={X(12)} y1={Y(10)} x2={X(20)} y2={Y(6)} stroke={col} strokeWidth=".9" opacity={active?.75:.35}/>
-      <line x1={X(28)} y1={Y(10)} x2={X(20)} y2={Y(6)} stroke={col} strokeWidth=".9" opacity={active?.75:.35}/>
-      <line x1={X(14)} y1={Y(8)} x2={X(26)} y2={Y(8)} stroke={col} strokeWidth=".7" opacity={active?.65:.3}/>
-      {/* Eyes — diamond */}
-      <polygon points={elPts} fill={col+"30"} stroke={col} strokeWidth="1" opacity={active?1:.45}/>
-      <polygon points={erPts} fill={col+"30"} stroke={col} strokeWidth="1" opacity={active?1:.45}/>
-      {/* Nose bridge */}
-      <line x1={X(20)} y1={Y(17)} x2={X(20)} y2={Y(24)} stroke={col} strokeWidth=".8" opacity={active?.65:.3}/>
-      {/* Jaw */}
-      <line x1={X(10)} y1={Y(26)} x2={X(20)} y2={Y(32)} stroke={col} strokeWidth="1" opacity={active?.85:.4}/>
-      <line x1={X(30)} y1={Y(26)} x2={X(20)} y2={Y(32)} stroke={col} strokeWidth="1" opacity={active?.85:.4}/>
-      <line x1={X(14)} y1={Y(29)} x2={X(26)} y2={Y(29)} stroke={col} strokeWidth=".7" opacity={active?.65:.3}/>
-      {/* Chin */}
-      <ellipse cx={X(20)} cy={Y(32)} rx={R(6)} ry={R(2)} fill="none" stroke={col} strokeWidth=".9" opacity={active?.75:.35}/>
-      {/* Scan line */}
+      {/* Outer breathing ring — active only */}
+      {active&&<ellipse cx={X(20)} cy={Y(18)} rx={R(16)} ry={R(18)} fill="none" stroke={col} strokeWidth=".8" opacity=".4" style={{animation:"breathe 1.6s ease-in-out infinite"}}/>}
+      {/* Aura fill */}
+      <ellipse cx={X(20)} cy={Y(18)} rx={R(14)} ry={R(16)} fill={col} fillOpacity={active?.1:.04}/>
+
+      {/* ── HEAD SHELL ── */}
+      <ellipse cx={X(20)} cy={Y(18)} rx={R(12)} ry={R(14)} fill={col+"1A"} stroke={col} strokeWidth={active?2:1.2} opacity={ao}/>
+
+      {/* ── TEMPORAL / SIDE RAILS ── */}
+      <line x1={X(8)} y1={Y(14)} x2={X(8)} y2={Y(22)} stroke={col} strokeWidth={sw*.75} opacity={ao*.8}/>
+      <line x1={X(32)} y1={Y(14)} x2={X(32)} y2={Y(22)} stroke={col} strokeWidth={sw*.75} opacity={ao*.8}/>
+      <line x1={X(8)} y1={Y(14)} x2={X(12)} y2={Y(10)} stroke={col} strokeWidth={sw} opacity={ao*.9}/>
+      <line x1={X(32)} y1={Y(14)} x2={X(28)} y2={Y(10)} stroke={col} strokeWidth={sw} opacity={ao*.9}/>
+
+      {/* ── FOREHEAD CROWN ── */}
+      <line x1={X(12)} y1={Y(10)} x2={X(20)} y2={Y(6)} stroke={col} strokeWidth={sw} opacity={ao*.95}/>
+      <line x1={X(28)} y1={Y(10)} x2={X(20)} y2={Y(6)} stroke={col} strokeWidth={sw} opacity={ao*.95}/>
+      <line x1={X(12)} y1={Y(10)} x2={X(28)} y2={Y(10)} stroke={col} strokeWidth={sw*.65} opacity={ao*.75}/>
+
+      {/* ── FOREHEAD CIRCUIT TRACES ── */}
+      <line x1={X(20)} y1={Y(8)} x2={X(20)} y2={Y(13)} stroke={col} strokeWidth={sw*.55} opacity={ao*.6}/>
+      <line x1={X(15)} y1={Y(12)} x2={X(18)} y2={Y(12)} stroke={col} strokeWidth={sw*.5} opacity={ao*.6}/>
+      <line x1={X(22)} y1={Y(12)} x2={X(25)} y2={Y(12)} stroke={col} strokeWidth={sw*.5} opacity={ao*.6}/>
+      <line x1={X(15)} y1={Y(12)} x2={X(15)} y2={Y(14)} stroke={col} strokeWidth={sw*.4} opacity={ao*.5}/>
+      <line x1={X(25)} y1={Y(12)} x2={X(25)} y2={Y(14)} stroke={col} strokeWidth={sw*.4} opacity={ao*.5}/>
+
+      {/* ── BROW RIDGE ── */}
+      <line x1={X(12)} y1={Y(15)} x2={X(19)} y2={Y(14)} stroke={col} strokeWidth={sw*.8} opacity={ao*.8}/>
+      <line x1={X(21)} y1={Y(14)} x2={X(28)} y2={Y(15)} stroke={col} strokeWidth={sw*.8} opacity={ao*.8}/>
+
+      {/* ── CHEEKBONES ── */}
+      <line x1={X(8)} y1={Y(22)} x2={X(13)} y2={Y(26)} stroke={col} strokeWidth={sw} opacity={ao*.85}/>
+      <line x1={X(32)} y1={Y(22)} x2={X(27)} y2={Y(26)} stroke={col} strokeWidth={sw} opacity={ao*.85}/>
+      <line x1={X(13)} y1={Y(26)} x2={X(10)} y2={Y(29)} stroke={col} strokeWidth={sw*.75} opacity={ao*.7}/>
+      <line x1={X(27)} y1={Y(26)} x2={X(30)} y2={Y(29)} stroke={col} strokeWidth={sw*.75} opacity={ao*.7}/>
+
+      {/* ── EYES — diamond with inner glow ── */}
+      <polygon points={elPts} fill={col+(active?"60":"28")} stroke={col} strokeWidth={sw} opacity={ao}/>
+      <polygon points={erPts} fill={col+(active?"60":"28")} stroke={col} strokeWidth={sw} opacity={ao}/>
+      <circle cx={X(16)} cy={Y(17)} r={active?R(2.2):R(1.4)} fill={col} opacity={active?.95:.5}/>
+      <circle cx={X(24)} cy={Y(17)} r={active?R(2.2):R(1.4)} fill={col} opacity={active?.95:.5}/>
+      {/* Eye shine */}
+      {active&&<>
+        <circle cx={X(15.2)} cy={Y(16.2)} r={R(.7)} fill="#ffffff" opacity=".7"/>
+        <circle cx={X(23.2)} cy={Y(16.2)} r={R(.7)} fill="#ffffff" opacity=".7"/>
+      </>}
+
+      {/* ── NASAL CAVITY ── */}
+      <line x1={X(20)} y1={Y(20)} x2={X(18)} y2={Y(24)} stroke={col} strokeWidth={sw*.7} opacity={ao*.7}/>
+      <line x1={X(20)} y1={Y(20)} x2={X(22)} y2={Y(24)} stroke={col} strokeWidth={sw*.7} opacity={ao*.7}/>
+      <line x1={X(18)} y1={Y(24)} x2={X(22)} y2={Y(24)} stroke={col} strokeWidth={sw*.6} opacity={ao*.65}/>
+
+      {/* ── JAW / MANDIBLE ── */}
+      <line x1={X(10)} y1={Y(29)} x2={X(14)} y2={Y(29)} stroke={col} strokeWidth={sw*.65} opacity={ao*.65}/>
+      <line x1={X(26)} y1={Y(29)} x2={X(30)} y2={Y(29)} stroke={col} strokeWidth={sw*.65} opacity={ao*.65}/>
+      <line x1={X(14)} y1={Y(29)} x2={X(26)} y2={Y(29)} stroke={col} strokeWidth={sw*.9} opacity={ao*.85}/>
+      <line x1={X(16)} y1={Y(29)} x2={X(16)} y2={Y(32)} stroke={col} strokeWidth={sw*.55} opacity={ao*.6}/>
+      <line x1={X(24)} y1={Y(29)} x2={X(24)} y2={Y(32)} stroke={col} strokeWidth={sw*.55} opacity={ao*.6}/>
+      <ellipse cx={X(20)} cy={Y(32)} rx={R(5)} ry={R(1.8)} fill="none" stroke={col} strokeWidth={sw*.75} opacity={ao*.75}/>
+
+      {/* ── SCAN LINE ── */}
       {active&&(
-        <line x1={X(9)} y1={Y(4)} x2={X(31)} y2={Y(4)} stroke={col} strokeWidth="1.2" opacity=".6">
-          <animateTransform attributeName="transform" type="translate" from="0 0" to={`0 ${R(28)}`} dur="1.2s" repeatCount="indefinite" additive="sum"/>
+        <line x1={X(9)} y1={Y(5)} x2={X(31)} y2={Y(5)} stroke={col} strokeWidth="1.8" opacity=".65">
+          <animateTransform attributeName="transform" type="translate" from="0 0" to={`0 ${R(26)}`} dur="1.1s" repeatCount="indefinite" additive="sum"/>
         </line>
       )}
-      {/* Conflict glitch */}
+
+      {/* ── CONFLICT GLITCH ── */}
       {conflict&&(
-        <rect x={X(8)} y={Y(10)} width={R(24)} height={R(20)} fill="none" stroke="#FF3366" strokeWidth=".8" style={{animation:"glitch 0.15s infinite"}}/>
+        <>
+          <ellipse cx={X(20)+2} cy={Y(18)+1} rx={R(12)} ry={R(14)} fill="none" stroke="#FF3366" strokeWidth="1.2" opacity=".7" style={{animation:"glitch 0.12s step-start infinite"}}/>
+          <ellipse cx={X(20)-2} cy={Y(18)-1} rx={R(12)} ry={R(14)} fill="none" stroke="#FF3366" strokeWidth=".6" opacity=".4" style={{animation:"glitch 0.18s step-start infinite"}}/>
+        </>
       )}
-      {/* Vertex dots */}
-      {dots.map(([dx,dy],i)=>(
-        <circle key={i} cx={X(dx)} cy={Y(dy)} r={active?R(1.5):R(1)} fill={col} opacity={active?.95:.45}/>
+
+      {/* ── STRUCTURAL NODES ── */}
+      {nodes.map(([dx,dy],i)=>(
+        <circle key={i} cx={X(dx)} cy={Y(dy)} r={active?R(1.8):R(1.2)} fill={col} opacity={active?.95:.55}/>
       ))}
     </>
   );
