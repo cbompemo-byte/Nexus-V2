@@ -9,6 +9,7 @@ const f2=(n:number,d=2)=>Number(n).toLocaleString("en-US",{minimumFractionDigits
 const fP=(n:number)=>`${n>=0?"+":""}${f2(n)}%`;
 const fU=(n:number)=>`${n>=0?"+":"-"}$${f2(Math.abs(n))}`;
 const ts=()=>new Date().toLocaleTimeString("en-US",{hour12:false});
+const fPrice=(p:number)=>p>=1000?"$"+f2(p,0):p>=1?"$"+f2(p,2):p>=0.01?"$"+f2(p,4):p>=0.0001?"$"+f2(p,6):"$"+f2(p,8);
 
 function OdometerChar({ch,col}:{ch:string,col:string}){
   const prevCh=useRef(ch);
@@ -33,13 +34,41 @@ function Odometer({value,col,style}:{value:string,col:string,style?:React.CSSPro
   );
 }
 
-const SYMS:{[k:string]:{base:number,vol:number,col:string,icon:string}}={
-  SOL:{base:178.4,vol:.0028,col:K.c,icon:"◎"},
-  BTC:{base:67420,vol:.0012,col:K.gold,icon:"₿"},
-  ETH:{base:3540,vol:.0016,col:"#627EEA",icon:"Ξ"},
-  JUP:{base:1.24,vol:.0045,col:K.g,icon:"◆"},
-  BONK:{base:.0000242,vol:.006,col:"#FF6B00",icon:"⚡"},
+type SymInfo={base:number,vol:number,col:string,icon:string,mint:string,cat:string};
+const SYMS:{[k:string]:SymInfo}={
+  // L1
+  SOL:{base:178.4,vol:.0028,col:K.c,icon:"◎",mint:"So11111111111111111111111111111111111111112",cat:"L1"},
+  BTC:{base:67420,vol:.0012,col:K.gold,icon:"₿",mint:"3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh",cat:"L1"},
+  ETH:{base:3540,vol:.0016,col:"#627EEA",icon:"Ξ",mint:"7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs",cat:"L1"},
+  // Solana DeFi
+  JUP:{base:1.24,vol:.004,col:K.g,icon:"◆",mint:"JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",cat:"DEFI"},
+  RAY:{base:2.8,vol:.005,col:"#4D95FF",icon:"◈",mint:"4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R",cat:"DEFI"},
+  ORCA:{base:2.1,vol:.005,col:"#00B4D8",icon:"⊙",mint:"orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE",cat:"DEFI"},
+  PYTH:{base:0.38,vol:.006,col:"#E6D55A",icon:"◉",mint:"HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3",cat:"DEFI"},
+  JTO:{base:3.2,vol:.005,col:"#5CE1E6",icon:"⟁",mint:"jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL",cat:"DEFI"},
+  DRIFT:{base:0.62,vol:.007,col:"#7B61FF",icon:"⤳",mint:"DriFtupJYLTosbwoN8koMbEYSx54aFAVLddWsbksjwg7",cat:"DEFI"},
+  MNGO:{base:0.018,vol:.008,col:"#FF9500",icon:"◇",mint:"MangoCzJ36AjZyKwVj3VnYU4GTonjfVEnJmvvWaxLac",cat:"DEFI"},
+  FIDA:{base:0.22,vol:.009,col:"#4E44CE",icon:"⬡",mint:"EchesyfXePKdLtoiZSL8pBe8Myagyy8ZRqsACNCFGnvp",cat:"DEFI"},
+  STEP:{base:0.045,vol:.008,col:"#7FFF00",icon:"↗",mint:"StepAscQoEioFxxWGnh2sLBDFp9d8rvKz2Yp39iDpyT",cat:"DEFI"},
+  // Memecoins
+  BONK:{base:.0000242,vol:.008,col:"#FF6B00",icon:"⚡",mint:"DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",cat:"MEME"},
+  WIF:{base:2.8,vol:.009,col:"#FF69B4",icon:"◎",mint:"EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm",cat:"MEME"},
+  POPCAT:{base:0.62,vol:.01,col:"#FF4488",icon:"●",mint:"7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr",cat:"MEME"},
+  MYRO:{base:0.058,vol:.012,col:"#8B5CF6",icon:"⬡",mint:"HhJpBhRRn4g56VsyLuT8DL5Bv31HkXqsrahTTUCZeZg4",cat:"MEME"},
+  BOME:{base:0.0062,vol:.012,col:"#FF6633",icon:"◈",mint:"ukHH6c7mMyiWCf1b9pnWe25TSpkDDt3H5pQZgZ74J82",cat:"MEME"},
+  SLERF:{base:0.38,vol:.015,col:"#FF33FF",icon:"⊞",mint:"7BgBvyjrZX1YKz4oh9mjb8ZScatkkwb8DzFx7LoiVkM3",cat:"MEME"},
+  GUAC:{base:0.00015,vol:.02,col:"#52B788",icon:"◉",mint:"AZsHEMXd36Bj1EMNXhowJajpUXzrKcK57wW4ZGXVa7yR",cat:"MEME"},
+  WEN:{base:0.000065,vol:.018,col:"#A8DADC",icon:"◇",mint:"WENWENvqqNya429ubCdR81ZmD69brwQaaBYY6p3LCpk",cat:"MEME"},
+  // Stablecoins (for depeg detection)
+  USDC:{base:1.0,vol:.0001,col:"#2775CA",icon:"$",mint:"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",cat:"STABLE"},
+  USDT:{base:1.0,vol:.0001,col:"#26A17B",icon:"₮",mint:"Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",cat:"STABLE"},
+  // Additional
+  COPE:{base:0.12,vol:.01,col:"#E040FB",icon:"⊕",mint:"8HGyAAB1yoM1ttS7pXjHMa3dukTFGQggnFFH3hJZgzQh",cat:"DEFI"},
+  ZETA:{base:0.055,vol:.011,col:"#00E5FF",icon:"⟂",mint:"ZETAxsqTWhLDGkGnSPMNUKMqhcJRHRSXVgDoVLRFJvL",cat:"DEFI"},
+  JITO:{base:3.8,vol:.005,col:"#FF8800",icon:"◆",mint:"J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn",cat:"DEFI"},
 };
+const STABLE_SYMS=new Set(["USDC","USDT"]);
+const SYM_COUNT=Object.keys(SYMS).length;
 
 const AGENTS=[
   {id:"consensus",name:"CONSENSUS",s:"CNSNS",lv:0,ag:0},
@@ -84,6 +113,7 @@ const BOOT_STEPS=[
   "[LEVIATHAN]: Liquidity Radar Online...",
   "[ATLAS]: Global Macro Sphere Synced...",
   "[AEGIS]: Adaptive Risk Matrix Active...",
+  `[JUPITER]: ${SYM_COUNT} Solana pairs loaded...`,
   "[SWARM]: 18 Cognitive Agents Connected...",
   "[NEXUS]: ◈ System ready.",
 ];
@@ -106,16 +136,16 @@ const TH:{[k:string]:string[]}={
   shield:["Anti-manipulation: CLEAN","Spoofing blocked @67,800","Wash trading 0.3% filtered","Execution: VERIFIED"],
   neural:["Pattern: 72h wedge break","Historical match 91%","Neural confidence: HIGH","Bull continuation model"],
   watch:["Latency 42ms NOMINAL","Endpoints: 100% healthy","Slippage 0.08% nominal","System status: GREEN"],
-  lens:["Order book: bid wall $2.4M","VWAP cross confirmed ↑","Tick flow: 73% buy","Spread: LIQUID"],
-  atlas:["DXY -0.3% crypto tailwind","BTC dom -0.4% alt rotation","USDT.D declining: RISK-ON","Global macro: BULLISH"],
+  lens:["SOL order book: $2.4M bid wall","JUP/SOL spread: LIQUID","BONK tick flow: 81% buy","RAY VWAP cross confirmed"],
+  atlas:["SOL+JUP+WIF correlated","Memecoin β=1.8 to SOL","DeFi tokens lagging L1","Alt rotation in progress"],
   echo:["Fear & Greed: 68 (Greed)","Reddit volume +220%","Sentiment Z-score: +2.1σ","SOL mentions +840%"],
-  leviathan:["CEX outflow +12,400 SOL","Smart money BTC LONG 3.2x","Whale cluster @$66,800","Accumulation 14d HIGH"],
-  razor:["1m RSI bounce from 38","Scalp LONG @178.40","Micro-reversal confirmed","Scalp PnL +0.8% 4min"],
-  surge:["Bull flag 4H confirmed","Breakout imminent","ATH retest prob: 61%","Volume dry: ABORT"],
+  leviathan:["CEX outflow +12,400 SOL","WIF whale: +2.1M tokens","BONK accumulation 14d HIGH","Whale cluster detected"],
+  razor:["POPCAT 1m RSI bounce","WIF scalp LONG confirmed","BONK micro-reversal ✓","DRIFT scalp PnL +0.8%"],
+  surge:["WIF bull flag 4H confirmed","BONK breakout imminent","POPCAT ATH retest 61%","SLERF volume spike: ENTER"],
   vector:["Primary trend: BULLISH","EMA 21/55 cross ↑","ADX 38: strong trend","Higher highs + lows"],
   delta:["Shadow: Bull 68% prob","Survival prob: 91.4%","E[R]: μ=+2.1% σ=0.8%","Black swan: 0.6%"],
-  radar:["Pre-move signal: SOL","Smart money entering","Edge score: 87/100","Breakout in 4h window"],
-  consensus:["VOTE: BUY SOL 14/18","Consensus: 82%","Debate: LONG wins","EXECUTE LONG SOL"],
+  radar:["Pre-move: WIF/BONK/SOL","PYTH: smart money entering","Edge score: 87/100 — DRIFT","MEME rotation signal"],
+  consensus:["VOTE: BUY SOL 14/18","WIF consensus: 82%","BONK debate: LONG wins","EXECUTE: JUP LONG"],
 };
 
 type PriceData={price:number,prev:number,trend:string,change:number,rsi:number,hist:number[]};
@@ -130,21 +160,51 @@ type MoneyLabel={id:string,x:number,y:number,val:number,born:number};
 function usePrices(){
   const [px,setPx]=useState<{[k:string]:PriceData}>(()=>
     Object.fromEntries(Object.entries(SYMS).map(([k,v])=>[k,{
-      price:v.base,prev:v.base,trend:"up",change:(Math.random()-.4)*12,rsi:45+Math.random()*25,
+      price:v.base,prev:v.base,trend:"up",change:(Math.random()-.4)*8,rsi:40+Math.random()*35,
       hist:Array.from({length:60},(_,i)=>v.base*(1+(Math.random()-.5)*.05*(i/60))),
     }]))
   );
+  // micro-simulation (sparklines + RSI)
   useEffect(()=>{
     const iv=setInterval(()=>setPx(p=>{
       const n:{[k:string]:PriceData}={};
       for(const[k,v]of Object.entries(SYMS)){
-        const c=p[k],d=(Math.random()-.499)*2*v.vol,np=c.price*(1+d);
+        const c=p[k];if(!c)continue;
+        const d=(Math.random()-.499)*2*v.vol,np=Math.max(c.price*(1+d),c.price*0.9);
         n[k]={...c,price:np,prev:c.price,trend:np>c.price?"up":"dn",
-          hist:[...c.hist.slice(1),np],change:c.change+(Math.random()-.5)*.2,
-          rsi:Math.max(20,Math.min(82,c.rsi+(Math.random()-.5)*2.5))};
+          hist:[...c.hist.slice(1),np],change:c.change+(Math.random()-.5)*.15,
+          rsi:Math.max(15,Math.min(85,c.rsi+(Math.random()-.5)*2.5))};
       }
       return n;
     }),900);
+    return()=>clearInterval(iv);
+  },[]);
+  // real Jupiter prices every 5 s
+  useEffect(()=>{
+    const mintMap:Record<string,string>=Object.fromEntries(Object.entries(SYMS).map(([sym,info])=>[info.mint,sym]));
+    const fetchPrices=async()=>{
+      try{
+        const ids=Object.values(SYMS).map(s=>s.mint).join(",");
+        const res=await fetch(`/api/jupiter?ids=${ids}`);
+        if(!res.ok)return;
+        const data=await res.json();
+        if(!data?.data)return;
+        setPx(p=>{
+          const n={...p};
+          for(const[mint,jd] of Object.entries(data.data as Record<string,{price:number}>)){
+            const sym=mintMap[mint];
+            if(!sym||!jd?.price)continue;
+            const cur=n[sym];if(!cur)continue;
+            const np=jd.price;
+            n[sym]={...cur,price:np,prev:cur.price,trend:np>cur.price?"up":"dn",
+              hist:[...cur.hist.slice(1),np]};
+          }
+          return n;
+        });
+      }catch{}
+    };
+    fetchPrices();
+    const iv=setInterval(fetchPrices,5000);
     return()=>clearInterval(iv);
   },[]);
   return px;
@@ -830,6 +890,7 @@ export default function NEXUS(){
   const [circuit,setCircuit]=useState(false);
   const [blackSwan,setBlackSwan]=useState(false);
   const [tab,setTab]=useState("terminal");
+  const [mktTab,setMktTab]=useState<"MOVERS"|"RADAR"|"ALL">("ALL");
   const [disabled,setDisabled]=useState<Set<string>>(new Set());
   const [showKill,setShowKill]=useState(false);
   const [modal,setModal]=useState<string|null>(null);
@@ -966,8 +1027,14 @@ export default function NEXUS(){
     const iv=setInterval(()=>{
       const cs=agStRef.current["consensus"];
       if(!cs?.on||!cs.conf||cs.conf<55)return;
-      const keys=Object.keys(SYMS);
-      const sym=keys[Math.floor(Math.random()*keys.length)];
+      const allKeys=Object.keys(SYMS);
+      const volatileKeys=allKeys.filter(sym=>{
+        if(STABLE_SYMS.has(sym))return false;
+        const d=pricesRef.current[sym];
+        return d&&Math.abs(d.change)>1;
+      });
+      const pool=volatileKeys.length>0?volatileKeys:allKeys.filter(s=>!STABLE_SYMS.has(s));
+      const sym=pool[Math.floor(Math.random()*pool.length)];
       const p=pricesRef.current[sym];if(!p)return;
       const prt=portRef.current;
       if(cs.sig==="BUY"&&!prt.pos[sym]&&prt.cash>500&&Object.keys(prt.pos).length<5){
@@ -1130,6 +1197,10 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
         <div style={{display:"flex",alignItems:"center",gap:16}}>
           <div style={{fontSize:19,fontWeight:900,color:blackSwan?K.r:K.c,letterSpacing:".25em",textShadow:"0 0 20px "+(blackSwan?K.r:K.c),animation:"glow 2.5s ease-in-out infinite"}}>◈ NEXUS</div>
           <span style={{fontSize:9,color:"#102030",letterSpacing:".1em"}}>QUANT AI · SANDBOX · v2.0</span>
+          <div style={{display:"flex",alignItems:"center",gap:4,padding:"2px 7px",background:K.c+"10",border:"1px solid "+K.c+"25",borderRadius:2}}>
+            <span style={{fontSize:9,fontWeight:700,color:K.c}}>{SYM_COUNT}</span>
+            <span style={{fontSize:7,color:K.dim,letterSpacing:".08em"}}>MARKETS</span>
+          </div>
           <div style={{display:"flex",alignItems:"center",gap:5}}>
             <div style={{width:6,height:6,borderRadius:"50%",background:running?K.g:K.r,boxShadow:"0 0 8px "+(running?K.g:K.r),animation:"pu 1.5s infinite"}}/>
             <span style={{fontSize:9,color:running?K.g:K.r}}>{running?"LIVE · AUTO":"STANDBY"}</span>
@@ -1200,30 +1271,49 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
               <Globe3D trades={trades} blackSwan={blackSwan} whaleAlert={whaleAlert} totalPnL={totalPnL} tradeCount={trades.length}/>
             </div>
             <div className="panel" style={{flex:1,overflow:"hidden",display:"flex",flexDirection:"column"}}>
-              <div style={{fontSize:8,color:K.dim,padding:"6px 10px 4px",borderBottom:"1px solid #060A14",letterSpacing:".12em"}}>◉ LIVE MARKET</div>
+              <div style={{padding:"4px 8px 0",borderBottom:"1px solid #060A14",display:"flex",alignItems:"center",gap:8}}>
+                <span style={{fontSize:7,color:K.dim,letterSpacing:".12em"}}>◉ MARKETS</span>
+                {(["MOVERS","RADAR","ALL"] as const).map(t=>(
+                  <button key={t} onClick={()=>setMktTab(t)} style={{background:"none",border:"none",cursor:"pointer",fontFamily:"inherit",fontSize:7,letterSpacing:".1em",padding:"4px 6px 3px",color:mktTab===t?K.c:K.dim,borderBottom:"1px solid "+(mktTab===t?K.c:"transparent")}}>
+                    {t}
+                  </button>
+                ))}
+                <span style={{marginLeft:"auto",fontSize:7,color:K.dim}}>{SYM_COUNT} MKT</span>
+              </div>
               <div style={{overflow:"auto",flex:1}}>
-                {Object.entries(prices).map(([sym,d])=>{
-                  const sv=SYMS[sym],up=d.trend==="up",pos=port.pos[sym];
-                  return(
-                    <div key={sym} className="tr" style={{padding:"6px 10px",borderBottom:"1px solid #050810",borderLeft:"2px solid "+(pos?K.c:"transparent")}}>
-                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:2}}>
-                        <div style={{display:"flex",alignItems:"center",gap:5}}>
-                          <span style={{color:sv?.col,fontSize:13}}>{sv?.icon}</span>
-                          <span style={{color:K.hi,fontSize:11,fontWeight:600}}>{sym}</span>
+                {(()=>{
+                  const entries=Object.entries(prices);
+                  let display=entries;
+                  if(mktTab==="MOVERS"){
+                    display=[...entries].sort((a,b)=>Math.abs(b[1].change)-Math.abs(a[1].change)).slice(0,10);
+                  }else if(mktTab==="RADAR"){
+                    display=entries.filter(([sym,d])=>!STABLE_SYMS.has(sym)&&Math.abs(d.change)>2&&d.rsi<65).sort((a,b)=>Math.abs(b[1].change)-Math.abs(a[1].change)).slice(0,8);
+                  }
+                  return display.map(([sym,d])=>{
+                    const sv=SYMS[sym],up=d.trend==="up",pos=port.pos[sym];
+                    const isOpp=mktTab==="RADAR";
+                    return(
+                      <div key={sym} className="tr" style={{padding:"5px 8px",borderBottom:"1px solid #050810",borderLeft:"2px solid "+(pos?K.c:isOpp?K.gold+"60":"transparent")}}>
+                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:1}}>
+                          <div style={{display:"flex",alignItems:"center",gap:4}}>
+                            <span style={{color:sv?.col,fontSize:10}}>{sv?.icon}</span>
+                            <span style={{color:K.hi,fontSize:10,fontWeight:600}}>{sym}</span>
+                            {sv?.cat&&<span style={{fontSize:6,color:sv.col,opacity:.6,padding:"0px 3px",border:"1px solid "+sv.col+"30",borderRadius:1}}>{sv.cat}</span>}
+                          </div>
+                          <span style={{color:up?K.g:K.r,fontSize:10,fontWeight:600}}>{fPrice(d.price)}</span>
                         </div>
-                        <span style={{color:up?K.g:K.r,fontSize:11,fontWeight:600}}>{sym==="BTC"?"$"+f2(d.price,0):sym==="BONK"?"$"+f2(d.price,7):"$"+f2(d.price)}</span>
-                      </div>
-                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                        <Spark data={d.hist} color={up?K.g:K.r} w={68} h={17}/>
-                        <div style={{textAlign:"right"}}>
-                          <div style={{fontSize:9,color:up?K.g:K.r}}>{fP(d.change)}</div>
-                          <div style={{fontSize:8,color:d.rsi>70?K.r:d.rsi<30?K.g:K.gold}}>RSI {f2(d.rsi,0)}</div>
+                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                          <Spark data={d.hist} color={up?K.g:K.r} w={56} h={14}/>
+                          <div style={{textAlign:"right"}}>
+                            <div style={{fontSize:8,color:up?K.g:K.r}}>{fP(d.change)}</div>
+                            <div style={{fontSize:7,color:d.rsi>70?K.r:d.rsi<30?K.g:K.tx}}>RSI {f2(d.rsi,0)}</div>
+                          </div>
                         </div>
+                        {pos&&<div style={{marginTop:1,fontSize:7,display:"flex",gap:5}}><span style={{color:K.c}}>LONG</span><span style={{color:((prices[sym]?.price||pos.avg)-pos.avg)/pos.avg*100>=0?K.g:K.r}}>{fP(((prices[sym]?.price||pos.avg)-pos.avg)/pos.avg*100)}</span></div>}
                       </div>
-                      {pos&&<div style={{marginTop:2,fontSize:8,display:"flex",gap:7}}><span style={{color:K.c}}>LONG</span><span style={{color:((prices[sym]?.price||pos.avg)-pos.avg)/pos.avg*100>=0?K.g:K.r}}>{fP(((prices[sym]?.price||pos.avg)-pos.avg)/pos.avg*100)}</span></div>}
-                    </div>
-                  );
-                })}
+                    );
+                  });
+                })()}
               </div>
             </div>
             <div className="panel" style={{padding:9}}>
