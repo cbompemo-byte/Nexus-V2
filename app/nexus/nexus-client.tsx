@@ -63,7 +63,7 @@ const AGENTS=[
 ];
 
 const LR=[0,76,144,212];
-const GCX=240,GCY=220;
+const GCX=240,GCY=232;
 const gpos=(a:{lv:number,ag:number})=>{
   if(!a.lv)return{x:GCX,y:GCY};
   const r=LR[a.lv],rad=(a.ag-90)*Math.PI/180;
@@ -601,7 +601,7 @@ function SwarmGraph({st,debate,disabled,swarmRef}:{st:{[k:string]:AgentState},de
   for(const a of AGENTS)nm[a.id]={...a,pos:gpos(a)};
   return(
     <div ref={swarmRef} style={{position:"relative",display:"inline-block"}}>
-      <svg width="480" height="440" style={{display:"block"}}>
+      <svg width="480" height="468" style={{display:"block"}}>
         <defs>
           <filter id="agf"><feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
           <filter id="arcglow"><feGaussianBlur stdDeviation="2" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
@@ -617,15 +617,15 @@ function SwarmGraph({st,debate,disabled,swarmRef}:{st:{[k:string]:AgentState},de
         {AGENTS.map(({id,s,lv})=>{
           const n=nm[id],ag=st[id]||{on:false,conf:null,sig:null,th:""};
           const dis=disabled.has(id),isAegis=id==="aegis";
-          const r=id==="consensus"?26:lv===1?21:lv===2?16:13;
+          const r=id==="consensus"?34:lv===1?28:lv===2?22:17;
           const col=dis?"#101820":ag.sig==="BUY"?K.g:ag.sig==="SELL"?K.r:id==="consensus"?K.c:K.co;
           const active=ag.on&&!dis;
           const conflict=isAegis&&ag.sig==="SELL"&&!dis;
           return(
             <g key={id} filter={active?"url(#faceglow)":undefined} opacity={dis?.18:1} style={{cursor:"pointer"}} onMouseEnter={()=>setHov(id)} onMouseLeave={()=>setHov(null)}>
               <CyberFace cx={n.pos.x} cy={n.pos.y} size={r*2} col={col} active={active} conflict={conflict}/>
-              <text x={n.pos.x} y={n.pos.y+(id==="consensus"?5:3.5)} textAnchor="middle" fontSize={id==="consensus"?8:6} fontFamily="monospace" fill={dis?K.dim:active?col:K.tx} fontWeight="700">{s}</text>
-              {ag.conf!==null&&!dis&&<text x={n.pos.x} y={n.pos.y+r+12} textAnchor="middle" fontSize="7" fontFamily="monospace" fill={col} opacity=".8">{ag.conf}%</text>}
+              <text x={n.pos.x} y={n.pos.y+r+11} textAnchor="middle" fontSize={id==="consensus"?8:6} fontFamily="monospace" fill={dis?K.dim:active?col:K.tx} fontWeight="700">{s}</text>
+              {ag.conf!==null&&!dis&&<text x={n.pos.x} y={n.pos.y+r+20} textAnchor="middle" fontSize="7" fontFamily="monospace" fill={col} opacity=".8">{ag.conf}%</text>}
             </g>
           );
         })}
