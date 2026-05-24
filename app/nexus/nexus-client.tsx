@@ -213,20 +213,48 @@ function BootSequence({onDone}:{onDone:()=>void}){
 function Globe3D({trades,blackSwan,whaleAlert,totalPnL,tradeCount}:{trades:Trade[],blackSwan:boolean,whaleAlert:boolean,totalPnL:number,tradeCount:number}){
   const mountRef=useRef<HTMLDivElement>(null);
   const [moneyLabels,setMoneyLabels]=useState<MoneyLabel[]>([]);
+  const [radarWaves,setRadarWaves]=useState<Array<{id:string,x:number,y:number,col:string,born:number}>>([]);
+  const [observers]=useState(()=>2800+Math.floor(Math.random()*200));
   const W=280,H=248;
   const prevLen=useRef(0);
+  // Fixed 2D overlay coords — (W=280,H=248)
   const CITIES_2D:Array<[number,number,string]>=[[W*.28,H*.38,"NYC"],[W*.50,H*.34,"LON"],[W*.76,H*.38,"TYO"],[W*.73,H*.53,"SGP"],[W*.63,H*.43,"DXB"],[W*.74,H*.45,"HKG"]];
+
+  // Session: which market is open by UTC hour
+  const h=new Date().getUTCHours();
+  const session=h<8?{name:"ASIA",col:K.gold,cities:[2,3,4,5]}:h<15?{name:"EU",col:K.c,cities:[1]}:{name:"US",col:K.g,cities:[0]};
+
+  // Trade fires → money label + radar wave
   useEffect(()=>{
     if(trades.length>prevLen.current){
       const t=trades[0];
       if(t&&t.pnl!==0){
         const city=CITIES_2D[Math.floor(Math.random()*CITIES_2D.length)];
-        setMoneyLabels(p=>[...p.slice(-6),{id:Math.random().toString(36).slice(2),x:city[0]+(Math.random()-.5)*18,y:city[1]+(Math.random()-.5)*12,val:t.pnl,born:Date.now()}]);
+        const wc=CITIES_2D[Math.floor(Math.random()*3)]; // NYSE/LON/TYO only
+        const now=Date.now();
+        setMoneyLabels(p=>[...p.slice(-6),{id:Math.random().toString(36).slice(2),x:city[0]+(Math.random()-.5)*18,y:city[1]+(Math.random()-.5)*12,val:t.pnl,born:now}]);
+        setRadarWaves(p=>[...p.slice(-12),{id:Math.random().toString(36).slice(2),x:wc[0],y:wc[1],col:t.pnl>=0?K.g:K.r,born:now}]);
       }
       prevLen.current=trades.length;
     }
   });
-  useEffect(()=>{const iv=setInterval(()=>setMoneyLabels(p=>p.filter(m=>Date.now()-m.born<2800)),100);return()=>clearInterval(iv);},[]);
+
+  // Periodic radar ping every 2–3s regardless of trades
+  useEffect(()=>{
+    // NYC=78.4,94.2 | LON=140,84.3 | TYO=212.8,94.2
+    const wcs:Array<[number,number]>=[[78.4,94.2],[140,84.3],[212.8,94.2]];
+    let t:ReturnType<typeof setTimeout>;
+    const fire=()=>{const[wx,wy]=wcs[Math.floor(Math.random()*3)];setRadarWaves(p=>[...p.slice(-12),{id:Math.random().toString(36).slice(2),x:wx,y:wy,col:K.c,born:Date.now()}]);};
+    const sched=()=>{t=setTimeout(()=>{fire();sched();},2000+Math.random()*1500);};
+    sched();
+    return()=>clearTimeout(t);
+  },[]);
+
+  // Unified cleanup
+  useEffect(()=>{
+    const iv=setInterval(()=>{const now=Date.now();setMoneyLabels(p=>p.filter(m=>now-m.born<2800));setRadarWaves(p=>p.filter(w=>now-w.born<1200));},100);
+    return()=>clearInterval(iv);
+  },[]);
   useEffect(()=>{
     const mount=mountRef.current;if(!mount)return;
     const scene=new THREE.Scene();
@@ -344,14 +372,74 @@ function Globe3D({trades,blackSwan,whaleAlert,totalPnL,tradeCount}:{trades:Trade
   const pnl=totalPnL;
   return(
     <div style={{position:"relative",width:W,height:270}}>
+      {/* Three.js canvas */}
       <div ref={mountRef} style={{position:"absolute",top:0,left:0,width:W,height:H}}/>
-      {whaleAlert&&<div style={{position:"absolute",top:(H/2-108)+"px",left:(W/2-108)+"px",width:216,height:216,borderRadius:"50%",border:"2px solid "+K.pu,animation:"breathe 1s ease-in-out infinite",pointerEvents:"none"}}/>}
-      {blackSwan&&<div style={{position:"absolute",top:(H/2-116)+"px",left:(W/2-116)+"px",width:232,height:232,borderRadius:"50%",border:"1.2px solid "+K.r,animation:"shockwave 1.5s ease-out infinite",pointerEvents:"none"}}/>}
+
+      {/* SVG overlay — city markers, radar waves, HUD text */}
+      <svg width={W} height={H} style={{position:"absolute",top:0,left:0,pointerEvents:"none",overflow:"visible"}}>
+        {/* Session city glow + labels */}
+        {CITIES_2D.map(([cx,cy,name],i)=>{
+          const act=session.cities.includes(i);
+          const col=act?session.col:K.dim;
+          return(
+            <g key={name}>
+              {act&&<circle cx={cx} cy={cy} r="12" fill={col} opacity=".1" style={{animation:"breathe 2s ease-in-out infinite"}}/>}
+              <circle cx={cx} cy={cy} r={act?3.5:2} fill={col} opacity={act?.9:.28}/>
+              <text x={cx} y={cy-8} textAnchor="middle" fontSize="5.5" fontFamily="monospace" fill={col} opacity={act?.85:.32}>{name}</text>
+            </g>
+          );
+        })}
+
+        {/* Radar waves — SMIL expand from city center */}
+        {radarWaves.map(w=>(
+          <g key={w.id}>
+            <circle cx={w.x} cy={w.y} r="0" fill="none" stroke={w.col} strokeWidth="2">
+              <animate attributeName="r" from="0" to="48" dur=".85s" fill="freeze"/>
+              <animate attributeName="opacity" from="1" to="0" dur=".85s" fill="freeze"/>
+            </circle>
+            <circle cx={w.x} cy={w.y} r="0" fill="none" stroke={w.col} strokeWidth=".7" opacity=".5">
+              <animate attributeName="r" from="0" to="64" dur="1.15s" fill="freeze"/>
+              <animate attributeName="opacity" from=".5" to="0" dur="1.15s" fill="freeze"/>
+            </circle>
+          </g>
+        ))}
+
+        {/* North pole — observer count */}
+        <text x={W/2} y={20} textAnchor="middle" fontSize="6" fontFamily="monospace" fill={K.c} opacity=".68" style={{animation:"breathe 3s ease-in-out infinite"}}>{observers.toLocaleString()} ONLINE</text>
+
+        {/* Equator left — trade counter */}
+        <text x={22} y={H/2-2} textAnchor="middle" fontSize="7" fontFamily="monospace" fill={K.dim} opacity=".5" fontWeight="700">{tradeCount}</text>
+        <text x={22} y={H/2+7} textAnchor="middle" fontSize="4.5" fontFamily="monospace" fill={K.dim} opacity=".38">TRADES</text>
+
+        {/* South pole — agents */}
+        <text x={W/2} y={H-14} textAnchor="middle" fontSize="6" fontFamily="monospace" fill={K.c} opacity=".6" style={{animation:"breathe 1.8s ease-in-out infinite"}}>18 AGENTS</text>
+
+        {/* Session badge — top-left */}
+        <rect x={4} y={6} width={58} height={14} rx="2" fill={session.col} fillOpacity=".1" stroke={session.col} strokeWidth=".7" strokeOpacity=".45"/>
+        <text x={33} y={16.5} textAnchor="middle" fontSize="6.5" fontFamily="monospace" fill={session.col} fontWeight="700">{session.name} OPEN</text>
+      </svg>
+
+      {/* Whale alert — 3 staggered expanding rings + text */}
+      {whaleAlert&&(
+        <>
+          <div style={{position:"absolute",top:(H/2-110)+"px",left:(W/2-110)+"px",width:220,height:220,borderRadius:"50%",border:"2px solid "+K.pu,animation:"whalePulse 1.4s ease-out infinite",pointerEvents:"none"}}/>
+          <div style={{position:"absolute",top:(H/2-75)+"px",left:(W/2-75)+"px",width:150,height:150,borderRadius:"50%",border:"1.4px solid "+K.pu+"99",animation:"whalePulse 1.4s ease-out .45s infinite",pointerEvents:"none"}}/>
+          <div style={{position:"absolute",top:(H/2-42)+"px",left:(W/2-42)+"px",width:84,height:84,borderRadius:"50%",border:"1px solid "+K.pu+"55",animation:"whalePulse 1.4s ease-out .9s infinite",pointerEvents:"none"}}/>
+          <div style={{position:"absolute",top:Math.round(H*.38),left:0,right:0,textAlign:"center",fontSize:10,fontFamily:"monospace",fontWeight:700,color:K.pu,animation:"pu .55s ease-in-out infinite",pointerEvents:"none",textShadow:"0 0 10px "+K.pu,letterSpacing:".12em"}}>🐋 WHALE</div>
+        </>
+      )}
+
+      {/* Black swan shockwave */}
+      {blackSwan&&<div style={{position:"absolute",top:(H/2-116)+"px",left:(W/2-116)+"px",width:232,height:232,borderRadius:"50%",border:"1.2px solid "+K.r,animation:"whalePulse 1.5s ease-out infinite",pointerEvents:"none"}}/>}
+
+      {/* Floating money labels — pop at trade location, float up */}
       {moneyLabels.map(m=>(
-        <div key={m.id} style={{position:"absolute",left:m.x,top:m.y,fontSize:9,fontFamily:"monospace",fontWeight:700,color:m.val>=0?K.g:K.r,animation:"moneyFloat 2.8s ease-out forwards",pointerEvents:"none",transform:"translateX(-50%)",whiteSpace:"nowrap"}}>
+        <div key={m.id} style={{position:"absolute",left:m.x,top:m.y,fontSize:10,fontFamily:"monospace",fontWeight:700,color:m.val>=0?K.g:K.r,animation:"moneyFloat 2.8s ease-out forwards",pointerEvents:"none",transform:"translateX(-50%)",whiteSpace:"nowrap",textShadow:`0 0 8px ${m.val>=0?K.g:K.r}`}}>
           {m.val>=0?"+$":"-$"}{f2(Math.abs(m.val))}
         </div>
       ))}
+
+      {/* Bottom P&L readout */}
       <div style={{position:"absolute",bottom:0,left:0,right:0,textAlign:"center",pointerEvents:"none"}}>
         <div style={{fontSize:13,fontFamily:"monospace",fontWeight:700,color:pnl>=0?K.g:K.r,filter:`drop-shadow(0 0 6px ${pnl>=0?K.g:K.r})`}}>
           {pnl>=0?"+$":"-$"}{f2(Math.abs(pnl))}
@@ -925,6 +1013,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
         @keyframes confBar{from{width:100%}to{width:0%}}
         @keyframes tickerScroll{from{transform:translateX(0)}to{transform:translateX(-50%)}}
         @keyframes shockwave{0%{r:60;opacity:.5}100%{r:108;opacity:0}}
+        @keyframes whalePulse{0%{transform:scale(0);opacity:.72}100%{transform:scale(1);opacity:0}}
         @keyframes agentPulse{0%,100%{opacity:1}50%{opacity:.15}}
         @keyframes swan{0%,100%{box-shadow:0 0 0 rgba(255,51,102,.2)}50%{box-shadow:0 0 24px rgba(255,51,102,.5)}}
         @keyframes odometerRoll{from{transform:translateY(-100%);opacity:0}to{transform:translateY(0);opacity:1}}
