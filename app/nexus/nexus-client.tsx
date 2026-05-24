@@ -455,106 +455,151 @@ function CyberFace({cx,cy,size,col,active,conflict}:{cx:number,cy:number,size:nu
   const s=size/40;
   const X=(x:number)=>cx+(x-20)*s;
   const Y=(y:number)=>cy+(y-20)*s;
-  const lw=(w:number)=>Math.max(.8,w*s); // floor stroke widths — never sub-pixel
+  const lw=(w:number)=>Math.max(.8,w*s);
   const ao=active?1:.85;
 
-  // ── ANGULAR SKULL POLYGON — hard corners, elongated, NOT round ──
-  // Wide cranium → narrow temples → wide cheeks → angular jaw → chin point
+  // ── ANATOMICALLY INFORMED SKULL — 12-vertex polygon ──
+  // Wide cranium → temporal bulge → zygomatic → mandible angle → chin
   const SKULL:Array<[number,number]>=[
-    [14,1],[26,1],   // crown bar (flat top)
-    [32,8],          // right temple corner
-    [34,19],         // right cheekbone (widest)
-    [31,27],         // right jaw hinge
-    [27,33],         // right jaw corner
-    [20,39],         // chin point
-    [13,33],         // left jaw corner
-    [9,27],          // left jaw hinge
-    [6,19],          // left cheekbone (widest)
-    [8,8],           // left temple corner
+    [14,0],[26,0],   // flat crown bar
+    [34,7],          // right parietal ridge
+    [36,16],         // right temporal — widest point of skull
+    [33,24],         // right zygomatic / cheekbone
+    [29,31],         // right mandible angle
+    [26,37],         // right anterior jaw
+    [20,40],         // chin point
+    [14,37],         // left anterior jaw
+    [11,31],         // left mandible angle
+    [7,24],          // left zygomatic / cheekbone
+    [4,16],          // left temporal — widest point
+    [6,7],           // left parietal ridge
   ];
   const pts=(ox:number,oy:number)=>SKULL.map(([x,y])=>`${X(x)+ox},${Y(y)+oy}`).join(" ");
 
-  // Eye sockets — wide angular diamonds filling the orbital cavity
-  const lEye:Array<[number,number]>=[[9,18],[14,12],[19,18],[14,24]];
-  const rEye:Array<[number,number]>=[[21,18],[26,12],[31,18],[26,24]];
-  const epPts=(arr:Array<[number,number]>)=>arr.map(([x,y])=>`${X(x)},${Y(y)}`).join(" ");
+  // Orbital cavities — trapezoidal (wider at top, taper to bottom)
+  // Much more skull-like than diamonds
+  const lOrb:Array<[number,number]>=[[8,13],[17,13],[18,17],[17,23],[8,23],[7,17]];
+  const rOrb:Array<[number,number]>=[[23,13],[32,13],[33,17],[32,23],[23,23],[22,17]];
+  const oPts=(arr:Array<[number,number]>)=>arr.map(([x,y])=>`${X(x)},${Y(y)}`).join(" ");
+
+  // Nasal aperture — pear / inverted-heart shape
+  const nosePts:Array<[number,number]>=[[17,24],[23,24],[24,27],[22,30],[20,31],[18,30],[16,27]];
+
+  // Coronal suture — slight zigzag across cranium at y≈8
+  const coronal=[[8,8],[11,7.3],[14,8.5],[17,7.3],[20,8],[23,7.3],[26,8.5],[29,7.3],[32,8]];
+
+  // Teeth — 6 individual rectangles (incisors + canines)
+  const TEETH:Array<[number,number,number,number]>=[
+    [13,31,14.8,37],[15.2,31,17,37],[17.4,31,19.2,37],
+    [20.8,31,22.6,37],[23,31,24.8,37],[25.2,31,27,37],
+  ];
 
   return(
     <>
-      {/* Active glow halo — polygon-shaped, matches skull outline */}
-      {active&&<polygon points={pts(0,0)} fill="none" stroke={col} strokeWidth={lw(7)} opacity=".14" style={{animation:"breathe 1.6s ease-in-out infinite"}}/>}
+      {/* Breathing outer halo */}
+      {active&&<polygon points={pts(0,0)} fill="none" stroke={col} strokeWidth={lw(8)} opacity=".11" style={{animation:"breathe 1.6s ease-in-out infinite"}}/>}
 
-      {/* Solid dark fill — skull must POP off the dark canvas */}
-      <polygon points={pts(0,0)} fill="#000B1A" opacity=".98"/>
+      {/* Solid dark cranial fill */}
+      <polygon points={pts(0,0)} fill="#000C1E" opacity=".98"/>
 
-      {/* ── SKULL OUTLINE — thick angular polygon, primary silhouette ── */}
-      <polygon points={pts(0,0)} fill="none" stroke={col} strokeWidth={lw(active?4.5:3)} opacity={ao}/>
+      {/* ── SKULL OUTLINE ── */}
+      <polygon points={pts(0,0)} fill="none" stroke={col} strokeWidth={lw(active?4:3)} opacity={ao}/>
 
-      {/* ── FOREHEAD TRIANGULAR MESH ── */}
-      {/* Crown bar */}
-      <line x1={X(14)} y1={Y(1)} x2={X(26)} y2={Y(1)} stroke={col} strokeWidth={lw(2.5)} opacity={ao*.85}/>
-      {/* Diagonals to central mesh node */}
-      <line x1={X(14)} y1={Y(1)} x2={X(20)} y2={Y(9)} stroke={col} strokeWidth={lw(2)} opacity={ao*.78}/>
-      <line x1={X(26)} y1={Y(1)} x2={X(20)} y2={Y(9)} stroke={col} strokeWidth={lw(2)} opacity={ao*.78}/>
-      <line x1={X(8)} y1={Y(8)} x2={X(20)} y2={Y(9)} stroke={col} strokeWidth={lw(1.8)} opacity={ao*.68}/>
-      <line x1={X(32)} y1={Y(8)} x2={X(20)} y2={Y(9)} stroke={col} strokeWidth={lw(1.8)} opacity={ao*.68}/>
-      {/* Horizontal forehead bar */}
-      <line x1={X(8)} y1={Y(8)} x2={X(32)} y2={Y(8)} stroke={col} strokeWidth={lw(1.8)} opacity={ao*.65}/>
+      {/* ── CRANIAL SUTURES ── */}
+      {/* Sagittal — center vertical seam */}
+      <line x1={X(20)} y1={Y(0)} x2={X(20)} y2={Y(8)} stroke={col} strokeWidth={lw(1)} opacity={ao*.42} strokeDasharray={`${lw(2.5)} ${lw(2)}`}/>
+      {/* Coronal — horizontal zigzag across cranium */}
+      <polyline points={coronal.map(([x,y])=>`${X(x)},${Y(y)}`).join(" ")} fill="none" stroke={col} strokeWidth={lw(1)} opacity={ao*.38}/>
 
-      {/* ── BROW RIDGES — sharp angular V above each eye ── */}
-      <line x1={X(8)} y1={Y(8)} x2={X(13)} y2={Y(13)} stroke={col} strokeWidth={lw(3.5)} opacity={ao*.95}/>
-      <line x1={X(13)} y1={Y(13)} x2={X(19)} y2={Y(12)} stroke={col} strokeWidth={lw(3.5)} opacity={ao*.95}/>
-      <line x1={X(32)} y1={Y(8)} x2={X(27)} y2={Y(13)} stroke={col} strokeWidth={lw(3.5)} opacity={ao*.95}/>
-      <line x1={X(27)} y1={Y(13)} x2={X(21)} y2={Y(12)} stroke={col} strokeWidth={lw(3.5)} opacity={ao*.95}/>
+      {/* ── FRONTAL BONE — forehead internal structure ── */}
+      <line x1={X(8)} y1={Y(8)} x2={X(20)} y2={Y(11)} stroke={col} strokeWidth={lw(1.5)} opacity={ao*.58}/>
+      <line x1={X(32)} y1={Y(8)} x2={X(20)} y2={Y(11)} stroke={col} strokeWidth={lw(1.5)} opacity={ao*.58}/>
 
-      {/* ── CHEEKBONES — prominent diagonals, hallmark of the skull ── */}
-      <line x1={X(6)} y1={Y(19)} x2={X(12)} y2={Y(13)} stroke={col} strokeWidth={lw(4.5)} opacity={ao*.95}/>
-      <line x1={X(34)} y1={Y(19)} x2={X(28)} y2={Y(13)} stroke={col} strokeWidth={lw(4.5)} opacity={ao*.95}/>
+      {/* ── TEMPORAL FOSSAE — side wall indentation lines ── */}
+      <line x1={X(6)} y1={Y(8)} x2={X(8)} y2={Y(17)} stroke={col} strokeWidth={lw(1.5)} opacity={ao*.48}/>
+      <line x1={X(34)} y1={Y(8)} x2={X(32)} y2={Y(17)} stroke={col} strokeWidth={lw(1.5)} opacity={ao*.48}/>
 
-      {/* ── EYE SOCKETS — hollow diamonds, pure black inside ── */}
-      <polygon points={epPts(lEye)} fill="#000000" opacity=".99"/>
-      <polygon points={epPts(rEye)} fill="#000000" opacity=".99"/>
-      {/* Socket outline — thick, bright */}
-      <polygon points={epPts(lEye)} fill={active?col+"28":"none"} stroke={col} strokeWidth={lw(active?4.5:3.5)} opacity={ao}/>
-      <polygon points={epPts(rEye)} fill={active?col+"28":"none"} stroke={col} strokeWidth={lw(active?4.5:3.5)} opacity={ao}/>
-      {/* Active eye glow — inner iris */}
-      {active&&<>
-        <circle cx={X(14)} cy={Y(18)} r={lw(4)} fill={col} opacity=".5"/>
-        <circle cx={X(26)} cy={Y(18)} r={lw(4)} fill={col} opacity=".5"/>
-        <circle cx={X(14)} cy={Y(18)} r={lw(2)} fill="#ffffff" opacity=".92"/>
-        <circle cx={X(26)} cy={Y(18)} r={lw(2)} fill="#ffffff" opacity=".92"/>
-      </>}
+      {/* ── SUPRAORBITAL MARGINS / BROW RIDGES ── */}
+      <line x1={X(7)} y1={Y(13)} x2={X(18)} y2={Y(12)} stroke={col} strokeWidth={lw(3.5)} opacity={ao*.95}/>
+      <line x1={X(33)} y1={Y(13)} x2={X(22)} y2={Y(12)} stroke={col} strokeWidth={lw(3.5)} opacity={ao*.95}/>
 
-      {/* ── NASAL CAVITY — inverted angular triangle ── */}
-      <line x1={X(20)} y1={Y(24)} x2={X(17)} y2={Y(29)} stroke={col} strokeWidth={lw(2.5)} opacity={ao*.78}/>
-      <line x1={X(20)} y1={Y(24)} x2={X(23)} y2={Y(29)} stroke={col} strokeWidth={lw(2.5)} opacity={ao*.78}/>
-      <line x1={X(17)} y1={Y(29)} x2={X(23)} y2={Y(29)} stroke={col} strokeWidth={lw(2)} opacity={ao*.72}/>
+      {/* ── ZYGOMATIC ARCH — cheekbone structure ── */}
+      <line x1={X(7)} y1={Y(24)} x2={X(9)} y2={Y(17)} stroke={col} strokeWidth={lw(3)} opacity={ao*.88}/>
+      <line x1={X(33)} y1={Y(24)} x2={X(31)} y2={Y(17)} stroke={col} strokeWidth={lw(3)} opacity={ao*.88}/>
+      {/* Arch base underline */}
+      <line x1={X(7)} y1={Y(24)} x2={X(11)} y2={Y(26)} stroke={col} strokeWidth={lw(2)} opacity={ao*.72}/>
+      <line x1={X(33)} y1={Y(24)} x2={X(29)} y2={Y(26)} stroke={col} strokeWidth={lw(2)} opacity={ao*.72}/>
 
-      {/* ── JAW — flat horizontal bar + straight teeth (NO curves) ── */}
-      <line x1={X(13)} y1={Y(33)} x2={X(27)} y2={Y(33)} stroke={col} strokeWidth={lw(4.5)} opacity={ao*.97}/>
-      {/* Vertical teeth lines */}
-      {([14.5,17,19.5,22,24.5] as number[]).map((tx,i)=>(
-        <line key={i} x1={X(tx)} y1={Y(33)} x2={X(tx)} y2={Y(37)} stroke={col} strokeWidth={lw(2)} opacity={ao*.8}/>
+      {/* ── ORBITAL CAVITIES — trapezoidal, anatomically correct ── */}
+      {/* Black fill — the void of the eye socket */}
+      <polygon points={oPts(lOrb)} fill="#000000" opacity=".99"/>
+      <polygon points={oPts(rOrb)} fill="#000000" opacity=".99"/>
+      {/* Socket outline */}
+      <polygon points={oPts(lOrb)} fill={active?col+"1A":"none"} stroke={col} strokeWidth={lw(active?4:3)} opacity={ao}/>
+      <polygon points={oPts(rOrb)} fill={active?col+"1A":"none"} stroke={col} strokeWidth={lw(active?4:3)} opacity={ao}/>
+      {/* Infraorbital margin — reinforcing line under each socket */}
+      <line x1={X(8)} y1={Y(23)} x2={X(17)} y2={Y(23)} stroke={col} strokeWidth={lw(2)} opacity={ao*.68}/>
+      <line x1={X(23)} y1={Y(23)} x2={X(32)} y2={Y(23)} stroke={col} strokeWidth={lw(2)} opacity={ao*.68}/>
+
+      {/* Eye glow — active: bright iris + pupil; inactive: dim ember */}
+      {active?(
+        <>
+          <ellipse cx={X(12.5)} cy={Y(18)} rx={lw(5)} ry={lw(3.8)} fill={col} opacity=".3"/>
+          <ellipse cx={X(27.5)} cy={Y(18)} rx={lw(5)} ry={lw(3.8)} fill={col} opacity=".3"/>
+          <circle cx={X(12.5)} cy={Y(18)} r={lw(2.4)} fill={col} opacity=".75"/>
+          <circle cx={X(27.5)} cy={Y(18)} r={lw(2.4)} fill={col} opacity=".75"/>
+          <circle cx={X(12.5)} cy={Y(18)} r={lw(1.1)} fill="#ffffff" opacity=".95"/>
+          <circle cx={X(27.5)} cy={Y(18)} r={lw(1.1)} fill="#ffffff" opacity=".95"/>
+        </>
+      ):(
+        <>
+          <circle cx={X(12.5)} cy={Y(18)} r={lw(2)} fill={col} opacity=".38"/>
+          <circle cx={X(27.5)} cy={Y(18)} r={lw(2)} fill={col} opacity=".38"/>
+        </>
+      )}
+
+      {/* ── NASAL APERTURE — pear-shaped opening ── */}
+      <polygon points={nosePts.map(([x,y])=>`${X(x)},${Y(y)}`).join(" ")} fill="#000000" opacity=".99"/>
+      <polygon points={nosePts.map(([x,y])=>`${X(x)},${Y(y)}`).join(" ")} fill={col+"0A"} stroke={col} strokeWidth={lw(2)} opacity={ao*.82}/>
+      {/* Anterior nasal spine — vertical seam at base */}
+      <line x1={X(20)} y1={Y(28)} x2={X(20)} y2={Y(31)} stroke={col} strokeWidth={lw(1)} opacity={ao*.48}/>
+
+      {/* ── MAXILLA — upper jaw bar ── */}
+      <line x1={X(11)} y1={Y(31)} x2={X(29)} y2={Y(31)} stroke={col} strokeWidth={lw(3)} opacity={ao*.9}/>
+
+      {/* ── TEETH — individual rect per tooth ── */}
+      {TEETH.map(([tx1,ty1,tx2,ty2],i)=>(
+        <rect key={i}
+          x={X(tx1)} y={Y(ty1)}
+          width={Math.max(1,(tx2-tx1)*s)} height={Math.max(1,(ty2-ty1)*s)}
+          fill="#000814" stroke={col} strokeWidth={lw(1.5)} opacity={ao*.88}
+        />
       ))}
-      {/* Lower tooth bar */}
-      <line x1={X(14.5)} y1={Y(37)} x2={X(24.5)} y2={Y(37)} stroke={col} strokeWidth={lw(2.5)} opacity={ao*.68}/>
 
-      {/* ── SCAN LINE — sweeps crown to chin ── */}
+      {/* ── MANDIBLE LOWER ARCH — jaw angles to chin ── */}
+      <line x1={X(11)} y1={Y(31)} x2={X(14)} y2={Y(37)} stroke={col} strokeWidth={lw(2.5)} opacity={ao*.88}/>
+      <line x1={X(29)} y1={Y(31)} x2={X(26)} y2={Y(37)} stroke={col} strokeWidth={lw(2.5)} opacity={ao*.88}/>
+      <line x1={X(14)} y1={Y(37)} x2={X(26)} y2={Y(37)} stroke={col} strokeWidth={lw(2)} opacity={ao*.7}/>
+      {/* Mental protuberance — chin bump */}
+      <line x1={X(18)} y1={Y(37)} x2={X(20)} y2={Y(40)} stroke={col} strokeWidth={lw(1.5)} opacity={ao*.6}/>
+      <line x1={X(22)} y1={Y(37)} x2={X(20)} y2={Y(40)} stroke={col} strokeWidth={lw(1.5)} opacity={ao*.6}/>
+
+      {/* ── SCAN LINE — sweeps full skull height ── */}
       {active&&(
-        <line x1={X(6)} y1={Y(1)} x2={X(34)} y2={Y(1)} stroke={col} strokeWidth={lw(3.5)} opacity=".9">
-          <animateTransform attributeName="transform" type="translate" from="0 0" to={`0 ${38*s}`} dur="1.1s" repeatCount="indefinite" additive="sum"/>
+        <line x1={X(4)} y1={Y(0)} x2={X(36)} y2={Y(0)} stroke={col} strokeWidth={lw(3)} opacity=".9">
+          <animateTransform attributeName="transform" type="translate" from="0 0" to={`0 ${40*s}`} dur="1.1s" repeatCount="indefinite" additive="sum"/>
         </line>
       )}
 
-      {/* ── STRUCTURAL NODES — vertex anchors ── */}
+      {/* ── VERTEX NODES — HUD anchors at key anatomical landmarks ── */}
       {SKULL.map(([dx,dy],i)=>(
-        <circle key={i} cx={X(dx)} cy={Y(dy)} r={lw(active?2.8:2)} fill={col} opacity={active?.98:.72}/>
+        <circle key={i} cx={X(dx)} cy={Y(dy)} r={lw(active?2.5:1.8)} fill={col} opacity={active?.95:.65}/>
       ))}
 
-      {/* ── CONFLICT GLITCH — two offset skull copies in red ── */}
+      {/* ── CONFLICT GLITCH — red offset polygon copies ── */}
       {conflict&&(
         <>
-          <polygon points={pts(4,2)} fill="none" stroke="#FF3366" strokeWidth={lw(4.5)} opacity=".88" style={{animation:"glitch 0.12s step-start infinite"}}/>
+          <polygon points={pts(4,2)} fill="none" stroke="#FF3366" strokeWidth={lw(4)} opacity=".88" style={{animation:"glitch 0.12s step-start infinite"}}/>
           <polygon points={pts(-4,-2)} fill="none" stroke="#FF3366" strokeWidth={lw(2)} opacity=".52" style={{animation:"glitch 0.18s step-start infinite"}}/>
         </>
       )}
