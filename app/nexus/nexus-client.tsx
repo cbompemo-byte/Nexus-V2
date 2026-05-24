@@ -365,88 +365,111 @@ function Globe3D({trades,blackSwan,whaleAlert,totalPnL,tradeCount}:{trades:Trade
 
 function CyberFace({cx,cy,size,col,active,conflict}:{cx:number,cy:number,size:number,col:string,active:boolean,conflict:boolean}){
   const s=size/40;
-  // Map skull-space (0-40) coords to parent SVG space, centered at (cx,cy)
   const X=(x:number)=>cx+(x-20)*s;
   const Y=(y:number)=>cy+(y-20)*s;
-  const R=(r:number)=>r*s;
-  // Floor line widths so sub-pixel detail never vanishes at small sizes
-  const lw=(w:number)=>Math.max(.75,w*s);
-  const ao=active?1:.78;
+  const lw=(w:number)=>Math.max(.8,w*s); // floor stroke widths — never sub-pixel
+  const ao=active?1:.85;
 
-  // Eye diamonds — large enough to dominate at all scales
-  const elPts=[[12,21],[16,15],[20,21],[16,27]].map(([x,y])=>`${X(x)},${Y(y)}`).join(" ");
-  const erPts=[[20,21],[24,15],[28,21],[24,27]].map(([x,y])=>`${X(x)},${Y(y)}`).join(" ");
+  // ── ANGULAR SKULL POLYGON — hard corners, elongated, NOT round ──
+  // Wide cranium → narrow temples → wide cheeks → angular jaw → chin point
+  const SKULL:Array<[number,number]>=[
+    [14,1],[26,1],   // crown bar (flat top)
+    [32,8],          // right temple corner
+    [34,19],         // right cheekbone (widest)
+    [31,27],         // right jaw hinge
+    [27,33],         // right jaw corner
+    [20,39],         // chin point
+    [13,33],         // left jaw corner
+    [9,27],          // left jaw hinge
+    [6,19],          // left cheekbone (widest)
+    [8,8],           // left temple corner
+  ];
+  const pts=(ox:number,oy:number)=>SKULL.map(([x,y])=>`${X(x)+ox},${Y(y)+oy}`).join(" ");
+
+  // Eye sockets — wide angular diamonds filling the orbital cavity
+  const lEye:Array<[number,number]>=[[9,18],[14,12],[19,18],[14,24]];
+  const rEye:Array<[number,number]>=[[21,18],[26,12],[31,18],[26,24]];
+  const epPts=(arr:Array<[number,number]>)=>arr.map(([x,y])=>`${X(x)},${Y(y)}`).join(" ");
 
   return(
     <>
-      {/* ── OUTER GLOW RING (active) ── */}
-      {active&&<ellipse cx={X(20)} cy={Y(19)} rx={R(17)} ry={R(19)} fill="none" stroke={col} strokeWidth={lw(1.5)} opacity=".32" style={{animation:"breathe 1.6s ease-in-out infinite"}}/>}
+      {/* Active glow halo — polygon-shaped, matches skull outline */}
+      {active&&<polygon points={pts(0,0)} fill="none" stroke={col} strokeWidth={lw(7)} opacity=".14" style={{animation:"breathe 1.6s ease-in-out infinite"}}/>}
 
-      {/* ── SOLID DARK BACKGROUND — skull pops off the canvas ── */}
-      <ellipse cx={X(20)} cy={Y(18)} rx={R(12.5)} ry={R(14)} fill="#000A18" opacity=".97"/>
+      {/* Solid dark fill — skull must POP off the dark canvas */}
+      <polygon points={pts(0,0)} fill="#000B1A" opacity=".98"/>
 
-      {/* ── HEAD SHELL ── thick outline is the primary skull silhouette */}
-      <ellipse cx={X(20)} cy={Y(18)} rx={R(12.5)} ry={R(14)} fill={active?col+"18":col+"0A"} stroke={col} strokeWidth={lw(active?3.5:2.5)} opacity={ao}/>
+      {/* ── SKULL OUTLINE — thick angular polygon, primary silhouette ── */}
+      <polygon points={pts(0,0)} fill="none" stroke={col} strokeWidth={lw(active?4.5:3)} opacity={ao}/>
 
-      {/* ── BROW RIDGE ── */}
-      <line x1={X(9)} y1={Y(15.5)} x2={X(18)} y2={Y(13)} stroke={col} strokeWidth={lw(2.5)} opacity={ao*.9}/>
-      <line x1={X(22)} y1={Y(13)} x2={X(31)} y2={Y(15.5)} stroke={col} strokeWidth={lw(2.5)} opacity={ao*.9}/>
+      {/* ── FOREHEAD TRIANGULAR MESH ── */}
+      {/* Crown bar */}
+      <line x1={X(14)} y1={Y(1)} x2={X(26)} y2={Y(1)} stroke={col} strokeWidth={lw(2.5)} opacity={ao*.85}/>
+      {/* Diagonals to central mesh node */}
+      <line x1={X(14)} y1={Y(1)} x2={X(20)} y2={Y(9)} stroke={col} strokeWidth={lw(2)} opacity={ao*.78}/>
+      <line x1={X(26)} y1={Y(1)} x2={X(20)} y2={Y(9)} stroke={col} strokeWidth={lw(2)} opacity={ao*.78}/>
+      <line x1={X(8)} y1={Y(8)} x2={X(20)} y2={Y(9)} stroke={col} strokeWidth={lw(1.8)} opacity={ao*.68}/>
+      <line x1={X(32)} y1={Y(8)} x2={X(20)} y2={Y(9)} stroke={col} strokeWidth={lw(1.8)} opacity={ao*.68}/>
+      {/* Horizontal forehead bar */}
+      <line x1={X(8)} y1={Y(8)} x2={X(32)} y2={Y(8)} stroke={col} strokeWidth={lw(1.8)} opacity={ao*.65}/>
 
-      {/* ── FOREHEAD TOP BAR + vertical seam ── */}
-      <line x1={X(13)} y1={Y(8)} x2={X(27)} y2={Y(8)} stroke={col} strokeWidth={lw(2)} opacity={ao*.8}/>
-      <line x1={X(20)} y1={Y(6)} x2={X(20)} y2={Y(13)} stroke={col} strokeWidth={lw(1.5)} opacity={ao*.7}/>
+      {/* ── BROW RIDGES — sharp angular V above each eye ── */}
+      <line x1={X(8)} y1={Y(8)} x2={X(13)} y2={Y(13)} stroke={col} strokeWidth={lw(3.5)} opacity={ao*.95}/>
+      <line x1={X(13)} y1={Y(13)} x2={X(19)} y2={Y(12)} stroke={col} strokeWidth={lw(3.5)} opacity={ao*.95}/>
+      <line x1={X(32)} y1={Y(8)} x2={X(27)} y2={Y(13)} stroke={col} strokeWidth={lw(3.5)} opacity={ao*.95}/>
+      <line x1={X(27)} y1={Y(13)} x2={X(21)} y2={Y(12)} stroke={col} strokeWidth={lw(3.5)} opacity={ao*.95}/>
 
-      {/* ── TEMPLE RAILS ── */}
-      <line x1={X(7.5)} y1={Y(20)} x2={X(7.5)} y2={Y(27)} stroke={col} strokeWidth={lw(2)} opacity={ao*.82}/>
-      <line x1={X(32.5)} y1={Y(20)} x2={X(32.5)} y2={Y(27)} stroke={col} strokeWidth={lw(2)} opacity={ao*.82}/>
+      {/* ── CHEEKBONES — prominent diagonals, hallmark of the skull ── */}
+      <line x1={X(6)} y1={Y(19)} x2={X(12)} y2={Y(13)} stroke={col} strokeWidth={lw(4.5)} opacity={ao*.95}/>
+      <line x1={X(34)} y1={Y(19)} x2={X(28)} y2={Y(13)} stroke={col} strokeWidth={lw(4.5)} opacity={ao*.95}/>
 
-      {/* ── CHEEKBONES ── */}
-      <line x1={X(7.5)} y1={Y(27)} x2={X(13)} y2={Y(31.5)} stroke={col} strokeWidth={lw(2.5)} opacity={ao*.88}/>
-      <line x1={X(32.5)} y1={Y(27)} x2={X(27)} y2={Y(31.5)} stroke={col} strokeWidth={lw(2.5)} opacity={ao*.88}/>
-
-      {/* ── EYES — filled diamonds, the face's most visible feature ── */}
-      <polygon points={elPts} fill={active?col+"BB":col+"44"} stroke={col} strokeWidth={lw(3)} opacity={ao}/>
-      <polygon points={erPts} fill={active?col+"BB":col+"44"} stroke={col} strokeWidth={lw(3)} opacity={ao}/>
-      {/* Inner bright pupil */}
-      <circle cx={X(16)} cy={Y(21)} r={R(active?3.2:2.2)} fill={active?"#ffffff":col} opacity={active?.88:.4}/>
-      <circle cx={X(24)} cy={Y(21)} r={R(active?3.2:2.2)} fill={active?"#ffffff":col} opacity={active?.88:.4}/>
-      {/* Eye shine dot */}
+      {/* ── EYE SOCKETS — hollow diamonds, pure black inside ── */}
+      <polygon points={epPts(lEye)} fill="#000000" opacity=".99"/>
+      <polygon points={epPts(rEye)} fill="#000000" opacity=".99"/>
+      {/* Socket outline — thick, bright */}
+      <polygon points={epPts(lEye)} fill={active?col+"28":"none"} stroke={col} strokeWidth={lw(active?4.5:3.5)} opacity={ao}/>
+      <polygon points={epPts(rEye)} fill={active?col+"28":"none"} stroke={col} strokeWidth={lw(active?4.5:3.5)} opacity={ao}/>
+      {/* Active eye glow — inner iris */}
       {active&&<>
-        <circle cx={X(14.5)} cy={Y(19)} r={R(1.1)} fill="#ffffff" opacity=".9"/>
-        <circle cx={X(22.5)} cy={Y(19)} r={R(1.1)} fill="#ffffff" opacity=".9"/>
+        <circle cx={X(14)} cy={Y(18)} r={lw(4)} fill={col} opacity=".5"/>
+        <circle cx={X(26)} cy={Y(18)} r={lw(4)} fill={col} opacity=".5"/>
+        <circle cx={X(14)} cy={Y(18)} r={lw(2)} fill="#ffffff" opacity=".92"/>
+        <circle cx={X(26)} cy={Y(18)} r={lw(2)} fill="#ffffff" opacity=".92"/>
       </>}
 
-      {/* ── NASAL CAVITY — inverted triangle ── */}
-      <polygon points={`${X(20)},${Y(25)} ${X(17.5)},${Y(29)} ${X(22.5)},${Y(29)}`} fill={col+"22"} stroke={col} strokeWidth={lw(2)} opacity={ao*.78}/>
+      {/* ── NASAL CAVITY — inverted angular triangle ── */}
+      <line x1={X(20)} y1={Y(24)} x2={X(17)} y2={Y(29)} stroke={col} strokeWidth={lw(2.5)} opacity={ao*.78}/>
+      <line x1={X(20)} y1={Y(24)} x2={X(23)} y2={Y(29)} stroke={col} strokeWidth={lw(2.5)} opacity={ao*.78}/>
+      <line x1={X(17)} y1={Y(29)} x2={X(23)} y2={Y(29)} stroke={col} strokeWidth={lw(2)} opacity={ao*.72}/>
 
-      {/* ── JAW / MANDIBLE ── */}
-      <line x1={X(11)} y1={Y(32)} x2={X(29)} y2={Y(32)} stroke={col} strokeWidth={lw(3)} opacity={ao*.95}/>
-      <line x1={X(11)} y1={Y(32)} x2={X(13)} y2={Y(31.5)} stroke={col} strokeWidth={lw(2)} opacity={ao*.85}/>
-      <line x1={X(29)} y1={Y(32)} x2={X(27)} y2={Y(31.5)} stroke={col} strokeWidth={lw(2)} opacity={ao*.85}/>
-      {/* Teeth dividers — visible at lv2+ sizes */}
-      {size>=28&&([14,17,20,23,26] as number[]).map((tx,i)=>(
-        <line key={i} x1={X(tx)} y1={Y(32)} x2={X(tx)} y2={Y(34)} stroke={col} strokeWidth={lw(1.5)} opacity={ao*.65}/>
+      {/* ── JAW — flat horizontal bar + straight teeth (NO curves) ── */}
+      <line x1={X(13)} y1={Y(33)} x2={X(27)} y2={Y(33)} stroke={col} strokeWidth={lw(4.5)} opacity={ao*.97}/>
+      {/* Vertical teeth lines */}
+      {([14.5,17,19.5,22,24.5] as number[]).map((tx,i)=>(
+        <line key={i} x1={X(tx)} y1={Y(33)} x2={X(tx)} y2={Y(37)} stroke={col} strokeWidth={lw(2)} opacity={ao*.8}/>
       ))}
+      {/* Lower tooth bar */}
+      <line x1={X(14.5)} y1={Y(37)} x2={X(24.5)} y2={Y(37)} stroke={col} strokeWidth={lw(2.5)} opacity={ao*.68}/>
 
-      {/* ── SCAN LINE — bright sweep ── */}
+      {/* ── SCAN LINE — sweeps crown to chin ── */}
       {active&&(
-        <line x1={X(7.5)} y1={Y(5)} x2={X(32.5)} y2={Y(5)} stroke={col} strokeWidth={lw(3)} opacity=".85">
-          <animateTransform attributeName="transform" type="translate" from="0 0" to={`0 ${R(32)}`} dur="1.1s" repeatCount="indefinite" additive="sum"/>
+        <line x1={X(6)} y1={Y(1)} x2={X(34)} y2={Y(1)} stroke={col} strokeWidth={lw(3.5)} opacity=".9">
+          <animateTransform attributeName="transform" type="translate" from="0 0" to={`0 ${38*s}`} dur="1.1s" repeatCount="indefinite" additive="sum"/>
         </line>
       )}
 
-      {/* ── CONFLICT GLITCH ── */}
+      {/* ── STRUCTURAL NODES — vertex anchors ── */}
+      {SKULL.map(([dx,dy],i)=>(
+        <circle key={i} cx={X(dx)} cy={Y(dy)} r={lw(active?2.8:2)} fill={col} opacity={active?.98:.72}/>
+      ))}
+
+      {/* ── CONFLICT GLITCH — two offset skull copies in red ── */}
       {conflict&&(
         <>
-          <ellipse cx={X(20)+3} cy={Y(18)+2} rx={R(12.5)} ry={R(14)} fill="none" stroke="#FF3366" strokeWidth={lw(3)} opacity=".85" style={{animation:"glitch 0.12s step-start infinite"}}/>
-          <ellipse cx={X(20)-3} cy={Y(18)-2} rx={R(12.5)} ry={R(14)} fill="none" stroke="#FF3366" strokeWidth={lw(1.5)} opacity=".5" style={{animation:"glitch 0.18s step-start infinite"}}/>
+          <polygon points={pts(4,2)} fill="none" stroke="#FF3366" strokeWidth={lw(4.5)} opacity=".88" style={{animation:"glitch 0.12s step-start infinite"}}/>
+          <polygon points={pts(-4,-2)} fill="none" stroke="#FF3366" strokeWidth={lw(2)} opacity=".52" style={{animation:"glitch 0.18s step-start infinite"}}/>
         </>
       )}
-
-      {/* ── STRUCTURAL NODES — corner anchors ── */}
-      {([[20,6],[7.5,20],[32.5,20],[16,21],[24,21],[13,31.5],[27,31.5]] as Array<[number,number]>).map(([dx,dy],i)=>(
-        <circle key={i} cx={X(dx)} cy={Y(dy)} r={lw(active?2:1.4)} fill={col} opacity={active?.98:.62}/>
-      ))}
     </>
   );
 }
@@ -463,14 +486,21 @@ function ElectricArc({x1,y1,x2,y2,col,active}:{x1:number,y1:number,x2:number,y2:
   const mx=(x1+x2)/2,my=(y1+y2)/2;
   const off=active?offsetRef.current:0;
   const d=`M${x1},${y1} Q${mx+off},${my+off} ${x2},${y2}`;
-  if(!active)return<path d={d} fill="none" stroke={col} strokeWidth=".4" opacity=".08"/>;
+  // Inactive: faint visible wire so the network topology reads clearly
+  if(!active)return(
+    <g opacity=".22">
+      <path d={d} fill="none" stroke={col} strokeWidth="2.5" opacity=".25"/>
+      <path d={d} fill="none" stroke={col} strokeWidth="0.8" opacity=".75"/>
+    </g>
+  );
+  // Active debate: full electric arc — 3 layers + traveling spark
   return(
     <g opacity={flicker}>
-      <path d={d} fill="none" stroke={col} strokeWidth="6" opacity=".06"/>
-      <path d={d} fill="none" stroke={col} strokeWidth="2.5" opacity=".3"/>
-      <path d={d} fill="none" stroke={col} strokeWidth="1" opacity=".95" filter="url(#arcglow)"/>
-      <path d={d} fill="none" stroke="white" strokeWidth=".4" opacity=".7"/>
-      <circle r="2" fill="white" opacity=".9" filter="url(#arcglow)">
+      <path d={d} fill="none" stroke={col} strokeWidth="10" opacity=".06"/>
+      <path d={d} fill="none" stroke={col} strokeWidth="4" opacity=".32"/>
+      <path d={d} fill="none" stroke={col} strokeWidth="1.5" opacity=".95" filter="url(#arcglow)"/>
+      <path d={d} fill="none" stroke="#ffffff" strokeWidth=".6" opacity=".85"/>
+      <circle r="3" fill="white" opacity=".95" filter="url(#arcglow)">
         <animateMotion dur={durRef.current} repeatCount="indefinite" path={d}/>
       </circle>
     </g>
@@ -494,7 +524,7 @@ function SwarmGraph({st,debate,disabled,swarmRef}:{st:{[k:string]:AgentState},de
           const deb=debate.includes(a)&&debate.includes(b);
           const dis=disabled.has(a)||disabled.has(b);
           if(dis)return<line key={a+b} x1={pa.x} y1={pa.y} x2={pb.x} y2={pb.y} stroke="#050810" strokeWidth=".5" opacity=".07"/>;
-          return<ElectricArc key={a+b} x1={pa.x} y1={pa.y} x2={pb.x} y2={pb.y} col={deb?K.c:K.brd} active={deb}/>;
+          return<ElectricArc key={a+b} x1={pa.x} y1={pa.y} x2={pb.x} y2={pb.y} col={deb?K.c:K.dim} active={deb}/>;
         })}
         {AGENTS.map(({id,s,lv})=>{
           const n=nm[id],ag=st[id]||{on:false,conf:null,sig:null,th:""};
