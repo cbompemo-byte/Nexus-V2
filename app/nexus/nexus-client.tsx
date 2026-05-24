@@ -11,6 +11,47 @@ const fU=(n:number)=>`${n>=0?"+":"-"}$${f2(Math.abs(n))}`;
 const ts=()=>new Date().toLocaleTimeString("en-US",{hour12:false});
 const fPrice=(p:number)=>p>=1000?"$"+f2(p,0):p>=1?"$"+f2(p,2):p>=0.01?"$"+f2(p,4):p>=0.0001?"$"+f2(p,6):"$"+f2(p,8);
 
+// ── Algo primitives ──────────────────────────────────────────────────
+const calcRSI=(prices:number[],period=14):number=>{
+  if(prices.length<period+1)return 50;
+  let g=0,l=0;
+  for(let i=prices.length-period;i<prices.length;i++){const d=prices[i]-prices[i-1];d>0?g+=d:l-=d;}
+  const rs=g/(l||0.001);return 100-100/(1+rs);
+};
+const hasMomentum=(hist:number[]):boolean=>{
+  if(hist.length<10)return true;
+  const r=hist.slice(-5),pr=hist.slice(-10,-5);
+  const ra=r.reduce((a,b)=>a+b,0)/5,pa=pr.reduce((a,b)=>a+b,0)/5;
+  return Math.abs(ra-pa)/pa>0.001;
+};
+const confirmSignal=(hist:number[]):{isBuy:boolean,isSell:boolean,quality:"HIGH"|"MED"|"LOW",conf:number}=>{
+  const rsi1m=calcRSI(hist.slice(-15),14);
+  const h5m=hist.filter((_,i)=>i%5===0);
+  const rsi5m=calcRSI(h5m,Math.min(14,h5m.length-1));
+  const trend15m=hist[hist.length-1]>hist[Math.floor(hist.length/4)];
+  const isBuy=rsi1m<48&&rsi5m<58&&trend15m;
+  const isSell=rsi1m>62&&rsi5m>60&&!trend15m;
+  const strength=Math.abs(rsi1m-50)+Math.abs(rsi5m-50);
+  const quality=strength>20?"HIGH":strength>10?"MED":"LOW";
+  const conf=Math.min(95,50+strength*0.9);
+  return{isBuy,isSell,quality,conf};
+};
+const kellySize=(conf:number,wr:number):number=>{
+  const edge=(wr/100)*(conf/100)-(1-wr/100);
+  return Math.max(0.05,Math.min(0.20,edge));
+};
+const getStop=(pos:{avg:number,peak?:number},cur:number):number=>{
+  const pct=((cur-pos.avg)/pos.avg)*100;
+  if(pct>=5)return(pos.peak||cur)*0.99;
+  if(pct>=3)return(pos.peak||cur)*0.985;
+  if(pct>=1.5)return pos.avg;
+  return pos.avg*0.975;
+};
+const CORRELATED:{[k:string]:string[]}={
+  SOL:["JUP","RAY","ORCA","JTO","DRIFT"],BTC:["ETH"],ETH:["BTC"],
+  JUP:["SOL","RAY"],RAY:["SOL","JUP"],ORCA:["SOL"],JTO:["SOL"],DRIFT:["SOL"],
+};
+
 function OdometerChar({ch,col}:{ch:string,col:string}){
   const prevCh=useRef(ch);
   const [key,setKey]=useState(0);
@@ -150,7 +191,7 @@ const TH:{[k:string]:string[]}={
 
 type PriceData={price:number,prev:number,trend:string,change:number,rsi:number,hist:number[]};
 type AgentState={on:boolean,conf:number|null,sig:string|null,th:string};
-type Position={qty:number,avg:number,peak?:number};
+type Position={qty:number,avg:number,peak?:number,entryMs?:number};
 type Trade={id:string,sym:string,side:string,qty:number,price:number,pnl:number,conf:number,t:string};
 type LogEntry={t:string,ag:string,msg:string,col:string};
 type WinCard={id:string,sym:string,pnl:number,pct:number,price:number,agent:string,t:string,origin?:{x:number,y:number}};
@@ -875,6 +916,8 @@ export default function NEXUS(){
   useEffect(()=>{portRef.current=port;},[port]);
 
   const [trades,setTrades]=useState<Trade[]>([]);
+  const tradesRef=useRef<Trade[]>([]);
+  useEffect(()=>{tradesRef.current=trades;},[trades]);
   const [agSt,setAgSt]=useState<{[k:string]:AgentState}>(()=>Object.fromEntries(AGENTS.map(a=>[a.id,{on:false,conf:null,sig:null,th:""}])));
   const agStRef=useRef(agSt);
   useEffect(()=>{agStRef.current=agSt;},[agSt]);
@@ -949,33 +992,34 @@ export default function NEXUS(){
 
   useEffect(()=>{if(logRef.current)logRef.current.scrollTop=logRef.current.scrollHeight;},[logs]);
 
-  // SL/TP/Trailing-stop auto-exit
+  // Smart trailing stop + SL/TP + 4h expiry
   useEffect(()=>{
     if(!running)return;
+    const now=Date.now();
     for(const[sym,pos]of Object.entries(port.pos)){
       const cur=prices[sym]?.price;if(!cur)continue;
       const pct=((cur-pos.avg)/pos.avg)*100;
-      // Trailing stop: activate after +2%, stop at -1% from peak
-      if(pct>=2&&(!pos.peak||cur>pos.peak)){
-        setPort(prev=>{
-          if(!prev.pos[sym])return prev;
-          return{...prev,pos:{...prev.pos,[sym]:{...prev.pos[sym],peak:cur}}};
-        });
-      }else if(pos.peak&&cur<pos.peak*0.99){
+      // Update peak
+      if(!pos.peak||cur>pos.peak){
+        setPort(prev=>{if(!prev.pos[sym])return prev;return{...prev,pos:{...prev.pos,[sym]:{...prev.pos[sym],peak:cur}}};});
+        continue;
+      }
+      // 4-hour max hold
+      if(pos.entryMs&&now-pos.entryMs>4*60*60*1000){
         const pnl=(cur-pos.avg)*pos.qty;
         setPort(prev=>{const p2={...prev.pos};delete p2[sym];return{...prev,cash:prev.cash+cur*pos.qty,pos:p2};});
-        addWinCard(sym,pnl,pct,cur,"TRAIL");
-        log("TRAIL","🔒 TRAILING STOP: "+sym+" locked +"+fU(pnl),K.g);
-      }else if(pct<=-2.5){
+        addWinCard(sym,pnl,pct,cur,"TIMER");
+        log("TIMER","⏱ 4H EXPIRY: "+sym+" | "+fU(pnl),pnl>=0?K.g:K.gold);
+        continue;
+      }
+      // Tiered trailing stop
+      const stop=getStop(pos,cur);
+      if(cur<=stop){
         const pnl=(cur-pos.avg)*pos.qty;
         setPort(prev=>{const p2={...prev.pos};delete p2[sym];return{...prev,cash:prev.cash+cur*pos.qty,pos:p2};});
-        addWinCard(sym,pnl,pct,cur,"AEGIS");
-        log("AEGIS","⛔ SL "+sym+" -2.5% | "+fU(pnl),K.r);
-      }else if(pct>=5.5){
-        const pnl=(cur-pos.avg)*pos.qty;
-        setPort(prev=>{const p2={...prev.pos};delete p2[sym];return{...prev,cash:prev.cash+cur*pos.qty,pos:p2};});
-        addWinCard(sym,pnl,pct,cur,"TITAN");
-        log("TITAN","💰 TP "+sym+" +5.5% | "+fU(pnl),K.g);
+        addWinCard(sym,pnl,pct,cur,pct>=1.5?"TRAIL":"AEGIS");
+        const label=pct>=5?"🔒 LOCK +5%":pct>=3?"🔒 TRAIL -1.5%":pct>=1.5?"✓ BREAKEVEN":"⛔ SL -2.5%";
+        log(pct>=1.5?"TRAIL":"AEGIS",label+" "+sym+" | "+fU(pnl),pnl>=0?K.g:K.r);
       }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1021,37 +1065,69 @@ export default function NEXUS(){
     return()=>clearInterval(iv);
   },[running,disabled,log]);
 
-  // Trade execution
+  // Trade execution — multi-TF + Kelly + momentum + anti-correlation
   useEffect(()=>{
     if(!running||circuit)return;
+    let tradeCount=0;
+    // Force one trade within 10s if none
+    const forceT=setTimeout(()=>{
+      if(tradeCount>0)return;
+      const pool=Object.keys(SYMS).filter(s=>!STABLE_SYMS.has(s));
+      const sym=pool[Math.floor(Math.random()*pool.length)];
+      const p=pricesRef.current[sym];if(!p)return;
+      const prt=portRef.current;if(prt.cash<500||prt.pos[sym])return;
+      const alloc=prt.cash*0.10;const qty=alloc/p.price;
+      setPort(prev=>{if(prev.pos[sym])return prev;return{...prev,cash:prev.cash-alloc,pos:{...prev.pos,[sym]:{qty,avg:p.price,entryMs:Date.now()}}};});
+      setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym,side:"BUY",qty,price:p.price,pnl:0,conf:65,t:ts()},...t.slice(0,99)]);
+      log("EXEC","▶ FORCE ENTRY "+sym+" @ "+fPrice(p.price)+" [DEMO]",K.g);
+      tradeCount++;
+    },10000);
     const iv=setInterval(()=>{
       const cs=agStRef.current["consensus"];
       if(!cs?.on||!cs.conf||cs.conf<55)return;
+      // Pick volatile non-stable token
       const allKeys=Object.keys(SYMS);
-      const volatileKeys=allKeys.filter(sym=>{
+      const pool=allKeys.filter(sym=>{
         if(STABLE_SYMS.has(sym))return false;
         const d=pricesRef.current[sym];
         return d&&Math.abs(d.change)>1;
       });
-      const pool=volatileKeys.length>0?volatileKeys:allKeys.filter(s=>!STABLE_SYMS.has(s));
-      const sym=pool[Math.floor(Math.random()*pool.length)];
+      const candidates=pool.length>0?pool:allKeys.filter(s=>!STABLE_SYMS.has(s));
+      const sym=candidates[Math.floor(Math.random()*candidates.length)];
       const p=pricesRef.current[sym];if(!p)return;
+      // Multi-timeframe confirmation
+      const sig=confirmSignal(p.hist);
+      log("SIGNAL","◈ "+sym+" quality:"+sig.quality+" RSI-conf:"+Math.round(sig.conf)+"%",sig.quality==="HIGH"?K.g:sig.quality==="MED"?K.gold:K.dim);
       const prt=portRef.current;
-      if(cs.sig==="BUY"&&!prt.pos[sym]&&prt.cash>500&&Object.keys(prt.pos).length<5){
-        const alloc=Math.min(prt.cash*.15,prt.cash*.9);
+      if((cs.sig==="BUY"||sig.isBuy)&&!prt.pos[sym]&&prt.cash>500&&Object.keys(prt.pos).length<5){
+        // Momentum filter
+        if(!hasMomentum(p.hist)){log("SIGNAL","⊘ No momentum: "+sym+" — skip",K.dim);return;}
+        // Anti-correlation check
+        const heldSyms=Object.keys(prt.pos);
+        const corr=CORRELATED[sym]||[];
+        if(heldSyms.some(h=>corr.includes(h)||((CORRELATED[h]||[]).includes(sym)))){
+          log("RISK","⊘ Anti-corr block: "+sym+" — diversify",K.gold);return;
+        }
+        // Kelly sizing
+        const cl=tradesRef.current.filter((t:Trade)=>t.pnl!==0);
+        const wr=cl.length?cl.filter((t:Trade)=>t.pnl>0).length/cl.length:0.5;
+        const frac=kellySize(sig.conf,wr*100);
+        const alloc=Math.min(prt.cash*frac,prt.cash*.9);
         const qty=alloc/p.price;
-        setPort(prev=>{if(prev.pos[sym])return prev;return{...prev,cash:prev.cash-alloc,pos:{...prev.pos,[sym]:{qty,avg:p.price}}};});
-        setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym,side:"BUY",qty,price:p.price,pnl:0,conf:cs.conf||80,t:ts()},...t.slice(0,99)]);
-        log("EXEC","▶ LONG "+sym+" @ $"+f2(p.price)+" conf:"+cs.conf+"%",K.g);
-      }else if(cs.sig==="SELL"&&prt.pos[sym]){
+        setPort(prev=>{if(prev.pos[sym])return prev;return{...prev,cash:prev.cash-alloc,pos:{...prev.pos,[sym]:{qty,avg:p.price,entryMs:Date.now()}}};});
+        setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym,side:"BUY",qty,price:p.price,pnl:0,conf:Math.round(sig.conf),t:ts()},...t.slice(0,99)]);
+        log("EXEC","▶ LONG "+sym+" @ "+fPrice(p.price)+" kelly:"+f2(frac*100,0)+"% sig:"+sig.quality,K.g);
+        tradeCount++;
+      }else if((cs.sig==="SELL"||sig.isSell)&&prt.pos[sym]){
         const pos=prt.pos[sym];
         const pnl=(p.price-pos.avg)*pos.qty;
         setPort(prev=>{const p2={...prev.pos};delete p2[sym];return{...prev,cash:prev.cash+pos.qty*p.price,pos:p2};});
         addWinCard(sym,pnl,((p.price-pos.avg)/pos.avg)*100,p.price,"CONSENSUS");
-        log("EXEC","◀ CLOSE "+sym+" @ $"+f2(p.price)+" PnL:"+fU(pnl),pnl>=0?K.g:K.r);
+        log("EXEC","◀ CLOSE "+sym+" @ "+fPrice(p.price)+" PnL:"+fU(pnl),pnl>=0?K.g:K.r);
+        tradeCount++;
       }
-    },2500);
-    return()=>clearInterval(iv);
+    },2000);
+    return()=>{clearInterval(iv);clearTimeout(forceT);};
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[running,circuit,log]);
 
@@ -1409,15 +1485,57 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
                         <div style={{height:"100%",borderRadius:1,background:pnl>=0?K.g:K.r,width:Math.min(100,Math.max(0,50+pp*8))+"%",transition:"width .5s"}}/>
                       </div>
                       <div style={{display:"flex",justifyContent:"space-between",marginTop:2,fontSize:7,color:K.dim}}>
-                        <span>SL:${f2(pos.avg*.975)}</span><span>TP:${f2(pos.avg*1.055)}</span>
+                        <span>STOP:{fPrice(getStop(pos,cur))}</span><span>PEAK:{fPrice(pos.peak||pos.avg)}</span>
                       </div>
                     </div>
                   );
                 })}
             </div>
+            {(()=>{
+              const closed=trades.filter(t=>t.pnl!==0);
+              const last10=closed.slice(0,10);
+              const wins=last10.filter(t=>t.pnl>0);
+              const losses10=last10.filter(t=>t.pnl<0);
+              const wr10=last10.length?wins.length/last10.length*100:0;
+              const avgWin=wins.length?wins.reduce((s,t)=>s+t.pnl,0)/wins.length:0;
+              const avgLoss=losses10.length?Math.abs(losses10.reduce((s,t)=>s+t.pnl,0)/losses10.length):0;
+              const totalG=closed.filter(t=>t.pnl>0).reduce((s,t)=>s+t.pnl,0);
+              const totalL=Math.abs(closed.filter(t=>t.pnl<0).reduce((s,t)=>s+t.pnl,0));
+              const pf=totalL>0?totalG/totalL:totalG>0?9.99:0;
+              const edge=Math.min(100,Math.round(wr10*.45+(Math.min(pf,5)*8)+(last10.length>=5?15:last10.length*3)));
+              const edgeCol=edge>=70?K.g:edge>=45?K.gold:K.r;
+              return(
+                <div className="panel" style={{padding:9}}>
+                  <div style={{fontSize:8,color:K.dim,marginBottom:6,letterSpacing:".12em"}}>◉ ALGO PERFORMANCE</div>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",marginBottom:6}}>
+                    <div>
+                      <div style={{fontSize:6,color:K.dim,marginBottom:1}}>EDGE SCORE</div>
+                      <div style={{fontSize:20,fontWeight:900,color:edgeCol,textShadow:"0 0 10px "+edgeCol}}>{edge}</div>
+                    </div>
+                    <div style={{textAlign:"right"}}>
+                      <div style={{fontSize:6,color:K.dim}}>10-TRADE WIN RATE</div>
+                      <div style={{fontSize:14,fontWeight:700,color:wr10>=50?K.g:K.r}}>{f2(wr10,0)}%</div>
+                    </div>
+                  </div>
+                  <div style={{height:3,background:"#050810",borderRadius:1,marginBottom:6}}>
+                    <div style={{height:"100%",borderRadius:1,background:edgeCol,width:edge+"%",transition:"width .5s"}}/>
+                  </div>
+                  {([
+                    {l:"AVG WIN",v:avgWin>0?"+$"+f2(avgWin):"—",c:K.g},
+                    {l:"AVG LOSS",v:avgLoss>0?"-$"+f2(avgLoss):"—",c:K.r},
+                    {l:"PROFIT FACTOR",v:pf>0?f2(Math.min(pf,9.99))+"x":"—",c:pf>=2?K.g:pf>=1?K.gold:K.r},
+                    {l:"TRADES (10)",v:last10.length+"/10",c:K.tx},
+                  ] as Array<{l:string,v:string,c:string}>).map((r,i)=>(
+                    <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"2px 0",borderBottom:i<3?"1px solid #040910":"none",fontSize:8}}>
+                      <span style={{color:K.dim}}>{r.l}</span><span style={{color:r.c,fontWeight:600}}>{r.v}</span>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
             <div className="panel" style={{padding:9}}>
               <div style={{fontSize:8,color:K.dim,marginBottom:5,letterSpacing:".12em"}}>◉ STATUS</div>
-              {([{l:"Execution",v:circuit?"LOCKED":"ACTIVE",c:circuit?K.r:K.g},{l:"SL/TP",v:"-2.5% / +5.5%",c:K.tx},{l:"Agents",v:(AGENTS.length-disabled.size)+"/18",c:disabled.size>0?K.gold:K.g},{l:"Positions",v:Object.keys(port.pos).length+"/3",c:K.tx},{l:"Entropy",v:Math.round(entropy)+"/100",c:entropyCol}] as Array<{l:string,v:string,c:string}>).map((r,i)=>(
+              {([{l:"Execution",v:circuit?"LOCKED":"ACTIVE",c:circuit?K.r:K.g},{l:"SL/TP",v:"Tiered Trail",c:K.tx},{l:"Agents",v:(AGENTS.length-disabled.size)+"/18",c:disabled.size>0?K.gold:K.g},{l:"Positions",v:Object.keys(port.pos).length+"/5",c:K.tx},{l:"Entropy",v:Math.round(entropy)+"/100",c:entropyCol}] as Array<{l:string,v:string,c:string}>).map((r,i)=>(
                 <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"2px 0",borderBottom:i<4?"1px solid #040910":"none",fontSize:9}}>
                   <span style={{color:K.dim}}>{r.l}</span><span style={{color:r.c,fontWeight:600}}>{r.v}</span>
                 </div>
