@@ -120,7 +120,7 @@ const TH:{[k:string]:string[]}={
 
 type PriceData={price:number,prev:number,trend:string,change:number,rsi:number,hist:number[]};
 type AgentState={on:boolean,conf:number|null,sig:string|null,th:string};
-type Position={qty:number,avg:number};
+type Position={qty:number,avg:number,peak?:number};
 type Trade={id:string,sym:string,side:string,qty:number,price:number,pnl:number,conf:number,t:string};
 type LogEntry={t:string,ag:string,msg:string,col:string};
 type WinCard={id:string,sym:string,pnl:number,pct:number,price:number,agent:string,t:string,origin?:{x:number,y:number}};
@@ -731,7 +731,7 @@ function ConsensusBar({agSt}:{agSt:{[k:string]:AgentState}}){
 }
 
 function WinCardEl({card,onDone}:{card:WinCard,onDone:()=>void}){
-  useEffect(()=>{const t=setTimeout(onDone,3600);return()=>clearTimeout(t);},[onDone]);
+  useEffect(()=>{const t=setTimeout(onDone,3500);return()=>clearTimeout(t);},[onDone]);
   const ref=useRef<HTMLDivElement>(null);
   const controls=useAnimationControls();
   const pos=card.pnl>=0,col=pos?K.g:K.r;
@@ -792,7 +792,7 @@ function ProfitTicker({trades}:{trades:Trade[]}){
 }
 
 function EdgeToastEl({toast,onDone}:{toast:EdgeToast,onDone:()=>void}){
-  useEffect(()=>{const t=setTimeout(onDone,4200);return()=>clearTimeout(t);},[onDone]);
+  useEffect(()=>{const t=setTimeout(onDone,3000);return()=>clearTimeout(t);},[onDone]);
   return(
     <div style={{width:210,padding:"9px 13px",background:"linear-gradient(135deg,"+K.pan+" 0%,"+toast.col+"12 100%)",border:"1px solid "+toast.col+"50",borderRadius:3,boxShadow:"0 4px 18px "+toast.col+"25",animation:"toastIn .3s ease forwards",marginBottom:6}}>
       <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:3}}>
@@ -826,6 +826,7 @@ export default function NEXUS(){
   const [analyzing,setAnalyzing]=useState(false);
   const [dnaLoading,setDnaLoading]=useState(false);
   const [running,setRunning]=useState(false);
+  const [liveUsers,setLiveUsers]=useState(()=>847+Math.floor(Math.random()*200));
   const [circuit,setCircuit]=useState(false);
   const [blackSwan,setBlackSwan]=useState(false);
   const [tab,setTab]=useState("terminal");
@@ -845,6 +846,36 @@ export default function NEXUS(){
 
   const log=useCallback((ag:string,msg:string,col=K.hi)=>setLogs(l=>[...l.slice(-150),{t:ts(),ag,msg,col}]),[]);
 
+  // Live user counter fluctuation
+  useEffect(()=>{
+    const iv=setInterval(()=>setLiveUsers(u=>u+(Math.random()<.5?1:-1)*Math.ceil(Math.random()*3)),8000);
+    return()=>clearInterval(iv);
+  },[]);
+
+  // Black swan user spike
+  useEffect(()=>{if(blackSwan)setLiveUsers(u=>u+340);},[blackSwan]);
+
+  // Demo burst: fire 3 trades quickly after start
+  useEffect(()=>{
+    if(!running)return;
+    const syms=Object.keys(SYMS);
+    const burst=(delay:number)=>setTimeout(()=>{
+      const sym=syms[Math.floor(Math.random()*syms.length)];
+      const p=pricesRef.current[sym];if(!p)return;
+      const prt=portRef.current;if(prt.cash<500||prt.pos[sym])return;
+      const alloc=Math.min(prt.cash*.12,prt.cash*.9);
+      const qty=alloc/p.price;
+      setPort(prev=>{if(prev.pos[sym])return prev;return{...prev,cash:prev.cash-alloc,pos:{...prev.pos,[sym]:{qty,avg:p.price}}};});
+      setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym,side:"BUY",qty,price:p.price,pnl:0,conf:72,t:ts()},...t.slice(0,99)]);
+      log("EXEC","▶ DEMO BURST "+sym+" @ $"+f2(p.price),K.g);
+    },delay);
+    const t1=burst(5000);
+    const t2=burst(12000);
+    const t3=burst(17000);
+    return()=>{clearTimeout(t1);clearTimeout(t2);clearTimeout(t3);};
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[running]);
+
   useEffect(()=>{
     setPort(p=>{
       let eq=p.cash;
@@ -857,13 +888,24 @@ export default function NEXUS(){
 
   useEffect(()=>{if(logRef.current)logRef.current.scrollTop=logRef.current.scrollHeight;},[logs]);
 
-  // SL/TP auto-exit
+  // SL/TP/Trailing-stop auto-exit
   useEffect(()=>{
     if(!running)return;
     for(const[sym,pos]of Object.entries(port.pos)){
       const cur=prices[sym]?.price;if(!cur)continue;
       const pct=((cur-pos.avg)/pos.avg)*100;
-      if(pct<=-2.5){
+      // Trailing stop: activate after +2%, stop at -1% from peak
+      if(pct>=2&&(!pos.peak||cur>pos.peak)){
+        setPort(prev=>{
+          if(!prev.pos[sym])return prev;
+          return{...prev,pos:{...prev.pos,[sym]:{...prev.pos[sym],peak:cur}}};
+        });
+      }else if(pos.peak&&cur<pos.peak*0.99){
+        const pnl=(cur-pos.avg)*pos.qty;
+        setPort(prev=>{const p2={...prev.pos};delete p2[sym];return{...prev,cash:prev.cash+cur*pos.qty,pos:p2};});
+        addWinCard(sym,pnl,pct,cur,"TRAIL");
+        log("TRAIL","🔒 TRAILING STOP: "+sym+" locked +"+fU(pnl),K.g);
+      }else if(pct<=-2.5){
         const pnl=(cur-pos.avg)*pos.qty;
         setPort(prev=>{const p2={...prev.pos};delete p2[sym];return{...prev,cash:prev.cash+cur*pos.qty,pos:p2};});
         addWinCard(sym,pnl,pct,cur,"AEGIS");
@@ -886,7 +928,7 @@ export default function NEXUS(){
       return{x:rect.left+GCX*scale,y:rect.top+GCY*scale};
     })();
     const card:WinCard={id:Math.random().toString(36).slice(2),sym,pnl,pct,price,agent,t:ts(),origin};
-    setWinCards(prev=>[...prev.slice(-3),card]);
+    setWinCards(prev=>[...prev.slice(-1),card]);
     setTrades(t=>[{id:card.id,sym,side:pnl>=0?"SELL":"SELL",qty:0,price,pnl,conf:80,t:card.t},...t.slice(0,99)]);
   };
 
@@ -923,12 +965,12 @@ export default function NEXUS(){
     if(!running||circuit)return;
     const iv=setInterval(()=>{
       const cs=agStRef.current["consensus"];
-      if(!cs?.on||!cs.conf||cs.conf<70)return;
+      if(!cs?.on||!cs.conf||cs.conf<55)return;
       const keys=Object.keys(SYMS);
       const sym=keys[Math.floor(Math.random()*keys.length)];
       const p=pricesRef.current[sym];if(!p)return;
       const prt=portRef.current;
-      if(cs.sig==="BUY"&&!prt.pos[sym]&&prt.cash>500&&Object.keys(prt.pos).length<3){
+      if(cs.sig==="BUY"&&!prt.pos[sym]&&prt.cash>500&&Object.keys(prt.pos).length<5){
         const alloc=Math.min(prt.cash*.15,prt.cash*.9);
         const qty=alloc/p.price;
         setPort(prev=>{if(prev.pos[sym])return prev;return{...prev,cash:prev.cash-alloc,pos:{...prev.pos,[sym]:{qty,avg:p.price}}};});
@@ -941,7 +983,7 @@ export default function NEXUS(){
         addWinCard(sym,pnl,((p.price-pos.avg)/pos.avg)*100,p.price,"CONSENSUS");
         log("EXEC","◀ CLOSE "+sym+" @ $"+f2(p.price)+" PnL:"+fU(pnl),pnl>=0?K.g:K.r);
       }
-    },7500);
+    },2500);
     return()=>clearInterval(iv);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[running,circuit,log]);
@@ -952,7 +994,7 @@ export default function NEXUS(){
     const iv=setInterval(()=>{
       const ev=EDGE_EVENTS[Math.floor(Math.random()*EDGE_EVENTS.length)];
       const toast:EdgeToast={id:Math.random().toString(36).slice(2),...ev};
-      setEdgeToasts(p=>[...p.slice(-3),toast]);
+      setEdgeToasts(p=>[...p.slice(-1),toast]);
       if(ev.type==="WHALE"){setWhaleAlert(true);setTimeout(()=>setWhaleAlert(false),4000);}
       log(ev.type==="WHALE"?"LVTH":"RADR",ev.title+": "+ev.body.replace("\n"," "),ev.col);
     },14000);
@@ -1092,6 +1134,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
             <div style={{width:6,height:6,borderRadius:"50%",background:running?K.g:K.r,boxShadow:"0 0 8px "+(running?K.g:K.r),animation:"pu 1.5s infinite"}}/>
             <span style={{fontSize:9,color:running?K.g:K.r}}>{running?"LIVE · AUTO":"STANDBY"}</span>
           </div>
+          <span style={{fontSize:9,color:K.g,letterSpacing:".06em"}}>● {liveUsers.toLocaleString()} ONLINE</span>
           <div style={{display:"flex",alignItems:"center",gap:5,padding:"2px 7px",background:entropyCol+"15",border:"1px solid "+entropyCol+"40",borderRadius:2}}>
             <span style={{fontSize:8,color:K.dim}}>ENTROPY</span>
             <span style={{fontSize:10,color:entropyCol,fontWeight:700}}>{Math.round(entropy)}</span>
