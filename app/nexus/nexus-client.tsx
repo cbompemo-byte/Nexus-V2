@@ -917,7 +917,9 @@ function PerformanceCard({trades,totalPnL,onClose}:{trades:Trade[],totalPnL:numb
   const cardRef=useRef<HTMLDivElement>(null);
   const [period,setPeriod]=useState<"1H"|"3H"|"24H"|"7D"|"ALL">("24H");
   const [downloading,setDownloading]=useState(false);
+  const [sharing,setSharing]=useState(false);
   const [copied,setCopied]=useState(false);
+  const [xToast,setXToast]=useState(false);
 
   const periodMs:Record<string,number>={"1H":36e5,"3H":108e5,"24H":864e5,"7D":6048e5,"ALL":Infinity};
   const cutoff=periodMs[period];
@@ -931,7 +933,32 @@ function PerformanceCard({trades,totalPnL,onClose}:{trades:Trade[],totalPnL:numb
   const periodPnL=closed.reduce((s,t)=>s+t.pnl,0);
   const maxAbsPnL=closed.length?Math.max(...closed.map(t=>Math.abs(t.pnl)),1):1;
 
-  const shareText=`My KYMIA AI swarm made ${periodPnL>=0?"+":""}$${f2(Math.abs(periodPnL))} (${period})\nWin rate: ${f2(pct,0)}% | ${closed.length} trades\nTry the free sandbox: kymia.ai\n#KYMIA #AITrading #Solana`;
+  const tweetText=`My KYMIA AI swarm made ${periodPnL>=0?"+":""}$${f2(Math.abs(periodPnL))} in ${period}\nWin rate: ${f2(pct,0)}% | ${closed.length} trades\nTry free: kymia.ai\n#KYMIA #AITrading #Solana`;
+  const shareText=tweetText; // keep for other uses
+
+  const captureCard=async()=>{
+    if(!cardRef.current)return null;
+    const h2c=(await import("html2canvas")).default;
+    return h2c(cardRef.current,{backgroundColor:"#04060D",scale:2,useCORS:true,logging:false});
+  };
+
+  const shareOnX=async()=>{
+    if(sharing)return;
+    setSharing(true);
+    try{
+      const canvas=await captureCard();
+      if(canvas){
+        const a=document.createElement("a");
+        a.download="kymia-performance.png";
+        a.href=canvas.toDataURL("image/png");
+        a.click();
+      }
+      window.open("https://twitter.com/intent/tweet?text="+encodeURIComponent(tweetText),"_blank");
+      setXToast(true);
+      setTimeout(()=>setXToast(false),5000);
+    }catch{}
+    setSharing(false);
+  };
 
   const downloadPNG=async()=>{
     if(!cardRef.current||downloading)return;
@@ -1020,10 +1047,20 @@ function PerformanceCard({trades,totalPnL,onClose}:{trades:Trade[],totalPnL:numb
             <span style={{fontSize:7,color:K.c,opacity:.5}}>kymia.ai</span>
           </div>
         </div>
+        {/* Instruction toast */}
+        {xToast&&(
+          <div style={{background:"#0A1A0A",border:"1px solid "+K.g+"60",borderRadius:8,padding:"10px 14px",display:"flex",alignItems:"center",gap:8,animation:"toastIn .3s ease forwards"}}>
+            <span style={{fontSize:14}}>📎</span>
+            <div>
+              <div style={{fontSize:9,color:K.g,fontWeight:700,marginBottom:1}}>Image downloaded!</div>
+              <div style={{fontSize:8,color:K.tx}}>Attach kymia-performance.png to your tweet for the viral card</div>
+            </div>
+          </div>
+        )}
         {/* Action buttons */}
         <div style={{display:"flex",gap:7}}>
           <button onClick={downloadPNG} disabled={downloading} style={{flex:1,padding:"9px 4px",background:"#060A12",border:"1px solid "+K.c+"40",color:K.c,fontSize:8,fontFamily:"inherit",cursor:"pointer",borderRadius:6,letterSpacing:".08em"}}>{downloading?"⟳ CAPTURING...":"⬇ PNG"}</button>
-          <button onClick={()=>window.open("https://twitter.com/intent/tweet?text="+encodeURIComponent(shareText),"_blank")} style={{flex:2,padding:"9px 4px",background:"#060A12",border:"1px solid #1d9bf0",color:"#1d9bf0",fontSize:8,fontFamily:"inherit",cursor:"pointer",borderRadius:6,letterSpacing:".08em"}}>𝕏 SHARE ON X</button>
+          <button onClick={shareOnX} disabled={sharing} style={{flex:2,padding:"9px 4px",background:sharing?"#060A12":"#060e18",border:"1px solid #1d9bf0",color:"#1d9bf0",fontSize:8,fontFamily:"inherit",cursor:"pointer",borderRadius:6,letterSpacing:".08em"}}>{sharing?"⟳ CAPTURING...":"𝕏 SHARE ON X"}</button>
           <button onClick={()=>{navigator.clipboard?.writeText("https://kymia.ai?ref=share");setCopied(true);setTimeout(()=>setCopied(false),1800);}} style={{flex:1,padding:"9px 4px",background:"#060A12",border:"1px solid "+(copied?K.g:K.dim),color:copied?K.g:K.dim,fontSize:8,fontFamily:"inherit",cursor:"pointer",borderRadius:6,letterSpacing:".08em"}}>{copied?"✓ COPIED":"🔗 LINK"}</button>
         </div>
       </div>
