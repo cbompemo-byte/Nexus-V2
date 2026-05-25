@@ -192,7 +192,7 @@ const TH:{[k:string]:string[]}={
 type PriceData={price:number,prev:number,trend:string,change:number,rsi:number,hist:number[]};
 type AgentState={on:boolean,conf:number|null,sig:string|null,th:string};
 type Position={qty:number,avg:number,peak?:number,entryMs?:number};
-type Trade={id:string,sym:string,side:string,qty:number,price:number,pnl:number,conf:number,t:string};
+type Trade={id:string,sym:string,side:string,qty:number,price:number,pnl:number,conf:number,t:string,ms:number,agent?:string,reason?:string};
 type LogEntry={t:string,ag:string,msg:string,col:string};
 type WinCard={id:string,sym:string,pnl:number,pct:number,price:number,agent:string,t:string,origin?:{x:number,y:number}};
 type EdgeToast={id:string,type:string,icon:string,col:string,title:string,body:string};
@@ -913,6 +913,124 @@ function EdgeToastEl({toast,onDone}:{toast:EdgeToast,onDone:()=>void}){
   );
 }
 
+function PerformanceCard({trades,totalPnL,onClose}:{trades:Trade[],totalPnL:number,onClose:()=>void}){
+  const cardRef=useRef<HTMLDivElement>(null);
+  const [period,setPeriod]=useState<"1H"|"3H"|"24H"|"7D"|"ALL">("24H");
+  const [downloading,setDownloading]=useState(false);
+  const [copied,setCopied]=useState(false);
+
+  const periodMs:Record<string,number>={"1H":36e5,"3H":108e5,"24H":864e5,"7D":6048e5,"ALL":Infinity};
+  const cutoff=periodMs[period];
+  const now=Date.now();
+  const closed=trades.filter(t=>t.pnl!==0&&(t.ms?now-t.ms<cutoff:period==="ALL"));
+  const wins=closed.filter(t=>t.pnl>0);
+  const losses=closed.filter(t=>t.pnl<0);
+  const pct=closed.length?wins.length/closed.length*100:0;
+  const bestTrade=wins.length?Math.max(...wins.map(t=>t.pnl)):0;
+  const worstTrade=losses.length?Math.min(...losses.map(t=>t.pnl)):0;
+  const periodPnL=closed.reduce((s,t)=>s+t.pnl,0);
+  const maxAbsPnL=closed.length?Math.max(...closed.map(t=>Math.abs(t.pnl)),1):1;
+
+  const shareText=`My KYMIA AI swarm made ${periodPnL>=0?"+":""}$${f2(Math.abs(periodPnL))} (${period})\nWin rate: ${f2(pct,0)}% | ${closed.length} trades\nTry the free sandbox: kymia.ai\n#KYMIA #AITrading #Solana`;
+
+  const downloadPNG=async()=>{
+    if(!cardRef.current||downloading)return;
+    setDownloading(true);
+    try{
+      const h2c=(await import("html2canvas")).default;
+      const canvas=await h2c(cardRef.current,{backgroundColor:"#04060D",scale:2,useCORS:true,logging:false});
+      const a=document.createElement("a");a.download="kymia-performance.png";a.href=canvas.toDataURL("image/png");a.click();
+    }catch{}
+    setDownloading(false);
+  };
+
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(2,5,14,.92)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:600,backdropFilter:"blur(8px)"}} onClick={onClose}>
+      <div onClick={e=>e.stopPropagation()} style={{display:"flex",flexDirection:"column",gap:10,maxWidth:440,width:"100%",padding:"0 14px",maxHeight:"92vh",overflow:"auto"}}>
+        {/* Captured card */}
+        <div ref={cardRef} style={{background:"#04060D",border:"1px solid #0A1D33",borderRadius:16,padding:"20px",fontFamily:"'JetBrains Mono','Courier New',monospace"}}>
+          {/* Card header */}
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <svg width="22" height="22" viewBox="0 0 30 30"><polygon points="15,1 27,8 27,22 15,29 3,22 3,8" fill="none" stroke={K.c} strokeWidth="1.5"/><ellipse cx="15" cy="15" rx="7" ry="4.2" fill="none" stroke={K.c} strokeWidth="1" opacity=".8"/><circle cx="15" cy="15" r="2.8" fill={K.c}/><circle cx="15" cy="15" r="1.1" fill="#000" opacity=".7"/></svg>
+              <span style={{fontSize:15,fontWeight:900,color:K.c,letterSpacing:".2em"}}>KYMIA</span>
+            </div>
+            <span style={{fontSize:7,color:K.dim,padding:"2px 7px",border:"1px solid #0A1D33",borderRadius:4,letterSpacing:".06em"}}>PAPER TRADING · DEMO</span>
+          </div>
+          {/* Period tabs */}
+          <div style={{display:"flex",gap:4,marginBottom:14}}>
+            {(["1H","3H","24H","7D","ALL"] as const).map(p=>(
+              <button key={p} onClick={()=>setPeriod(p)} style={{flex:1,background:period===p?K.c+"20":"none",border:"1px solid "+(period===p?K.c+"50":"#0A1D33"),borderRadius:4,padding:"4px 0",fontSize:8,color:period===p?K.c:K.dim,cursor:"pointer",fontFamily:"inherit",letterSpacing:".05em"}}>{p}</button>
+            ))}
+          </div>
+          {/* Stats grid */}
+          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6,marginBottom:14}}>
+            {([
+              {l:"TOTAL TRADES",v:String(closed.length),c:K.c},
+              {l:"WINS",v:String(wins.length),c:K.g},
+              {l:"LOSSES",v:String(losses.length),c:K.r},
+              {l:"WIN RATE",v:f2(pct,0)+"%",c:K.gold},
+              {l:"BEST TRADE",v:bestTrade>0?"+$"+f2(bestTrade):"—",c:K.g},
+              {l:"WORST TRADE",v:worstTrade<0?"-$"+f2(Math.abs(worstTrade)):"—",c:K.r},
+            ] as Array<{l:string,v:string,c:string}>).map((s,i)=>(
+              <div key={i} style={{background:"#060A12",border:"1px solid #0A1D33",borderRadius:8,padding:"7px 9px"}}>
+                <div style={{fontSize:6,color:K.dim,marginBottom:2,letterSpacing:".07em"}}>{s.l}</div>
+                <div style={{fontSize:13,fontWeight:700,color:s.c}}>{s.v}</div>
+              </div>
+            ))}
+          </div>
+          {/* P&L banner */}
+          <div style={{padding:"10px 14px",background:(periodPnL>=0?K.g:K.r)+"10",border:"1px solid "+(periodPnL>=0?K.g:K.r)+"30",borderRadius:8,display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+            <div><div style={{fontSize:7,color:K.dim,marginBottom:2}}>TOTAL P&L ({period})</div><div style={{fontSize:7,color:K.dim}}>{closed.length} closed trades</div></div>
+            <span style={{fontSize:22,fontWeight:900,color:periodPnL>=0?K.g:K.r,textShadow:"0 0 12px "+(periodPnL>=0?K.g:K.r)}}>{periodPnL>=0?"+":""}${f2(Math.abs(periodPnL))}</span>
+          </div>
+          {/* Mini bar chart */}
+          {closed.length>0&&(
+            <div style={{marginBottom:14}}>
+              <div style={{fontSize:7,color:K.dim,marginBottom:5,letterSpacing:".08em"}}>TRADE HISTORY · LAST {Math.min(30,closed.length)}</div>
+              <div style={{display:"flex",alignItems:"center",gap:2,height:44,background:"#060A12",borderRadius:6,padding:"6px 8px",boxSizing:"border-box"}}>
+                {closed.slice(0,30).reverse().map((t,i)=>{
+                  const h=Math.max(3,Math.abs(t.pnl)/maxAbsPnL*32);
+                  return<div key={i} title={t.sym+" "+fU(t.pnl)} style={{flex:1,height:h,background:t.pnl>=0?K.g:K.r,borderRadius:2,opacity:.82,alignSelf:"center"}}/>;
+                })}
+              </div>
+            </div>
+          )}
+          {/* Recent executions */}
+          {closed.slice(0,3).length>0&&(
+            <div style={{marginBottom:12}}>
+              <div style={{fontSize:7,color:K.dim,marginBottom:6,letterSpacing:".08em"}}>RECENT EXECUTIONS</div>
+              {closed.slice(0,3).map((t,i)=>(
+                <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"5px 0",borderBottom:i<2?"1px solid #060A12":"none"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:7}}>
+                    <span style={{fontSize:12,color:t.pnl>=0?K.g:K.r}}>{t.pnl>=0?"▲":"▼"}</span>
+                    <div>
+                      <div style={{fontSize:9,fontWeight:700,color:K.hi}}>{t.sym} <span style={{fontSize:7,color:K.dim,fontWeight:400}}>via {t.agent||"ALGO"}</span></div>
+                      <div style={{fontSize:7,color:K.dim}}>{t.t} · {t.reason||"Exit"}</div>
+                    </div>
+                  </div>
+                  <span style={{fontSize:11,fontWeight:700,color:t.pnl>=0?K.g:K.r}}>{t.pnl>=0?"+":""}${f2(Math.abs(t.pnl))}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {/* Card footer */}
+          <div style={{borderTop:"1px solid #0A1D33",paddingTop:9,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <span style={{fontSize:7,color:K.dim}}>18 AGENTS · SOLANA · kymia.ai</span>
+            <span style={{fontSize:7,color:K.c,opacity:.5}}>kymia.ai</span>
+          </div>
+        </div>
+        {/* Action buttons */}
+        <div style={{display:"flex",gap:7}}>
+          <button onClick={downloadPNG} disabled={downloading} style={{flex:1,padding:"9px 4px",background:"#060A12",border:"1px solid "+K.c+"40",color:K.c,fontSize:8,fontFamily:"inherit",cursor:"pointer",borderRadius:6,letterSpacing:".08em"}}>{downloading?"⟳ CAPTURING...":"⬇ PNG"}</button>
+          <button onClick={()=>window.open("https://twitter.com/intent/tweet?text="+encodeURIComponent(shareText),"_blank")} style={{flex:2,padding:"9px 4px",background:"#060A12",border:"1px solid #1d9bf0",color:"#1d9bf0",fontSize:8,fontFamily:"inherit",cursor:"pointer",borderRadius:6,letterSpacing:".08em"}}>𝕏 SHARE ON X</button>
+          <button onClick={()=>{navigator.clipboard?.writeText("https://kymia.ai?ref=share");setCopied(true);setTimeout(()=>setCopied(false),1800);}} style={{flex:1,padding:"9px 4px",background:"#060A12",border:"1px solid "+(copied?K.g:K.dim),color:copied?K.g:K.dim,fontSize:8,fontFamily:"inherit",cursor:"pointer",borderRadius:6,letterSpacing:".08em"}}>{copied?"✓ COPIED":"🔗 LINK"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function KYMIA(){
   const prices=usePrices();
   const pricesRef=useRef(prices);
@@ -942,6 +1060,8 @@ export default function KYMIA(){
   const [blackSwan,setBlackSwan]=useState(false);
   const [tab,setTab]=useState("terminal");
   const [mktTab,setMktTab]=useState<"MOVERS"|"RADAR"|"ALL">("ALL");
+  const [histFilter,setHistFilter]=useState<"1H"|"3H"|"24H"|"7D"|"ALL">("ALL");
+  const [histSort,setHistSort]=useState<"time"|"pnl">("time");
   const [disabled,setDisabled]=useState<Set<string>>(new Set());
   const [showKill,setShowKill]=useState(false);
   const [modal,setModal]=useState<string|null>(null);
@@ -978,7 +1098,7 @@ export default function KYMIA(){
       const alloc=Math.min(prt.cash*.12,prt.cash*.9);
       const qty=alloc/p.price;
       setPort(prev=>{if(prev.pos[sym])return prev;return{...prev,cash:prev.cash-alloc,pos:{...prev.pos,[sym]:{qty,avg:p.price}}};});
-      setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym,side:"BUY",qty,price:p.price,pnl:0,conf:72,t:ts()},...t.slice(0,99)]);
+      setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym,side:"BUY",qty,price:p.price,pnl:0,conf:72,t:ts(),ms:Date.now()},...t.slice(0,99)]);
       log("EXEC","▶ DEMO BURST "+sym+" @ $"+f2(p.price),K.g);
     },delay);
     const t1=burst(5000);
@@ -1016,7 +1136,7 @@ export default function KYMIA(){
       if(pos.entryMs&&now-pos.entryMs>4*60*60*1000){
         const pnl=(cur-pos.avg)*pos.qty;
         setPort(prev=>{const p2={...prev.pos};delete p2[sym];return{...prev,cash:prev.cash+cur*pos.qty,pos:p2};});
-        addWinCard(sym,pnl,pct,cur,"TIMER");
+        addWinCard(sym,pnl,pct,cur,"TIMER","4H Expiry");
         log("TIMER","⏱ 4H EXPIRY: "+sym+" | "+fU(pnl),pnl>=0?K.g:K.gold);
         continue;
       }
@@ -1025,7 +1145,8 @@ export default function KYMIA(){
       if(cur<=stop){
         const pnl=(cur-pos.avg)*pos.qty;
         setPort(prev=>{const p2={...prev.pos};delete p2[sym];return{...prev,cash:prev.cash+cur*pos.qty,pos:p2};});
-        addWinCard(sym,pnl,pct,cur,pct>=1.5?"TRAIL":"AEGIS");
+        const reason=pct>=5?"Lock +5%":pct>=3?"Trail -1.5%":pct>=1.5?"Breakeven":"SL -2.5%";
+        addWinCard(sym,pnl,pct,cur,pct>=1.5?"TRAIL":"AEGIS",reason);
         const label=pct>=5?"🔒 LOCK +5%":pct>=3?"🔒 TRAIL -1.5%":pct>=1.5?"✓ BREAKEVEN":"⛔ SL -2.5%";
         log(pct>=1.5?"TRAIL":"AEGIS",label+" "+sym+" | "+fU(pnl),pnl>=0?K.g:K.r);
       }
@@ -1033,7 +1154,7 @@ export default function KYMIA(){
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[prices,running]);
 
-  const addWinCard=(sym:string,pnl:number,pct:number,price:number,agent:string)=>{
+  const addWinCard=(sym:string,pnl:number,pct:number,price:number,agent:string,reason?:string)=>{
     const origin=(()=>{
       const el=swarmRef.current;if(!el)return undefined;
       const rect=el.getBoundingClientRect();
@@ -1042,7 +1163,7 @@ export default function KYMIA(){
     })();
     const card:WinCard={id:Math.random().toString(36).slice(2),sym,pnl,pct,price,agent,t:ts(),origin};
     setWinCards(prev=>[...prev.slice(-1),card]);
-    setTrades(t=>[{id:card.id,sym,side:pnl>=0?"SELL":"SELL",qty:0,price,pnl,conf:80,t:card.t},...t.slice(0,99)]);
+    setTrades(t=>[{id:card.id,sym,side:"SELL",qty:0,price,pnl,conf:80,t:card.t,ms:Date.now(),agent,reason:reason||agent},...t.slice(0,99)]);
   };
 
   // Agent cycle
@@ -1086,7 +1207,7 @@ export default function KYMIA(){
       const prt=portRef.current;if(prt.cash<500||prt.pos[sym])return;
       const alloc=prt.cash*0.10;const qty=alloc/p.price;
       setPort(prev=>{if(prev.pos[sym])return prev;return{...prev,cash:prev.cash-alloc,pos:{...prev.pos,[sym]:{qty,avg:p.price,entryMs:Date.now()}}};});
-      setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym,side:"BUY",qty,price:p.price,pnl:0,conf:65,t:ts()},...t.slice(0,99)]);
+      setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym,side:"BUY",qty,price:p.price,pnl:0,conf:65,t:ts(),ms:Date.now(),reason:"Force Entry"},...t.slice(0,99)]);
       log("EXEC","▶ FORCE ENTRY "+sym+" @ "+fPrice(p.price)+" [DEMO]",K.g);
       tradeCount++;
     },10000);
@@ -1123,14 +1244,14 @@ export default function KYMIA(){
         const alloc=Math.min(prt.cash*frac,prt.cash*.9);
         const qty=alloc/p.price;
         setPort(prev=>{if(prev.pos[sym])return prev;return{...prev,cash:prev.cash-alloc,pos:{...prev.pos,[sym]:{qty,avg:p.price,entryMs:Date.now()}}};});
-        setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym,side:"BUY",qty,price:p.price,pnl:0,conf:Math.round(sig.conf),t:ts()},...t.slice(0,99)]);
+        setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym,side:"BUY",qty,price:p.price,pnl:0,conf:Math.round(sig.conf),t:ts(),ms:Date.now()},...t.slice(0,99)]);
         log("EXEC","▶ LONG "+sym+" @ "+fPrice(p.price)+" kelly:"+f2(frac*100,0)+"% sig:"+sig.quality,K.g);
         tradeCount++;
       }else if((cs.sig==="SELL"||sig.isSell)&&prt.pos[sym]){
         const pos=prt.pos[sym];
         const pnl=(p.price-pos.avg)*pos.qty;
         setPort(prev=>{const p2={...prev.pos};delete p2[sym];return{...prev,cash:prev.cash+pos.qty*p.price,pos:p2};});
-        addWinCard(sym,pnl,((p.price-pos.avg)/pos.avg)*100,p.price,"CONSENSUS");
+        addWinCard(sym,pnl,((p.price-pos.avg)/pos.avg)*100,p.price,"CONSENSUS","Signal Exit");
         log("EXEC","◀ CLOSE "+sym+" @ "+fPrice(p.price)+" PnL:"+fU(pnl),pnl>=0?K.g:K.r);
         tradeCount++;
       }
@@ -1318,7 +1439,12 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
               </div>
             </div>
           ))}
+          <div style={{display:"flex",alignItems:"center",gap:5,padding:"2px 8px",background:"#060A12",border:"1px solid #0A1D33",borderRadius:2}}>
+            <span style={{fontSize:9,fontWeight:700,color:K.gold}}>{trades.filter(t=>t.pnl!==0).length}</span>
+            <span style={{fontSize:7,color:K.dim,letterSpacing:".06em"}}>TRADES</span>
+          </div>
           <div style={{display:"flex",gap:5}}>
+            <button className="btn" onClick={()=>setModal("share")} style={{background:"#0A1428",color:K.gold,border:"1px solid "+K.gold+"50"}}>◈ SHARE</button>
             <button className="btn" onClick={runAI} disabled={analyzing} style={{background:analyzing?"#06111E":"#001428",color:analyzing?"#1A4A6A":K.c,border:"1px solid "+(analyzing?"#0A2040":K.c+"60")}}>{analyzing?"⟳":"⚡ DEBATE"}</button>
             <button className="btn" onClick={runDNA} disabled={dnaLoading} style={{background:"#100020",color:K.pu,border:"1px solid "+K.pu+"50"}}>{dnaLoading?"⟳":"🧬 DNA"}</button>
             <button className="btn" onClick={()=>setModal("beat")} style={{background:"#001820",color:K.gold,border:"1px solid "+K.gold+"50"}}>🎮 BEAT AI</button>
@@ -1346,7 +1472,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
       )}
 
       <div style={{background:"#030710",borderBottom:"1px solid #060B14",padding:"0 16px",display:"flex",gap:2}}>
-        {[["terminal","◈ COMMAND"],["trades","◎ TRADE STREAM"],["crisis","⊞ CRISIS REPLAY"],["dna","🧬 SWARM DNA"]].map(([v,l])=>(
+        {[["terminal","◈ COMMAND"],["trades","◎ HISTORY"],["crisis","⊞ CRISIS REPLAY"],["dna","🧬 SWARM DNA"]].map(([v,l])=>(
           <button key={v} className={`tab${tab===v?" on":""}`} onClick={()=>setTab(v)}>{l}</button>
         ))}
         <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:12,fontSize:8,color:"#0A1D2A"}}>
@@ -1589,43 +1715,65 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
         </div>
       )}
 
-      {tab==="trades"&&(
-        <div style={{flex:1,padding:10,overflow:"auto"}}>
-          <div className="panel">
-            <div style={{padding:"8px 13px",borderBottom:"1px solid #060A14",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-              <span style={{fontSize:9,color:K.dim,letterSpacing:".12em"}}>EXECUTIONS · {trades.length}</span>
-              <div style={{display:"flex",gap:16,fontSize:10}}>
-                {([{l:"P&L",v:fU(cl.reduce((a,t)=>a+t.pnl,0)),c:cl.reduce((a,t)=>a+t.pnl,0)>=0?K.g:K.r},{l:"WIN",v:f2(wr,0)+"%",c:wr>=50?K.g:K.r}] as Array<{l:string,v:string,c:string}>).map((x,i)=>(
-                  <div key={i} style={{textAlign:"right"}}><div style={{fontSize:8,color:K.dim}}>{x.l}</div><div style={{color:x.c}}>{x.v}</div></div>
+      {tab==="trades"&&(()=>{
+        const now2=Date.now();
+        const periodMs2:Record<string,number>={"1H":36e5,"3H":108e5,"24H":864e5,"7D":6048e5,"ALL":Infinity};
+        const cutoff2=periodMs2[histFilter];
+        const allClosed=trades.filter(t=>t.pnl!==0);
+        const filtered2=allClosed.filter(t=>!t.ms||now2-t.ms<cutoff2);
+        const sorted2=histSort==="pnl"?[...filtered2].sort((a,b)=>b.pnl-a.pnl):[...filtered2];
+        const periodPnL2=filtered2.reduce((s,t)=>s+t.pnl,0);
+        const wins2=filtered2.filter(t=>t.pnl>0);
+        const wr2=filtered2.length?wins2.length/filtered2.length*100:0;
+        return(
+          <div style={{flex:1,padding:10,overflow:"auto",display:"flex",flexDirection:"column",gap:8}}>
+            {/* Toolbar */}
+            <div className="panel" style={{padding:"8px 12px",display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+              <div style={{display:"flex",gap:4}}>
+                {(["1H","3H","24H","7D","ALL"] as const).map(f=>(
+                  <button key={f} onClick={()=>setHistFilter(f)} className="btn" style={{padding:"3px 9px",background:histFilter===f?K.c+"20":"#040810",color:histFilter===f?K.c:K.dim,border:"1px solid "+(histFilter===f?K.c+"50":K.brd)}}>{f}</button>
                 ))}
               </div>
+              <div style={{display:"flex",gap:4}}>
+                {(["time","pnl"] as const).map(s=>(
+                  <button key={s} onClick={()=>setHistSort(s)} className="btn" style={{padding:"3px 9px",background:histSort===s?K.gold+"15":"#040810",color:histSort===s?K.gold:K.dim,border:"1px solid "+(histSort===s?K.gold+"40":K.brd)}}>SORT: {s.toUpperCase()}</button>
+                ))}
+              </div>
+              <div style={{marginLeft:"auto",display:"flex",gap:16,fontSize:10}}>
+                <div style={{textAlign:"right"}}><div style={{fontSize:7,color:K.dim}}>P&L</div><div style={{color:periodPnL2>=0?K.g:K.r,fontWeight:700}}>{periodPnL2>=0?"+":""}${f2(Math.abs(periodPnL2))}</div></div>
+                <div style={{textAlign:"right"}}><div style={{fontSize:7,color:K.dim}}>WIN RATE</div><div style={{color:wr2>=50?K.g:K.r,fontWeight:700}}>{f2(wr2,0)}%</div></div>
+                <div style={{textAlign:"right"}}><div style={{fontSize:7,color:K.dim}}>TRADES</div><div style={{color:K.c,fontWeight:700}}>{filtered2.length}</div></div>
+              </div>
             </div>
-            {trades.length===0
-              ?<div style={{padding:50,textAlign:"center",color:"#0A1E30"}}>No trades yet. Activate swarm.</div>
-              :<table style={{width:"100%",borderCollapse:"collapse"}}>
-                <thead><tr style={{fontSize:8,color:K.dim,borderBottom:"1px solid #060A14"}}>
-                  {["ID","TIME","ASSET","SIDE","PRICE","P&L","CONF"].map(h=><th key={h} style={{padding:"6px 11px",textAlign:"left",fontWeight:400}}>{h}</th>)}
-                </tr></thead>
-                <tbody>
-                  {trades.map(t=>{
-                    const sv=SYMS[t.sym],col=t.side==="BUY"?K.g:K.r;
-                    return(
-                      <tr key={t.id} className="tr" style={{borderBottom:"1px solid #040910"}}>
-                        <td style={{padding:"5px 11px",color:K.dim,fontSize:9}}>{t.id}</td>
-                        <td style={{padding:"5px 11px",color:"#102030"}}>{t.t}</td>
-                        <td style={{padding:"5px 11px"}}><span style={{color:sv?.col,marginRight:4}}>{sv?.icon}</span><span style={{color:K.c,fontWeight:600}}>{t.sym}</span></td>
-                        <td style={{padding:"5px 11px"}}><span style={{padding:"1px 6px",background:col+"15",color:col,border:"1px solid "+col+"30",fontSize:8,borderRadius:1}}>{t.side}</span></td>
-                        <td style={{padding:"5px 11px",color:K.hi}}>${t.sym==="BTC"?f2(t.price,0):t.sym==="BONK"?f2(t.price,7):f2(t.price)}</td>
-                        <td style={{padding:"5px 11px",color:t.pnl>0?K.g:t.pnl<0?K.r:K.tx}}>{t.pnl!==0?fU(t.pnl):"—"}</td>
-                        <td style={{padding:"5px 11px"}}><div style={{display:"flex",alignItems:"center",gap:5}}><div style={{height:3,width:32,background:"#040910",borderRadius:1}}><div style={{height:"100%",borderRadius:1,background:K.c,width:t.conf+"%"}}/></div><span style={{color:K.tx,fontSize:9}}>{t.conf}%</span></div></td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>}
+            {/* Table */}
+            <div className="panel" style={{overflow:"auto",flex:1}}>
+              {sorted2.length===0
+                ?<div style={{padding:50,textAlign:"center",color:"#0A1E30",fontSize:10}}>No closed trades in this period. Activate swarm.</div>
+                :<table style={{width:"100%",borderCollapse:"collapse"}}>
+                  <thead><tr style={{fontSize:8,color:K.dim,borderBottom:"1px solid #060A14",position:"sticky",top:0,background:K.pan}}>
+                    {["TIME","ASSET","SIDE","PRICE","P&L","AGENT","REASON"].map(h=><th key={h} style={{padding:"6px 10px",textAlign:"left",fontWeight:400,letterSpacing:".06em"}}>{h}</th>)}
+                  </tr></thead>
+                  <tbody>
+                    {sorted2.map(t=>{
+                      const sv=SYMS[t.sym],win=t.pnl>0,col=win?K.g:K.r;
+                      return(
+                        <tr key={t.id} className="tr" style={{borderBottom:"1px solid #040910",borderLeft:"2px solid "+(win?K.g+"40":K.r+"40")}}>
+                          <td style={{padding:"5px 10px",color:"#102030",fontSize:9,whiteSpace:"nowrap"}}>{t.t}</td>
+                          <td style={{padding:"5px 10px"}}><span style={{color:sv?.col,marginRight:4}}>{sv?.icon}</span><span style={{color:K.c,fontWeight:700,fontSize:10}}>{t.sym}</span></td>
+                          <td style={{padding:"5px 10px"}}><span style={{padding:"1px 5px",background:col+"12",color:col,border:"1px solid "+col+"30",fontSize:8,borderRadius:1}}>{win?"▲ WIN":"▼ LOSS"}</span></td>
+                          <td style={{padding:"5px 10px",color:K.hi,fontSize:9}}>{fPrice(t.price)}</td>
+                          <td style={{padding:"5px 10px",color:col,fontWeight:700,fontSize:10}}>{win?"+":"-"}${f2(Math.abs(t.pnl))}</td>
+                          <td style={{padding:"5px 10px",color:K.dim,fontSize:9}}>{t.agent||"ALGO"}</td>
+                          <td style={{padding:"5px 10px",color:K.tx,fontSize:9}}>{t.reason||"—"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>}
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {tab==="crisis"&&(
         <div style={{flex:1,padding:10,display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,overflow:"auto"}}>
@@ -1699,6 +1847,9 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
           </div>
         </div>
       )}
+
+      {/* Performance Card Modal */}
+      {modal==="share"&&<PerformanceCard trades={trades} totalPnL={totalPnL} onClose={()=>setModal(null)}/>}
 
       {/* Win Cards */}
       <div style={{position:"fixed",bottom:60,right:16,zIndex:200,display:"flex",flexDirection:"column",gap:8,pointerEvents:"none"}}>
