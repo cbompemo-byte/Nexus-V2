@@ -150,13 +150,13 @@ const CONNS=[
 ];
 
 const BOOT_STEPS=[
-  "[SYSTEM]: Initializing NEXUS Swarm...",
+  "[SYSTEM]: Initializing KYMIA Swarm...",
   "[LEVIATHAN]: Liquidity Radar Online...",
   "[ATLAS]: Global Macro Sphere Synced...",
   "[AEGIS]: Adaptive Risk Matrix Active...",
   `[JUPITER]: ${SYM_COUNT} Solana pairs loaded...`,
   "[SWARM]: 18 Cognitive Agents Connected...",
-  "[NEXUS]: ◈ System ready.",
+  "[KYMIA]: ◈ KYMIA OPERATIONAL.",
 ];
 
 const EDGE_EVENTS=[
@@ -290,7 +290,15 @@ function BootSequence({onDone}:{onDone:()=>void}){
   return(
     <div style={{position:"fixed",inset:0,background:"#000",zIndex:1000,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",fontFamily:"'JetBrains Mono','Courier New',monospace"}}>
       {sweeping&&<div style={{position:"absolute",inset:0,background:"linear-gradient(90deg,transparent 0%,"+K.c+"40 50%,transparent 100%)",animation:"laserSweep .5s ease forwards",pointerEvents:"none"}}/>}
-      <div style={{marginBottom:36,fontSize:28,fontWeight:900,color:K.c,letterSpacing:".4em",textShadow:"0 0 40px "+K.c,animation:"breathe 2s ease-in-out infinite"}}>◈ NEXUS</div>
+      <div style={{marginBottom:36,display:"flex",alignItems:"center",gap:14,animation:"breathe 2s ease-in-out infinite"}}>
+        <svg width="36" height="36" viewBox="0 0 30 30" style={{filter:"drop-shadow(0 0 10px "+K.c+")"}}>
+          <polygon points="15,1 27,8 27,22 15,29 3,22 3,8" fill="none" stroke={K.c} strokeWidth="1.5"/>
+          <ellipse cx="15" cy="15" rx="7" ry="4.2" fill="none" stroke={K.c} strokeWidth="1" opacity=".8"/>
+          <circle cx="15" cy="15" r="2.8" fill={K.c} opacity=".9"/>
+          <circle cx="15" cy="15" r="1.1" fill="#000" opacity=".7"/>
+        </svg>
+        <span style={{fontSize:28,fontWeight:900,color:K.c,letterSpacing:".4em",textShadow:"0 0 40px "+K.c,fontFamily:"'JetBrains Mono','Courier New',monospace"}}>KYMIA</span>
+      </div>
       <div style={{width:380,minHeight:160}}>
         {lines.map((line,i)=>(
           <div key={i} style={{fontSize:11,color:i===lines.length-1?K.g:K.c,marginBottom:7,opacity:0,animation:"bootLine .35s ease forwards",letterSpacing:".04em"}}>
@@ -905,7 +913,7 @@ function EdgeToastEl({toast,onDone}:{toast:EdgeToast,onDone:()=>void}){
   );
 }
 
-export default function NEXUS(){
+export default function KYMIA(){
   const prices=usePrices();
   const pricesRef=useRef(prices);
   useEffect(()=>{pricesRef.current=prices;},[prices]);
@@ -923,7 +931,7 @@ export default function NEXUS(){
   useEffect(()=>{agStRef.current=agSt;},[agSt]);
 
   const [debate,setDebate]=useState<string[]>([]);
-  const [logs,setLogs]=useState<LogEntry[]>([{t:ts(),ag:"SYSTEM",msg:"◈ NEXUS v2.0 — 18 agents online",col:K.c}]);
+  const [logs,setLogs]=useState<LogEntry[]>([{t:ts(),ag:"SYSTEM",msg:"◈ KYMIA v2.0 — 18 agents online",col:K.c}]);
   const [aiData,setAiData]=useState<{[k:string]:unknown}|null>(null);
   const [dnaData,setDnaData]=useState<{[k:string]:unknown}|null>(null);
   const [analyzing,setAnalyzing]=useState(false);
@@ -1152,7 +1160,7 @@ export default function NEXUS(){
     const prt=portRef.current;
     const posStr=Object.entries(prt.pos).map(([k,p])=>`${k}:${(p as Position).qty.toFixed(3)}@$${f2((p as Position).avg)}`).join(",")||"none";
     try{
-      const res=await fetch("/api/debate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({messages:[{role:"user",content:`NEXUS AI. JSON strict only.
+      const res=await fetch("/api/debate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({messages:[{role:"user",content:`KYMIA AI. JSON strict only.
 MARKET: ${snap} | POSITIONS: ${posStr} | CASH: $${f2(prt.cash)} | ENTROPY: ${entropyRef.current}
 {"regime":"TRENDING_BULL|TRENDING_BEAR|SIDEWAYS|VOLATILE","regimeConf":0-100,"entropy":0-100,"groupthinkWarning":true,"debate":[{"agent":"CODENAME","thesis":"argument max 40 chars","signal":"BUY|SELL|HOLD","conf":0-100}],"consensus":{"signal":"BUY|SELL|HOLD","symbol":"SOL|BTC|ETH|JUP|BONK","confidence":0-100,"rationale":"reason","tp":0,"sl":0},"riskWarning":"text or null","marketSummary":"2 sentences"}`}]})});
       const data=await res.json();
@@ -1182,9 +1190,9 @@ MARKET: ${snap} | POSITIONS: ${posStr} | CASH: $${f2(prt.cash)} | ENTROPY: ${ent
     const wr=cl.length?cl.filter(t=>t.pnl>0).length/cl.length*100:50;
     const pnl=port.equity-CAP;
     try{
-      const res=await fetch("/api/debate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({messages:[{role:"user",content:`NEXUS AI. JSON strict only.
+      const res=await fetch("/api/debate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({messages:[{role:"user",content:`KYMIA AI. JSON strict only.
 Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length}, WinRate: ${f2(wr)}%
-{"traderTitle":"epic title","tradingDNA":["trait1","trait2","trait3"],"strengths":["s1","s2"],"weakness":"main weakness","aiVerdict":"1 powerful sentence","score":0-100,"tier":"BRONZE|SILVER|GOLD|PLATINUM|NEXUS_ELITE"}`}]})});
+{"traderTitle":"epic title","tradingDNA":["trait1","trait2","trait3"],"strengths":["s1","s2"],"weakness":"main weakness","aiVerdict":"1 powerful sentence","score":0-100,"tier":"BRONZE|SILVER|GOLD|PLATINUM|KYMIA_ELITE"}`}]})});
       const data=await res.json();
       const raw=data.content?.map((b:{text?:string})=>b.text||"").join("").replace(/```json|```/g,"").trim();
       setDnaData(JSON.parse(raw));
@@ -1207,7 +1215,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
   const handleStart=()=>{
     setRunning(r=>{
       const next=!r;
-      log("SYS",next?"▶ NEXUS ACTIVATED — 18 agents online":"⏹ SYSTEM HALTED",next?K.g:K.r);
+      log("SYS",next?"▶ KYMIA ACTIVATED — 18 agents online":"⏹ SYSTEM HALTED",next?K.g:K.r);
       return next;
     });
   };
@@ -1220,7 +1228,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
         const p1=pricesRef.current[sym]?.price||1;
         const moved=p1>p0;
         const win=(side==="LONG"&&moved)||(side==="SHORT"&&!moved);
-        setBeatResult(win?"✓ YOU WIN":"✗ NEXUS WINS");
+        setBeatResult(win?"✓ YOU WIN":"✗ KYMIA WINS");
       },30000);
     },100);
   };
@@ -1271,7 +1279,16 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
 
       <header style={{background:blackSwan?"#090203":"#040810",borderBottom:"1px solid "+(blackSwan?K.r+"40":K.brd),padding:"7px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,zIndex:100}}>
         <div style={{display:"flex",alignItems:"center",gap:16}}>
-          <div style={{fontSize:19,fontWeight:900,color:blackSwan?K.r:K.c,letterSpacing:".25em",textShadow:"0 0 20px "+(blackSwan?K.r:K.c),animation:"glow 2.5s ease-in-out infinite"}}>◈ NEXUS</div>
+          <div style={{display:"flex",alignItems:"center",gap:9}}>
+            <svg width="30" height="30" viewBox="0 0 30 30" style={{flexShrink:0,filter:"drop-shadow(0 0 6px "+(blackSwan?K.r:K.c)+")"}}>
+              <polygon points="15,1 27,8 27,22 15,29 3,22 3,8" fill="none" stroke={blackSwan?K.r:K.c} strokeWidth="1.5"/>
+              <ellipse cx="15" cy="15" rx="7" ry="4.2" fill="none" stroke={blackSwan?K.r:K.c} strokeWidth="1" opacity=".8"/>
+              <circle cx="15" cy="15" r="2.8" fill={blackSwan?K.r:K.c} opacity=".9"/>
+              <circle cx="15" cy="15" r="1.1" fill="#000" opacity=".7"/>
+              <line x1="8" y1="15" x2="22" y2="15" stroke={blackSwan?K.r:K.c} strokeWidth=".6" opacity=".35"/>
+            </svg>
+            <span style={{fontSize:19,fontWeight:900,color:blackSwan?K.r:K.c,letterSpacing:".25em",textShadow:"0 0 20px "+(blackSwan?K.r:K.c),animation:"glow 2.5s ease-in-out infinite",fontFamily:"'JetBrains Mono','Courier New',monospace"}}>KYMIA</span>
+          </div>
           <span style={{fontSize:9,color:"#102030",letterSpacing:".1em"}}>QUANT AI · SANDBOX · v2.0</span>
           <div style={{display:"flex",alignItems:"center",gap:4,padding:"2px 7px",background:K.c+"10",border:"1px solid "+K.c+"25",borderRadius:2}}>
             <span style={{fontSize:9,fontWeight:700,color:K.c}}>{SYM_COUNT}</span>
@@ -1624,7 +1641,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
               <div style={{fontSize:11,color:s.col,letterSpacing:".1em",marginBottom:2,fontWeight:900}}>{s.e}</div>
               <div style={{fontSize:9,color:K.dim,marginBottom:6}}>{s.d}</div>
               <p style={{fontSize:9,color:K.tx,lineHeight:1.5,marginBottom:9,fontStyle:"italic"}}>{s.desc}</p>
-              {([{l:"Drop",v:s.drop,c:K.r},{l:"Duration",v:s.dur,c:K.tx},{l:"SOL",v:s.sol,c:K.r},{l:"NEXUS",v:s.out,c:s.col}] as Array<{l:string,v:string,c:string}>).map((r,j)=>(
+              {([{l:"Drop",v:s.drop,c:K.r},{l:"Duration",v:s.dur,c:K.tx},{l:"SOL",v:s.sol,c:K.r},{l:"KYMIA",v:s.out,c:s.col}] as Array<{l:string,v:string,c:string}>).map((r,j)=>(
                 <div key={j} style={{display:"flex",justifyContent:"space-between",padding:"2px 0",borderBottom:"1px solid #040910",fontSize:10}}>
                   <span style={{color:K.dim}}>{r.l}</span><span style={{color:r.c,fontWeight:600}}>{r.v}</span>
                 </div>
@@ -1654,7 +1671,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
               </div>
             ):(
               <div className="panel" style={{padding:24,borderColor:K.pu+"40",background:"linear-gradient(135deg,"+K.pan+" 0%,"+K.pu+"10 100%)"}}>
-                <div style={{fontSize:13,color:K.pu,letterSpacing:".2em",fontWeight:900,marginBottom:4}}>◈ NEXUS PERFORMANCE DNA</div>
+                <div style={{fontSize:13,color:K.pu,letterSpacing:".2em",fontWeight:900,marginBottom:4}}>◈ KYMIA PERFORMANCE DNA</div>
                 <div style={{marginBottom:12}}>
                   <span style={{padding:"3px 10px",background:K.gold+"20",color:K.gold,border:"1px solid "+K.gold+"40",fontSize:11,borderRadius:2,fontWeight:700}}>{String(dnaData.tier||"GOLD")} TIER · {String(dnaData.score||74)}/100</span>
                 </div>
@@ -1673,10 +1690,10 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
                   <div style={{color:K.r,fontSize:10}}>⚠ {String(dnaData.weakness||"")}</div>
                 </div>
                 <div style={{padding:"10px 14px",background:K.pu+"12",border:"1px solid "+K.pu+"30",borderRadius:2,marginBottom:14}}>
-                  <div style={{fontSize:9,color:K.pu,marginBottom:3,letterSpacing:".1em"}}>NEXUS VERDICT</div>
+                  <div style={{fontSize:9,color:K.pu,marginBottom:3,letterSpacing:".1em"}}>KYMIA VERDICT</div>
                   <p style={{fontSize:11,color:K.hi,lineHeight:1.5,fontStyle:"italic"}}>&quot;{String(dnaData.aiVerdict||"")}&quot;</p>
                 </div>
-                <button className="btn" onClick={()=>{const txt=`My NEXUS DNA: ${dnaData.traderTitle} | ${dnaData.tier} | Score:${dnaData.score}/100 | "${dnaData.aiVerdict}"`;navigator.clipboard?.writeText(txt);}} style={{background:K.pu+"20",color:K.pu,border:"1px solid "+K.pu+"50",padding:"8px 20px",fontSize:10,width:"100%"}}>[ SHARE YOUR DNA ]</button>
+                <button className="btn" onClick={()=>{const txt=`My KYMIA DNA: ${dnaData.traderTitle} | ${dnaData.tier} | Score:${dnaData.score}/100 | "${dnaData.aiVerdict}"`;navigator.clipboard?.writeText(txt);}} style={{background:K.pu+"20",color:K.pu,border:"1px solid "+K.pu+"50",padding:"8px 20px",fontSize:10,width:"100%"}}>[ SHARE YOUR DNA ]</button>
               </div>
             )}
           </div>
@@ -1747,7 +1764,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
         <div style={{position:"fixed",inset:0,background:"rgba(2,4,10,.94)",zIndex:500,display:"flex",alignItems:"center",justifyContent:"center",backdropFilter:"blur(6px)"}} onClick={()=>setModal(null)}>
           <div style={{background:"#040810",border:"1px solid "+K.pu+"50",borderRadius:4,padding:"24px 28px",width:440}} onClick={e=>e.stopPropagation()}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
-              <div style={{fontSize:13,color:K.pu,letterSpacing:".2em",fontWeight:900}}>◈ NEXUS PERFORMANCE DNA</div>
+              <div style={{fontSize:13,color:K.pu,letterSpacing:".2em",fontWeight:900}}>◈ KYMIA PERFORMANCE DNA</div>
               <button onClick={()=>setModal(null)} style={{background:"none",border:"none",color:K.tx,cursor:"pointer",fontSize:16}}>✕</button>
             </div>
             <div style={{marginBottom:10}}><span style={{padding:"3px 10px",background:K.gold+"20",color:K.gold,border:"1px solid "+K.gold+"40",fontSize:11,borderRadius:2,fontWeight:700}}>{String(dnaData.tier)} TIER · {String(dnaData.score)}/100</span></div>
@@ -1771,7 +1788,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
               <div style={{fontSize:13,color:K.gold,letterSpacing:".2em",fontWeight:900}}>🎮 BEAT THE AI</div>
               <button onClick={()=>setModal(null)} style={{background:"none",border:"none",color:K.tx,cursor:"pointer",fontSize:16}}>✕</button>
             </div>
-            <p style={{fontSize:10,color:K.tx,marginBottom:14,lineHeight:1.5}}>Pick an asset + direction. Race NEXUS over 30 seconds. Whoever calls the next move correctly wins.</p>
+            <p style={{fontSize:10,color:K.tx,marginBottom:14,lineHeight:1.5}}>Pick an asset + direction. Race KYMIA over 30 seconds. Whoever calls the next move correctly wins.</p>
             <div style={{fontSize:8,color:K.dim,marginBottom:6,letterSpacing:".1em"}}>SELECT ASSET</div>
             <div style={{display:"flex",gap:6,marginBottom:14,flexWrap:"wrap"}}>
               {Object.entries(SYMS).map(([sym,sv])=>(
@@ -1791,10 +1808,10 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
                   ))}
                 </div>
                 {beatResult
-                  ?<div style={{padding:"14px",textAlign:"center",fontSize:16,fontWeight:900,color:beatResult.includes("WIN")&&!beatResult.includes("NEXUS")?K.g:K.r,background:(beatResult.includes("WIN")&&!beatResult.includes("NEXUS")?K.g:K.r)+"10",border:"1px solid "+(beatResult.includes("WIN")&&!beatResult.includes("NEXUS")?K.g:K.r)+"40",borderRadius:3}}>{beatResult}</div>
+                  ?<div style={{padding:"14px",textAlign:"center",fontSize:16,fontWeight:900,color:beatResult.includes("WIN")&&!beatResult.includes("KYMIA")?K.g:K.r,background:(beatResult.includes("WIN")&&!beatResult.includes("KYMIA")?K.g:K.r)+"10",border:"1px solid "+(beatResult.includes("WIN")&&!beatResult.includes("KYMIA")?K.g:K.r)+"40",borderRadius:3}}>{beatResult}</div>
                   :<button className="btn" onClick={()=>{beatStart(beatChoice.sym,beatChoice.side);}} style={{width:"100%",background:K.gold+"15",color:K.gold,border:"1px solid "+K.gold+"40",padding:"10px 0",fontSize:11,letterSpacing:".1em"}}>⚡ START 30s RACE</button>
                 }
-                <div style={{marginTop:8,fontSize:8,color:K.dim,textAlign:"center"}}>2,842 observers online · NEXUS win rate: 67%</div>
+                <div style={{marginTop:8,fontSize:8,color:K.dim,textAlign:"center"}}>2,842 observers online · KYMIA win rate: 67%</div>
               </>
             )}
           </div>
@@ -1802,7 +1819,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
       )}
 
       <div style={{background:"#020608",borderTop:"1px solid #050A12",padding:"3px 16px",display:"flex",justifyContent:"space-between",fontSize:8,color:"#081525",letterSpacing:".1em"}}>
-        <span>◈ NEXUS v2.0 — PAPER TRADING · $10,000 SANDBOX CAPITAL · NO REAL FUNDS</span>
+        <span>◈ KYMIA v2.0 — PAPER TRADING · $10,000 SANDBOX CAPITAL · NO REAL FUNDS AT RISK</span>
         <span>Claude Sonnet · 18 Agents · {new Date().toLocaleString("en-US")}</span>
       </div>
     </div>
