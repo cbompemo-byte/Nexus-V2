@@ -1137,78 +1137,88 @@ export default function KYMIA(){
     return ema;
   };
   const runRealAgents=useCallback(async()=>{
-    const sym="SOLUSDT";
     const updates:{[k:string]:Partial<AgentState>}={};
+    // Track latencies for WATCH agent
+    const lat:{name:string,ms:number}[]=[];
+    const tf=async(name:string,url:string)=>{const t=performance.now();const r=await fetch(url);lat.push({name,ms:Math.round(performance.now()-t)});return r;};
     console.group("[KYMIA] runRealAgents — "+new Date().toISOString());
+
+    // ── 7 existing agents ─────────────────────────────────────────────────────
     // LEVIATHAN: DexScreener whale buy pressure
     try{
-      const r=await fetch("/api/dexscreener?type=whale&pair=So11111111111111111111111111111111111111112");
+      const r=await tf("DEX-LVTH","/api/dexscreener?type=whale&pair=So11111111111111111111111111111111111111112");
       const d=await r.json();
       const bp:number=d.buyPressure??0.5;
       const sig=bp>0.62?"BUY":bp<0.38?"SELL":"HOLD";
       const conf=Math.round(60+bp*40);
-      console.log("[LEVIATHAN] /api/dexscreener?type=whale | buyPressure="+bp.toFixed(3)+" vol24h=$"+d.volume24h+" → SIG:"+sig+" CONF:"+conf);
-      updates["leviathan"]={sig,conf,real:true,th:`CEX buy pressure: ${(bp*100).toFixed(0)}%\nVol 24h: $${(d.volume24h/1e6).toFixed(1)}M\n${bp>0.62?"Whale accumulation":"Whale distribution"}`};
+      console.log("[LEVIATHAN] buyPressure="+bp.toFixed(3)+" → SIG:"+sig+" CONF:"+conf);
+      updates["leviathan"]={sig,conf,real:true,th:`DEX buy pressure: ${(bp*100).toFixed(0)}%\nVol 24h: $${(d.volume24h/1e6).toFixed(2)}M\n${bp>0.62?"Whale accumulation":"Whale distribution"}`};
       setDataStatus(s=>({...s,lastUpdate:Date.now()}));
     }catch(e){console.error("[LEVIATHAN] FAILED",e);updates["leviathan"]={real:false};}
-    // LENS: Binance RSI
+
+    // LENS: Kraken RSI(14) 1m
     try{
-      const r=await fetch(`/api/market?type=rsi&sym=${sym}`);
+      const r=await tf("Kraken-RSI","/api/market?type=rsi");
       const d=await r.json();
       const closes:number[]=(d.data||[]).map((c:unknown[])=>parseFloat(String(c[4])));
       const rsi=calcRSI(closes,14);
       const sig=rsi<40?"BUY":rsi>65?"SELL":"HOLD";
       const conf=Math.round(50+Math.abs(rsi-50)*0.9);
-      console.log("[LENS] /api/market?type=rsi | candles="+closes.length+" RSI(14)="+rsi.toFixed(2)+" → SIG:"+sig+" CONF:"+conf);
-      updates["lens"]={sig,conf,real:true,th:`Binance RSI(14): ${rsi.toFixed(1)}\n${rsi<40?"Oversold — BUY signal":rsi>65?"Overbought — SELL signal":"Neutral zone"}\n1m candles: ${closes.length}`};
+      console.log("[LENS] RSI(14)="+rsi.toFixed(2)+" candles="+closes.length+" → SIG:"+sig+" CONF:"+conf);
+      updates["lens"]={sig,conf,real:true,th:`Kraken RSI(14): ${rsi.toFixed(1)}\n${rsi<40?"Oversold — BUY signal":rsi>65?"Overbought — SELL signal":"Neutral zone"}\n1m candles: ${closes.length}`};
       setDataStatus(s=>({...s,binance:"ok",lastUpdate:Date.now()}));
     }catch(e){console.error("[LENS] FAILED",e);updates["lens"]={real:false};setDataStatus(s=>({...s,binance:"err"}));}
-    // SURGE: Binance 24h volume
+
+    // SURGE: CoinGecko 24h volume/price
     try{
-      const r=await fetch(`/api/market?type=volume&sym=${sym}`);
+      const r=await tf("CGK-Vol","/api/market?type=volume");
       const d=await r.json();
       const change=parseFloat(d.data?.priceChangePercent||"0");
       const vol=parseFloat(d.data?.volume||"0");
       const sig=change>3&&vol>1e6?"BUY":change<-3?"SELL":"HOLD";
       const conf=Math.round(55+Math.min(Math.abs(change)*3,40));
-      console.log("[SURGE] /api/market?type=volume | priceChange="+change.toFixed(2)+"% vol="+vol.toFixed(0)+" → SIG:"+sig+" CONF:"+conf);
+      console.log("[SURGE] change="+change.toFixed(2)+"% vol="+vol.toFixed(0)+" → SIG:"+sig+" CONF:"+conf);
       updates["surge"]={sig,conf,real:true,th:`24h change: ${change>0?"+":""}${change.toFixed(2)}%\nVolume: ${(vol/1e3).toFixed(0)}K SOL\nHigh: $${parseFloat(d.data?.highPrice||"0").toFixed(2)}`};
     }catch(e){console.error("[SURGE] FAILED",e);updates["surge"]={real:false};}
+
     // ATLAS: CoinGecko BTC dominance
     try{
-      const r=await fetch("/api/market?type=dominance");
+      const r=await tf("CGK-Dom","/api/market?type=dominance");
       const d=await r.json();
       const dom:number=d.btcDom??50;
       const sig=dom>58?"SELL":dom<48?"BUY":"HOLD";
       const conf=Math.round(50+Math.abs(dom-53)*1.2);
-      console.log("[ATLAS] /api/market?type=dominance | btcDom="+dom.toFixed(2)+"% → SIG:"+sig+" CONF:"+conf);
+      console.log("[ATLAS] btcDom="+dom.toFixed(2)+"% → SIG:"+sig+" CONF:"+conf);
       updates["atlas"]={sig,conf,real:true,th:`BTC dominance: ${dom.toFixed(1)}%\n${dom>58?"Alt risk-off — reduce exposure":dom<48?"Alt season — risk-on":"Neutral macro regime"}`};
       setDataStatus(s=>({...s,coingecko:"ok",lastUpdate:Date.now()}));
     }catch(e){console.error("[ATLAS] FAILED",e);updates["atlas"]={real:false};setDataStatus(s=>({...s,coingecko:"err"}));}
+
     // ECHO: Fear & Greed
     try{
-      const r=await fetch("/api/market?type=fear");
+      const r=await tf("F&G","/api/market?type=fear");
       const d=await r.json();
       const fng:number=d.value??50;
       const sig=fng<30?"BUY":fng>75?"SELL":"HOLD";
       const conf=Math.round(45+Math.abs(fng-50)*0.8);
-      console.log("[ECHO] /api/market?type=fear | value="+fng+" label="+d.label+" → SIG:"+sig+" CONF:"+conf);
+      console.log("[ECHO] F&G="+fng+" ("+d.label+") → SIG:"+sig+" CONF:"+conf);
       updates["echo"]={sig,conf,real:true,th:`Fear & Greed: ${fng} (${d.label||"Neutral"})\n${fng<30?"Extreme Fear — contrarian BUY":fng>75?"Extreme Greed — reduce exposure":"Sentiment neutral"}`};
     }catch(e){console.error("[ECHO] FAILED",e);updates["echo"]={real:false};}
-    // RADAR: Binance EMA 9/21 crossover
+
+    // RADAR: Kraken EMA 9/21 5m crossover
     try{
-      const r=await fetch(`/api/market?type=ema&sym=${sym}`);
+      const r=await tf("Kraken-EMA","/api/market?type=ema");
       const d=await r.json();
       const closes5m:number[]=(d.data||[]).map((c:unknown[])=>parseFloat(String(c[4])));
       const ema9=calcEMA(closes5m,9),ema21=calcEMA(closes5m,21);
       const cross=ema9>ema21?"BUY":ema9<ema21?"SELL":"HOLD";
       const conf=Math.round(60+Math.abs(ema9-ema21)/ema21*5000);
-      console.log("[RADAR] /api/market?type=ema | candles="+closes5m.length+" EMA9="+ema9.toFixed(4)+" EMA21="+ema21.toFixed(4)+" → SIG:"+cross+" CONF:"+conf);
+      console.log("[RADAR] EMA9="+ema9.toFixed(4)+" EMA21="+ema21.toFixed(4)+" → SIG:"+cross+" CONF:"+conf);
       updates["radar"]={sig:cross,conf,real:true,th:`EMA9: $${ema9.toFixed(2)} | EMA21: $${ema21.toFixed(2)}\n${ema9>ema21?"Bullish crossover ▲":"Bearish crossover ▼"}\n5m candles: ${closes5m.length}`};
     }catch(e){console.error("[RADAR] FAILED",e);updates["radar"]={real:false};}
-    // SHIELD: Binance order book imbalance
+
+    // SHIELD: DexScreener order book proxy
     try{
-      const r=await fetch(`/api/market?type=depth&sym=${sym}`);
+      const r=await tf("DEX-Depth","/api/market?type=depth");
       const d=await r.json();
       const bids:(string[])[]=(d.data?.bids||[]).slice(0,10);
       const asks:(string[])[]=(d.data?.asks||[]).slice(0,10);
@@ -1217,11 +1227,160 @@ export default function KYMIA(){
       const ratio=bidVol/(bidVol+askVol||1);
       const sig=ratio>0.6?"BUY":ratio<0.4?"SELL":"HOLD";
       const conf=Math.round(50+Math.abs(ratio-0.5)*80);
-      console.log("[SHIELD] /api/market?type=depth | bidVol=$"+bidVol.toFixed(0)+" askVol=$"+askVol.toFixed(0)+" ratio="+ratio.toFixed(3)+" → SIG:"+sig+" CONF:"+conf);
+      console.log("[SHIELD] bidVol=$"+bidVol.toFixed(0)+" askVol=$"+askVol.toFixed(0)+" ratio="+ratio.toFixed(3)+" → SIG:"+sig+" CONF:"+conf);
       updates["shield"]={sig,conf,real:true,th:`Bid wall: $${(bidVol/1e3).toFixed(0)}K\nAsk wall: $${(askVol/1e3).toFixed(0)}K\nImbalance: ${(ratio*100).toFixed(0)}% bids`};
     }catch(e){console.error("[SHIELD] FAILED",e);updates["shield"]={real:false};}
-    // Apply all updates — never overwritten by simulation cycle
-    console.log("[KYMIA] Agent updates:",Object.fromEntries(Object.entries(updates).map(([k,v])=>[k,{sig:v.sig,conf:v.conf,real:v.real}])));
+
+    // ── 10 new agents ─────────────────────────────────────────────────────────
+    // ORACLE: Kraken recent trades — real order flow
+    try{
+      const r=await tf("Kraken-Flow","/api/market?type=orderflow");
+      const d=await r.json();
+      const bp:number=d.buyPressure??0.5;
+      const sig=bp>0.58?"BUY":bp<0.42?"SELL":"HOLD";
+      const conf=Math.round(50+Math.abs(bp-0.5)*100);
+      console.log("[ORACLE] buyPressure="+bp.toFixed(3)+" ("+d.tradeCount+" trades) → SIG:"+sig+" CONF:"+conf);
+      updates["oracle"]={sig,conf,real:true,th:`Order flow (${d.tradeCount} trades)\nBuy vol: ${(d.buyVol||0).toFixed(2)} SOL\nSell vol: ${(d.sellVol||0).toFixed(2)} SOL\nFlow bias: ${(bp*100).toFixed(0)}% buy`};
+    }catch(e){console.error("[ORACLE] FAILED",e);updates["oracle"]={real:false};}
+
+    // PHANTOM: Deribit futures — OI + funding rate
+    try{
+      const r=await tf("Deribit","/api/market?type=options");
+      const d=await r.json();
+      const fr:number=d.fundingRate??0;
+      const oi:number=d.openInterest??0;
+      // Positive funding = longs paying = crowded longs = SELL risk
+      // Negative funding = shorts paying = crowded shorts = BUY opportunity
+      const sig=fr<-0.0003?"BUY":fr>0.0003?"SELL":"HOLD";
+      const conf=Math.round(50+Math.min(Math.abs(fr)*100000,40));
+      console.log("[PHANTOM] fundingRate="+fr.toFixed(6)+" OI="+oi.toFixed(0)+" → SIG:"+sig+" CONF:"+conf);
+      updates["phantom"]={sig,conf,real:true,th:`Deribit index: $${(d.indexPrice||0).toFixed(2)}\nOpen interest: ${(oi/1e6).toFixed(2)}M\nFunding 8h: ${(fr*100).toFixed(4)}%\n${fr<0?"Shorts paying — squeeze risk":"Longs paying — cascade risk"}`};
+    }catch(e){console.error("[PHANTOM] FAILED",e);updates["phantom"]={real:false};}
+
+    // TITAN: SMA50 vs SMA200 market regime
+    try{
+      const r=await tf("Kraken-SMA","/api/market?type=sma");
+      const d=await r.json();
+      const regime:string=d.regime??"neutral";
+      const sig=regime==="bull"?"BUY":regime==="bear"?"SELL":"HOLD";
+      const dist=Math.abs(((d.sma50||0)-(d.sma200||1))/(d.sma200||1)*100);
+      const conf=Math.round(60+Math.min(dist*3,35));
+      console.log("[TITAN] regime="+regime+" SMA50="+d.sma50?.toFixed(2)+" SMA200="+d.sma200?.toFixed(2)+" → SIG:"+sig+" CONF:"+conf);
+      updates["titan"]={sig,conf,real:true,th:`Macro regime: ${regime.toUpperCase()}\nSMA50: $${(d.sma50||0).toFixed(2)}\nSMA200: $${(d.sma200||0).toFixed(2)}\n${regime==="bull"?"Golden cross — bull market":"Death cross — bear market"}`};
+    }catch(e){console.error("[TITAN] FAILED",e);updates["titan"]={real:false};}
+
+    // HYDRA: liquidation pressure (CoinGlass → Deribit proxy fallback)
+    try{
+      const r=await tf("Liq","/api/market?type=liquidations");
+      const d=await r.json();
+      const ratio:number=d.ratio??0.5;
+      // ratio > 0.5 = more long liquidations = bearish pressure
+      const sig=ratio>0.65?"SELL":ratio<0.35?"BUY":"HOLD";
+      const conf=Math.round(50+Math.abs(ratio-0.5)*80);
+      console.log("[HYDRA] liquidationRatio="+ratio.toFixed(3)+" source="+d.source+" → SIG:"+sig+" CONF:"+conf);
+      updates["hydra"]={sig,conf,real:true,th:`Source: ${d.source||"deribit-proxy"}\nLong liqs: $${((d.longLiqs||0)/1e3).toFixed(1)}K\nShort liqs: $${((d.shortLiqs||0)/1e3).toFixed(1)}K\n${ratio>0.5?"Long cascade risk":"Short squeeze risk"}`};
+    }catch(e){console.error("[HYDRA] FAILED",e);updates["hydra"]={real:false};}
+
+    // DELTA: Jupiter vs Raydium arbitrage spread
+    try{
+      const r=await tf("Arb","/api/market?type=arb");
+      const d=await r.json();
+      const spread:number=d.spreadPct??0;
+      // spread > 0 = Raydium more expensive than Jupiter → sell on Raydium, buy on Jupiter
+      const sig=spread>0.3?"BUY":spread<-0.3?"SELL":"HOLD";
+      const conf=Math.round(50+Math.min(Math.abs(spread)*50,45));
+      console.log("[DELTA] jup=$"+d.jupiterPrice?.toFixed(4)+" ray=$"+d.raydiumPrice?.toFixed(4)+" spread="+spread.toFixed(4)+"% → SIG:"+sig+" CONF:"+conf);
+      updates["delta"]={sig,conf,real:true,th:`Jupiter: $${(d.jupiterPrice||0).toFixed(4)}\nRaydium: $${(d.raydiumPrice||0).toFixed(4)}\nSpread: ${spread>0?"+":""}${spread.toFixed(4)}%\n${Math.abs(spread)>0.3?"Arb opportunity active":"Prices converged"}`};
+    }catch(e){console.error("[DELTA] FAILED",e);updates["delta"]={real:false};}
+
+    // RAZOR: 1m RSI + MACD scalping signal
+    try{
+      const r=await tf("Kraken-MACD","/api/market?type=macd");
+      const d=await r.json();
+      const rsi:number=d.rsi??50;
+      const hist:number=d.histogram??0;
+      const cross:string=d.macdCross??"none";
+      // BUY: RSI recovering (<55) + MACD bullish cross
+      // SELL: RSI elevated (>55) + MACD bearish cross
+      const sig=rsi<55&&(cross==="bullish"||hist>0)&&rsi>30?"BUY":rsi>55&&(cross==="bearish"||hist<0)?"SELL":"HOLD";
+      const conf=Math.round(55+Math.min(Math.abs(hist)*500,35));
+      console.log("[RAZOR] RSI="+rsi.toFixed(1)+" MACD="+d.macd?.toFixed(4)+" hist="+hist.toFixed(4)+" cross="+cross+" → SIG:"+sig+" CONF:"+conf);
+      updates["razor"]={sig,conf,real:true,th:`RSI(14): ${rsi.toFixed(1)} | MACD cross: ${cross}\nMACD: ${(d.macd||0).toFixed(4)}\nSignal: ${(d.signal||0).toFixed(4)}\nHistogram: ${hist>0?"+":""}${hist.toFixed(4)}`};
+    }catch(e){console.error("[RAZOR] FAILED",e);updates["razor"]={real:false};}
+
+    // VECTOR: ADX trend strength
+    try{
+      const r=await tf("Kraken-ADX","/api/market?type=adx");
+      const d=await r.json();
+      const adx:number=d.adx??25;
+      const trendDir:string=d.trendDir??"up";
+      const strength:string=d.trendStrength??"WEAK";
+      // Strong trend (ADX>25) + direction gives signal; weak trend = HOLD
+      const sig=adx>25&&trendDir==="up"?"BUY":adx>25&&trendDir==="down"?"SELL":"HOLD";
+      const conf=Math.round(50+Math.min(adx,50));
+      console.log("[VECTOR] ADX="+adx.toFixed(1)+" +DI="+d.plusDI?.toFixed(1)+" -DI="+d.minusDI?.toFixed(1)+" → SIG:"+sig+" CONF:"+conf);
+      updates["vector"]={sig,conf,real:true,th:`ADX(14): ${adx.toFixed(1)} — ${strength}\n+DI: ${(d.plusDI||0).toFixed(1)} | -DI: ${(d.minusDI||0).toFixed(1)}\nTrend: ${trendDir.toUpperCase()} | SMA20: $${(d.sma20||0).toFixed(2)}\n${adx>25?"Trend confirmed":"Choppy — no clear trend"}`};
+    }catch(e){console.error("[VECTOR] FAILED",e);updates["vector"]={real:false};}
+
+    // NEURAL: client-side win/loss pattern from session trades
+    try{
+      const closed=tradesRef.current.filter((t:Trade)=>t.pnl!==0);
+      const last50=closed.slice(-50);
+      const last10=closed.slice(-10);
+      const wr10=last10.length>0?last10.filter((t:Trade)=>t.pnl>0).length/last10.length*100:50;
+      const wins=last50.filter((t:Trade)=>t.pnl>0);
+      const losses=last50.filter((t:Trade)=>t.pnl<0);
+      const avgWin=wins.length>0?wins.reduce((s:number,t:Trade)=>s+t.pnl,0)/wins.length:0;
+      const avgLoss=losses.length>0?Math.abs(losses.reduce((s:number,t:Trade)=>s+t.pnl,0)/losses.length):1;
+      const pf=avgWin/avgLoss;
+      let streak=0;
+      if(closed.length>0){
+        const lastWin=closed[closed.length-1].pnl>0;
+        for(let i=closed.length-1;i>=0;i--){
+          if((closed[i].pnl>0)===lastWin)streak++;else break;
+        }
+      }
+      const sig=wr10>60&&pf>1.2?"BUY":wr10<40||pf<0.8?"SELL":"HOLD";
+      const conf=Math.round(50+Math.abs(wr10-50)*0.6);
+      console.log("[NEURAL] WR10="+wr10.toFixed(0)+"% PF="+pf.toFixed(2)+"x streak="+streak+" → SIG:"+sig+" CONF:"+conf);
+      updates["neural"]={sig,conf,real:true,th:`Rolling WR(10): ${wr10.toFixed(0)}%\nProfit factor: ${pf.toFixed(2)}x\n${last10.length>0?(closed[closed.length-1]?.pnl>0?"Win":"Loss")+" streak: "+streak:"Awaiting trades..."}`};
+    }catch(e){console.error("[NEURAL] FAILED",e);updates["neural"]={real:false};}
+
+    // WATCH: real latency monitor from actual API calls this cycle
+    try{
+      const avgMs=lat.reduce((s,l)=>s+l.ms,0)/(lat.length||1);
+      const maxMs=lat.length>0?Math.max(...lat.map(l=>l.ms)):0;
+      const slowest=lat.length>0?[...lat].sort((a,b)=>b.ms-a.ms)[0]:{name:"—",ms:0};
+      const ok=lat.filter(l=>l.ms<800).length;
+      const sig=maxMs<800?"BUY":maxMs>2000?"SELL":"HOLD"; // BUY = all systems nominal
+      const conf=Math.round(Math.max(40,90-avgMs/20));
+      console.log("[WATCH] avg="+Math.round(avgMs)+"ms max="+maxMs+"ms slowest="+slowest.name+" → SIG:"+sig+" CONF:"+conf);
+      updates["watch"]={sig,conf,real:true,th:`${ok}/${lat.length} endpoints <800ms\nAvg: ${Math.round(avgMs)}ms | Max: ${maxMs}ms\nSlowest: ${slowest.name} ${slowest.ms}ms\n${maxMs<800?"All systems nominal":"Latency degraded"}`};
+    }catch(e){console.error("[WATCH] FAILED",e);updates["watch"]={real:false};}
+
+    // CONSENSUS: weighted aggregation of all 17 non-consensus agents
+    try{
+      // Merge updates with current agSt for agents not updated this cycle
+      const merged:{[k:string]:Partial<AgentState>}={};
+      for(const a of AGENTS){if(a.id!=="consensus")merged[a.id]={...agStRef.current[a.id],...(updates[a.id]||{})};}
+      const active=Object.values(merged).filter(ag=>ag.sig&&ag.sig!==null);
+      let buyW=0,sellW=0,totalW=0;
+      for(const ag of active){
+        const w=(ag.conf??50)/100;totalW+=w;
+        if(ag.sig==="BUY")buyW+=w;else if(ag.sig==="SELL")sellW+=w;
+      }
+      const buyPct=totalW>0?buyW/totalW:0;
+      const sellPct=totalW>0?sellW/totalW:0;
+      const dir=buyPct>=sellPct?"BUY":"SELL";
+      const agreePct=dir==="BUY"?buyPct:sellPct;
+      const sig=agreePct>=0.60?dir:"HOLD";
+      const conf=Math.round(agreePct*100);
+      console.log("[CONSENSUS] active="+active.length+" BUY="+Math.round(buyPct*100)+"% SELL="+Math.round(sellPct*100)+"% agree="+Math.round(agreePct*100)+"% → SIG:"+sig+" CONF:"+conf);
+      updates["consensus"]={sig,conf,real:true,on:true,th:`${active.length}/17 agents reporting\nBUY weight: ${Math.round(buyPct*100)}% | SELL: ${Math.round(sellPct*100)}%\nAgreement: ${Math.round(agreePct*100)}%\n${sig==="HOLD"?"No consensus (need 60%+)":dir+" consensus confirmed"}`};
+    }catch(e){console.error("[CONSENSUS] FAILED",e);updates["consensus"]={real:false};}
+
+    // Apply all updates
+    console.log("[KYMIA] All agents:",Object.fromEntries(Object.entries(updates).map(([k,v])=>[k,{sig:v.sig,conf:v.conf,real:v.real}])));
     console.groupEnd();
     setAgSt(prev=>{
       const n={...prev};
@@ -1333,8 +1492,8 @@ export default function KYMIA(){
     setTrades(t=>[{id:card.id,sym,side:"SELL",qty:0,price,pnl,conf:80,t:card.t,ms:Date.now(),agent,reason:reason||agent},...t.slice(0,99)]);
   };
 
-  // Real-data agents — NEVER overwritten by simulation
-  const REAL_AGENT_IDS=new Set(["leviathan","lens","surge","atlas","echo","radar","shield"]);
+  // Real-data agents — NEVER overwritten by simulation (only AEGIS remains sim)
+  const REAL_AGENT_IDS=new Set(["leviathan","lens","surge","atlas","echo","radar","shield","oracle","phantom","titan","hydra","neural","watch","delta","razor","vector","consensus"]);
 
   // Agent cycle — simulation only for non-real agents
   useEffect(()=>{
