@@ -1139,46 +1139,62 @@ export default function KYMIA(){
   const runRealAgents=useCallback(async()=>{
     const sym="SOLUSDT";
     const updates:{[k:string]:Partial<AgentState>}={};
+    console.group("[KYMIA] runRealAgents — "+new Date().toISOString());
     // LEVIATHAN: DexScreener whale buy pressure
     try{
       const r=await fetch("/api/dexscreener?type=whale&pair=So11111111111111111111111111111111111111112");
       const d=await r.json();
       const bp:number=d.buyPressure??0.5;
-      updates["leviathan"]={sig:bp>0.62?"BUY":bp<0.38?"SELL":"HOLD",conf:Math.round(60+bp*40),real:true,th:`CEX buy pressure: ${(bp*100).toFixed(0)}%\nVol 24h: $${(d.volume24h/1e6).toFixed(1)}M\n${bp>0.62?"Whale accumulation":"Whale distribution"}`};
+      const sig=bp>0.62?"BUY":bp<0.38?"SELL":"HOLD";
+      const conf=Math.round(60+bp*40);
+      console.log("[LEVIATHAN] /api/dexscreener?type=whale | buyPressure="+bp.toFixed(3)+" vol24h=$"+d.volume24h+" → SIG:"+sig+" CONF:"+conf);
+      updates["leviathan"]={sig,conf,real:true,th:`CEX buy pressure: ${(bp*100).toFixed(0)}%\nVol 24h: $${(d.volume24h/1e6).toFixed(1)}M\n${bp>0.62?"Whale accumulation":"Whale distribution"}`};
       setDataStatus(s=>({...s,lastUpdate:Date.now()}));
-    }catch{updates["leviathan"]={real:false};}
+    }catch(e){console.error("[LEVIATHAN] FAILED",e);updates["leviathan"]={real:false};}
     // LENS: Binance RSI
     try{
       const r=await fetch(`/api/market?type=rsi&sym=${sym}`);
       const d=await r.json();
       const closes:number[]=(d.data||[]).map((c:unknown[])=>parseFloat(String(c[4])));
       const rsi=calcRSI(closes,14);
-      updates["lens"]={sig:rsi<40?"BUY":rsi>65?"SELL":"HOLD",conf:Math.round(50+Math.abs(rsi-50)*0.9),real:true,th:`Binance RSI(14): ${rsi.toFixed(1)}\n${rsi<40?"Oversold — BUY signal":rsi>65?"Overbought — SELL signal":"Neutral zone"}\n1m candles: ${closes.length}`};
+      const sig=rsi<40?"BUY":rsi>65?"SELL":"HOLD";
+      const conf=Math.round(50+Math.abs(rsi-50)*0.9);
+      console.log("[LENS] /api/market?type=rsi | candles="+closes.length+" RSI(14)="+rsi.toFixed(2)+" → SIG:"+sig+" CONF:"+conf);
+      updates["lens"]={sig,conf,real:true,th:`Binance RSI(14): ${rsi.toFixed(1)}\n${rsi<40?"Oversold — BUY signal":rsi>65?"Overbought — SELL signal":"Neutral zone"}\n1m candles: ${closes.length}`};
       setDataStatus(s=>({...s,binance:"ok",lastUpdate:Date.now()}));
-    }catch{updates["lens"]={real:false};setDataStatus(s=>({...s,binance:"err"}));}
+    }catch(e){console.error("[LENS] FAILED",e);updates["lens"]={real:false};setDataStatus(s=>({...s,binance:"err"}));}
     // SURGE: Binance 24h volume
     try{
       const r=await fetch(`/api/market?type=volume&sym=${sym}`);
       const d=await r.json();
       const change=parseFloat(d.data?.priceChangePercent||"0");
       const vol=parseFloat(d.data?.volume||"0");
-      updates["surge"]={sig:change>3&&vol>1e6?"BUY":change<-3?"SELL":"HOLD",conf:Math.round(55+Math.min(Math.abs(change)*3,40)),real:true,th:`24h change: ${change>0?"+":""}${change.toFixed(2)}%\nVolume: ${(vol/1e3).toFixed(0)}K SOL\nHigh: $${parseFloat(d.data?.highPrice||"0").toFixed(2)}`};
-    }catch{updates["surge"]={real:false};}
+      const sig=change>3&&vol>1e6?"BUY":change<-3?"SELL":"HOLD";
+      const conf=Math.round(55+Math.min(Math.abs(change)*3,40));
+      console.log("[SURGE] /api/market?type=volume | priceChange="+change.toFixed(2)+"% vol="+vol.toFixed(0)+" → SIG:"+sig+" CONF:"+conf);
+      updates["surge"]={sig,conf,real:true,th:`24h change: ${change>0?"+":""}${change.toFixed(2)}%\nVolume: ${(vol/1e3).toFixed(0)}K SOL\nHigh: $${parseFloat(d.data?.highPrice||"0").toFixed(2)}`};
+    }catch(e){console.error("[SURGE] FAILED",e);updates["surge"]={real:false};}
     // ATLAS: CoinGecko BTC dominance
     try{
       const r=await fetch("/api/market?type=dominance");
       const d=await r.json();
       const dom:number=d.btcDom??50;
-      updates["atlas"]={sig:dom>58?"SELL":dom<48?"BUY":"HOLD",conf:Math.round(50+Math.abs(dom-53)*1.2),real:true,th:`BTC dominance: ${dom.toFixed(1)}%\n${dom>58?"Alt risk-off — reduce exposure":dom<48?"Alt season — risk-on":"Neutral macro regime"}`};
+      const sig=dom>58?"SELL":dom<48?"BUY":"HOLD";
+      const conf=Math.round(50+Math.abs(dom-53)*1.2);
+      console.log("[ATLAS] /api/market?type=dominance | btcDom="+dom.toFixed(2)+"% → SIG:"+sig+" CONF:"+conf);
+      updates["atlas"]={sig,conf,real:true,th:`BTC dominance: ${dom.toFixed(1)}%\n${dom>58?"Alt risk-off — reduce exposure":dom<48?"Alt season — risk-on":"Neutral macro regime"}`};
       setDataStatus(s=>({...s,coingecko:"ok",lastUpdate:Date.now()}));
-    }catch{updates["atlas"]={real:false};setDataStatus(s=>({...s,coingecko:"err"}));}
+    }catch(e){console.error("[ATLAS] FAILED",e);updates["atlas"]={real:false};setDataStatus(s=>({...s,coingecko:"err"}));}
     // ECHO: Fear & Greed
     try{
       const r=await fetch("/api/market?type=fear");
       const d=await r.json();
       const fng:number=d.value??50;
-      updates["echo"]={sig:fng<30?"BUY":fng>75?"SELL":"HOLD",conf:Math.round(45+Math.abs(fng-50)*0.8),real:true,th:`Fear & Greed: ${fng} (${d.label||"Neutral"})\n${fng<30?"Extreme Fear — contrarian BUY":fng>75?"Extreme Greed — reduce exposure":"Sentiment neutral"}`};
-    }catch{updates["echo"]={real:false};}
+      const sig=fng<30?"BUY":fng>75?"SELL":"HOLD";
+      const conf=Math.round(45+Math.abs(fng-50)*0.8);
+      console.log("[ECHO] /api/market?type=fear | value="+fng+" label="+d.label+" → SIG:"+sig+" CONF:"+conf);
+      updates["echo"]={sig,conf,real:true,th:`Fear & Greed: ${fng} (${d.label||"Neutral"})\n${fng<30?"Extreme Fear — contrarian BUY":fng>75?"Extreme Greed — reduce exposure":"Sentiment neutral"}`};
+    }catch(e){console.error("[ECHO] FAILED",e);updates["echo"]={real:false};}
     // RADAR: Binance EMA 9/21 crossover
     try{
       const r=await fetch(`/api/market?type=ema&sym=${sym}`);
@@ -1186,8 +1202,10 @@ export default function KYMIA(){
       const closes5m:number[]=(d.data||[]).map((c:unknown[])=>parseFloat(String(c[4])));
       const ema9=calcEMA(closes5m,9),ema21=calcEMA(closes5m,21);
       const cross=ema9>ema21?"BUY":ema9<ema21?"SELL":"HOLD";
-      updates["radar"]={sig:cross,conf:Math.round(60+Math.abs(ema9-ema21)/ema21*5000),real:true,th:`EMA9: $${ema9.toFixed(2)} | EMA21: $${ema21.toFixed(2)}\n${ema9>ema21?"Bullish crossover ▲":"Bearish crossover ▼"}\n5m candles: ${closes5m.length}`};
-    }catch{updates["radar"]={real:false};}
+      const conf=Math.round(60+Math.abs(ema9-ema21)/ema21*5000);
+      console.log("[RADAR] /api/market?type=ema | candles="+closes5m.length+" EMA9="+ema9.toFixed(4)+" EMA21="+ema21.toFixed(4)+" → SIG:"+cross+" CONF:"+conf);
+      updates["radar"]={sig:cross,conf,real:true,th:`EMA9: $${ema9.toFixed(2)} | EMA21: $${ema21.toFixed(2)}\n${ema9>ema21?"Bullish crossover ▲":"Bearish crossover ▼"}\n5m candles: ${closes5m.length}`};
+    }catch(e){console.error("[RADAR] FAILED",e);updates["radar"]={real:false};}
     // SHIELD: Binance order book imbalance
     try{
       const r=await fetch(`/api/market?type=depth&sym=${sym}`);
@@ -1197,9 +1215,14 @@ export default function KYMIA(){
       const bidVol=bids.reduce((s:number,b:string[])=>s+parseFloat(b[1])*parseFloat(b[0]),0);
       const askVol=asks.reduce((s:number,a:string[])=>s+parseFloat(a[1])*parseFloat(a[0]),0);
       const ratio=bidVol/(bidVol+askVol||1);
-      updates["shield"]={sig:ratio>0.6?"BUY":ratio<0.4?"SELL":"HOLD",conf:Math.round(50+Math.abs(ratio-0.5)*80),real:true,th:`Bid wall: $${(bidVol/1e3).toFixed(0)}K\nAsk wall: $${(askVol/1e3).toFixed(0)}K\nImbalance: ${(ratio*100).toFixed(0)}% bids`};
-    }catch{updates["shield"]={real:false};}
-    // Apply all updates
+      const sig=ratio>0.6?"BUY":ratio<0.4?"SELL":"HOLD";
+      const conf=Math.round(50+Math.abs(ratio-0.5)*80);
+      console.log("[SHIELD] /api/market?type=depth | bidVol=$"+bidVol.toFixed(0)+" askVol=$"+askVol.toFixed(0)+" ratio="+ratio.toFixed(3)+" → SIG:"+sig+" CONF:"+conf);
+      updates["shield"]={sig,conf,real:true,th:`Bid wall: $${(bidVol/1e3).toFixed(0)}K\nAsk wall: $${(askVol/1e3).toFixed(0)}K\nImbalance: ${(ratio*100).toFixed(0)}% bids`};
+    }catch(e){console.error("[SHIELD] FAILED",e);updates["shield"]={real:false};}
+    // Apply all updates — never overwritten by simulation cycle
+    console.log("[KYMIA] Agent updates:",Object.fromEntries(Object.entries(updates).map(([k,v])=>[k,{sig:v.sig,conf:v.conf,real:v.real}])));
+    console.groupEnd();
     setAgSt(prev=>{
       const n={...prev};
       for(const[id,u] of Object.entries(updates)){
@@ -1310,32 +1333,46 @@ export default function KYMIA(){
     setTrades(t=>[{id:card.id,sym,side:"SELL",qty:0,price,pnl,conf:80,t:card.t,ms:Date.now(),agent,reason:reason||agent},...t.slice(0,99)]);
   };
 
-  // Agent cycle
+  // Real-data agents — NEVER overwritten by simulation
+  const REAL_AGENT_IDS=new Set(["leviathan","lens","surge","atlas","echo","radar","shield"]);
+
+  // Agent cycle — simulation only for non-real agents
   useEffect(()=>{
     const ids=AGENTS.map(a=>a.id).filter(id=>!disabled.has(id));
+    // Sim agents only (exclude real-data agents)
+    const simIds=ids.filter(id=>!REAL_AGENT_IDS.has(id));
     const iv=setInterval(()=>{
-      const act=new Set(Array.from({length:4+Math.floor(Math.random()*7)},()=>ids[Math.floor(Math.random()*ids.length)]));
-      setDebate([ids[Math.floor(Math.random()*ids.length)],ids[Math.floor(Math.random()*ids.length)]]);
+      const act=new Set(Array.from({length:4+Math.floor(Math.random()*7)},()=>simIds[Math.floor(Math.random()*simIds.length)]));
+      setDebate([simIds[Math.floor(Math.random()*simIds.length)],simIds[Math.floor(Math.random()*simIds.length)]]);
       setEntropy(e=>Math.max(10,Math.min(90,e+(Math.random()-.5)*12)));
       setAgSt(prev=>{
         const next={...prev};
         for(const a of AGENTS){
+          // ── Real-data agents: preserve signal/conf/th from runRealAgents ──
+          if(REAL_AGENT_IDS.has(a.id)){
+            // Only update `on` state; never touch sig/conf/th/real
+            next[a.id]={...prev[a.id],on:!disabled.has(a.id)&&prev[a.id]?.sig!=null};
+            continue;
+          }
+          // ── Sim agents: random cycle as before ──
           const isOn=act.has(a.id)&&!disabled.has(a.id);
           const tl=TH[a.id]||["Monitoring..."];
           const sig=Math.random()>.55?"BUY":Math.random()>.5?"SELL":"HOLD";
-          next[a.id]={on:isOn,conf:isOn?55+Math.floor(Math.random()*42):prev[a.id]?.conf??null,sig:isOn?sig:prev[a.id]?.sig??null,th:isOn?tl[Math.floor(Math.random()*tl.length)]:prev[a.id]?.th??""};
+          next[a.id]={on:isOn,conf:isOn?55+Math.floor(Math.random()*42):prev[a.id]?.conf??null,sig:isOn?sig:prev[a.id]?.sig??null,th:isOn?tl[Math.floor(Math.random()*tl.length)]:prev[a.id]?.th??"",real:false};
         }
         return next;
       });
-      if(running&&Math.random()>.4){
-        const id=ids[Math.floor(Math.random()*ids.length)];
+      // Log line: only sim agents, use their static TH copy (no new random signal)
+      if(running&&Math.random()>.4&&simIds.length>0){
+        const id=simIds[Math.floor(Math.random()*simIds.length)];
         const ag=AGENTS.find(a=>a.id===id);
         const tl=TH[id]||["Monitoring..."];
-        const sig=Math.random()>.55?"BUY":Math.random()>.5?"SELL":"HOLD";
-        log(ag?.s||id.slice(0,5).toUpperCase(),tl[Math.floor(Math.random()*tl.length)],sig==="BUY"?K.g:sig==="SELL"?K.r:K.tx);
+        const curSig=agStRef.current[id]?.sig||"HOLD";
+        log(ag?.s||id.slice(0,5).toUpperCase(),tl[Math.floor(Math.random()*tl.length)],curSig==="BUY"?K.g:curSig==="SELL"?K.r:K.tx);
       }
     },3000);
     return()=>clearInterval(iv);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   },[running,disabled,log]);
 
   // Trade execution — multi-TF + Kelly + momentum + anti-correlation
