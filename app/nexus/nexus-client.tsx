@@ -190,7 +190,9 @@ const TH:{[k:string]:string[]}={
 };
 
 type PriceData={price:number,prev:number,trend:string,change:number,rsi:number,hist:number[]};
-type AgentState={on:boolean,conf:number|null,sig:string|null,th:string};
+type AgentState={on:boolean,conf:number|null,sig:string|null,th:string,real?:boolean};
+type NewToken={address:string,name:string,price:string,change1h:number,volume24h:number,liquidity:number,rugScore:number,buys:number,sells:number};
+type DataStatus={jupiter:"ok"|"err"|"loading",binance:"ok"|"err"|"loading",coingecko:"ok"|"err"|"loading",lastUpdate:number};
 type Position={qty:number,avg:number,peak?:number,entryMs?:number};
 type Trade={id:string,sym:string,side:string,qty:number,price:number,pnl:number,conf:number,t:string,ms:number,agent?:string,reason?:string};
 type LogEntry={t:string,ag:string,msg:string,col:string};
@@ -1108,6 +1110,9 @@ export default function KYMIA(){
   const [whaleAlert,setWhaleAlert]=useState(false);
   const [beatChoice,setBeatChoice]=useState<{sym:string,side:string}|null>(null);
   const [beatResult,setBeatResult]=useState<string|null>(null);
+  const [newTokens,setNewTokens]=useState<NewToken[]>([]);
+  const [scannerLoading,setScannerLoading]=useState(false);
+  const [dataStatus,setDataStatus]=useState<DataStatus>({jupiter:"loading",binance:"loading",coingecko:"loading",lastUpdate:0});
   const logRef=useRef<HTMLDivElement>(null);
   const swarmRef=useRef<HTMLDivElement>(null);
   const entropyRef=useRef(entropy);
@@ -1123,6 +1128,108 @@ export default function KYMIA(){
 
   // Black swan user spike
   useEffect(()=>{if(blackSwan)setLiveUsers(u=>u+340);},[blackSwan]);
+
+  // ── Real agent data fetch (30s cycle) ────────────────────────────────
+  const calcEMA=(prices:number[],period:number):number=>{
+    if(prices.length<period)return prices[prices.length-1]||0;
+    const k=2/(period+1);let ema=prices[0];
+    for(let i=1;i<prices.length;i++)ema=prices[i]*k+ema*(1-k);
+    return ema;
+  };
+  const runRealAgents=useCallback(async()=>{
+    const sym="SOLUSDT";
+    const updates:{[k:string]:Partial<AgentState>}={};
+    // LEVIATHAN: DexScreener whale buy pressure
+    try{
+      const r=await fetch("/api/dexscreener?type=whale&pair=So11111111111111111111111111111111111111112");
+      const d=await r.json();
+      const bp:number=d.buyPressure??0.5;
+      updates["leviathan"]={sig:bp>0.62?"BUY":bp<0.38?"SELL":"HOLD",conf:Math.round(60+bp*40),real:true,th:`CEX buy pressure: ${(bp*100).toFixed(0)}%\nVol 24h: $${(d.volume24h/1e6).toFixed(1)}M\n${bp>0.62?"Whale accumulation":"Whale distribution"}`};
+      setDataStatus(s=>({...s,lastUpdate:Date.now()}));
+    }catch{updates["leviathan"]={real:false};}
+    // LENS: Binance RSI
+    try{
+      const r=await fetch(`/api/market?type=rsi&sym=${sym}`);
+      const d=await r.json();
+      const closes:number[]=(d.data||[]).map((c:unknown[])=>parseFloat(String(c[4])));
+      const rsi=calcRSI(closes,14);
+      updates["lens"]={sig:rsi<40?"BUY":rsi>65?"SELL":"HOLD",conf:Math.round(50+Math.abs(rsi-50)*0.9),real:true,th:`Binance RSI(14): ${rsi.toFixed(1)}\n${rsi<40?"Oversold — BUY signal":rsi>65?"Overbought — SELL signal":"Neutral zone"}\n1m candles: ${closes.length}`};
+      setDataStatus(s=>({...s,binance:"ok",lastUpdate:Date.now()}));
+    }catch{updates["lens"]={real:false};setDataStatus(s=>({...s,binance:"err"}));}
+    // SURGE: Binance 24h volume
+    try{
+      const r=await fetch(`/api/market?type=volume&sym=${sym}`);
+      const d=await r.json();
+      const change=parseFloat(d.data?.priceChangePercent||"0");
+      const vol=parseFloat(d.data?.volume||"0");
+      updates["surge"]={sig:change>3&&vol>1e6?"BUY":change<-3?"SELL":"HOLD",conf:Math.round(55+Math.min(Math.abs(change)*3,40)),real:true,th:`24h change: ${change>0?"+":""}${change.toFixed(2)}%\nVolume: ${(vol/1e3).toFixed(0)}K SOL\nHigh: $${parseFloat(d.data?.highPrice||"0").toFixed(2)}`};
+    }catch{updates["surge"]={real:false};}
+    // ATLAS: CoinGecko BTC dominance
+    try{
+      const r=await fetch("/api/market?type=dominance");
+      const d=await r.json();
+      const dom:number=d.btcDom??50;
+      updates["atlas"]={sig:dom>58?"SELL":dom<48?"BUY":"HOLD",conf:Math.round(50+Math.abs(dom-53)*1.2),real:true,th:`BTC dominance: ${dom.toFixed(1)}%\n${dom>58?"Alt risk-off — reduce exposure":dom<48?"Alt season — risk-on":"Neutral macro regime"}`};
+      setDataStatus(s=>({...s,coingecko:"ok",lastUpdate:Date.now()}));
+    }catch{updates["atlas"]={real:false};setDataStatus(s=>({...s,coingecko:"err"}));}
+    // ECHO: Fear & Greed
+    try{
+      const r=await fetch("/api/market?type=fear");
+      const d=await r.json();
+      const fng:number=d.value??50;
+      updates["echo"]={sig:fng<30?"BUY":fng>75?"SELL":"HOLD",conf:Math.round(45+Math.abs(fng-50)*0.8),real:true,th:`Fear & Greed: ${fng} (${d.label||"Neutral"})\n${fng<30?"Extreme Fear — contrarian BUY":fng>75?"Extreme Greed — reduce exposure":"Sentiment neutral"}`};
+    }catch{updates["echo"]={real:false};}
+    // RADAR: Binance EMA 9/21 crossover
+    try{
+      const r=await fetch(`/api/market?type=ema&sym=${sym}`);
+      const d=await r.json();
+      const closes5m:number[]=(d.data||[]).map((c:unknown[])=>parseFloat(String(c[4])));
+      const ema9=calcEMA(closes5m,9),ema21=calcEMA(closes5m,21);
+      const cross=ema9>ema21?"BUY":ema9<ema21?"SELL":"HOLD";
+      updates["radar"]={sig:cross,conf:Math.round(60+Math.abs(ema9-ema21)/ema21*5000),real:true,th:`EMA9: $${ema9.toFixed(2)} | EMA21: $${ema21.toFixed(2)}\n${ema9>ema21?"Bullish crossover ▲":"Bearish crossover ▼"}\n5m candles: ${closes5m.length}`};
+    }catch{updates["radar"]={real:false};}
+    // SHIELD: Binance order book imbalance
+    try{
+      const r=await fetch(`/api/market?type=depth&sym=${sym}`);
+      const d=await r.json();
+      const bids:(string[])[]=(d.data?.bids||[]).slice(0,10);
+      const asks:(string[])[]=(d.data?.asks||[]).slice(0,10);
+      const bidVol=bids.reduce((s:number,b:string[])=>s+parseFloat(b[1])*parseFloat(b[0]),0);
+      const askVol=asks.reduce((s:number,a:string[])=>s+parseFloat(a[1])*parseFloat(a[0]),0);
+      const ratio=bidVol/(bidVol+askVol||1);
+      updates["shield"]={sig:ratio>0.6?"BUY":ratio<0.4?"SELL":"HOLD",conf:Math.round(50+Math.abs(ratio-0.5)*80),real:true,th:`Bid wall: $${(bidVol/1e3).toFixed(0)}K\nAsk wall: $${(askVol/1e3).toFixed(0)}K\nImbalance: ${(ratio*100).toFixed(0)}% bids`};
+    }catch{updates["shield"]={real:false};}
+    // Apply all updates
+    setAgSt(prev=>{
+      const n={...prev};
+      for(const[id,u] of Object.entries(updates)){
+        if(n[id])n[id]={...n[id],...u};
+      }
+      return n;
+    });
+  },[]);
+
+  useEffect(()=>{
+    runRealAgents();
+    const iv=setInterval(runRealAgents,30000);
+    return()=>clearInterval(iv);
+  },[runRealAgents]);
+
+  // ── New token scanner (60s cycle) ─────────────────────────────────────
+  const scanNewTokens=useCallback(async()=>{
+    setScannerLoading(true);
+    try{
+      const r=await fetch("/api/dexscreener?type=new-tokens");
+      const d=await r.json();
+      if(d.pairs)setNewTokens(d.pairs);
+    }catch{}finally{setScannerLoading(false);}
+  },[]);
+
+  useEffect(()=>{
+    scanNewTokens();
+    const iv=setInterval(scanNewTokens,60000);
+    return()=>clearInterval(iv);
+  },[scanNewTokens]);
 
   // Demo burst: fire 3 trades quickly after start
   useEffect(()=>{
@@ -1509,12 +1616,18 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
       )}
 
       <div style={{background:"#030710",borderBottom:"1px solid #060B14",padding:"0 16px",display:"flex",gap:2}}>
-        {[["terminal","◈ COMMAND"],["trades","◎ HISTORY"],["crisis","⊞ CRISIS REPLAY"],["dna","🧬 SWARM DNA"]].map(([v,l])=>(
+        {[["terminal","◈ COMMAND"],["trades","◎ HISTORY"],["scanner","⊕ SCANNER"],["crisis","⊞ CRISIS REPLAY"],["dna","🧬 SWARM DNA"]].map(([v,l])=>(
           <button key={v} className={`tab${tab===v?" on":""}`} onClick={()=>setTab(v)}>{l}</button>
         ))}
         <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:12,fontSize:8,color:"#0A1D2A"}}>
           <span>WIN {f2(wr,0)}% · {trades.length} TRADES</span>
-          <span style={{color:K.r+"60"}}>PAPER ONLY</span>
+          <div style={{display:"flex",gap:6}}>
+            {([["● JUP",dataStatus.jupiter],["● BNB",dataStatus.binance],["● CGK",dataStatus.coingecko]] as [string,"ok"|"err"|"loading"][]).map(([lbl,st])=>(
+              <span key={lbl} style={{color:st==="ok"?K.g:st==="err"?K.r:K.dim,fontSize:7,letterSpacing:".04em"}}>{lbl}</span>
+            ))}
+            {dataStatus.lastUpdate>0&&<span style={{color:"#0D1E30",fontSize:7}}>{Math.round((Date.now()-dataStatus.lastUpdate)/1000)}s ago</span>}
+          </div>
+          <span style={{padding:"2px 8px",background:K.c+"10",border:"1px solid "+K.c+"20",color:K.c,borderRadius:2,fontSize:8,letterSpacing:".06em"}}>◈ DEMO · REAL PRICES · VIRTUAL $10K</span>
         </div>
       </div>
 
@@ -1638,6 +1751,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
                       <div style={{flex:1,minWidth:0}}>
                         <div style={{display:"flex",gap:5,alignItems:"center",marginBottom:1}}>
                           <span style={{padding:"1px 5px",background:col+"15",color:col,border:"1px solid "+col+"30",fontSize:7,borderRadius:1}}>{ag.sig==="BUY"?"▲":ag.sig==="SELL"?"▼":"◆"} {s}</span>
+                          {ag.real&&<span style={{padding:"1px 4px",background:K.g+"20",color:K.g,border:"1px solid "+K.g+"40",fontSize:6,borderRadius:1,letterSpacing:".06em"}}>LIVE</span>}
                         </div>
                         <div style={{fontSize:8,color:K.tx,lineHeight:1.3,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:150}}>{ag.th}</div>
                       </div>
@@ -1811,6 +1925,53 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
           </div>
         );
       })()}
+
+      {tab==="scanner"&&(
+        <div style={{flex:1,padding:10,overflow:"auto",display:"flex",flexDirection:"column",gap:8}}>
+          <div className="panel" style={{padding:"8px 12px",display:"flex",alignItems:"center",gap:10}}>
+            <span style={{fontSize:9,color:K.c,letterSpacing:".1em"}}>⊕ NEW TOKEN SCANNER</span>
+            <span style={{fontSize:8,color:K.dim}}>DexScreener · Solana · auto-refresh 60s</span>
+            <button className="btn" onClick={scanNewTokens} disabled={scannerLoading} style={{marginLeft:"auto",padding:"2px 10px",background:K.c+"10",color:K.c,border:"1px solid "+K.c+"30"}}>{scannerLoading?"⟳ SCANNING...":"↻ REFRESH"}</button>
+          </div>
+          {newTokens.length===0
+            ?<div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",color:K.dim,fontSize:11}}>{scannerLoading?"Scanning DexScreener...":"No tokens loaded yet"}</div>
+            :<div className="panel" style={{overflow:"auto",flex:1}}>
+              <table style={{width:"100%",borderCollapse:"collapse"}}>
+                <thead><tr style={{fontSize:8,color:K.dim,borderBottom:"1px solid #060A14",position:"sticky",top:0,background:K.pan}}>
+                  {["TOKEN","PRICE","1H%","VOL 24H","LIQUIDITY","BUY/SELL","RUG SCORE"].map(h=><th key={h} style={{padding:"6px 10px",textAlign:"left",fontWeight:400,letterSpacing:".06em"}}>{h}</th>)}
+                </tr></thead>
+                <tbody>
+                  {newTokens.map((t,i)=>{
+                    const rs=t.rugScore;
+                    const rCol=rs<30?K.g:rs<60?K.gold:K.r;
+                    const chCol=t.change1h>=0?K.g:K.r;
+                    return(
+                      <tr key={i} className="tr" style={{borderBottom:"1px solid #040910",borderLeft:"2px solid "+rCol+"30"}}>
+                        <td style={{padding:"5px 10px",color:K.c,fontWeight:700,fontSize:10}}>{t.name}</td>
+                        <td style={{padding:"5px 10px",color:K.hi,fontSize:9}}>${parseFloat(t.price||"0").toPrecision(4)}</td>
+                        <td style={{padding:"5px 10px",color:chCol,fontSize:9,fontWeight:700}}>{t.change1h>=0?"+":""}{t.change1h.toFixed(1)}%</td>
+                        <td style={{padding:"5px 10px",color:K.tx,fontSize:9}}>${t.volume24h>=1e6?(t.volume24h/1e6).toFixed(1)+"M":t.volume24h>=1e3?(t.volume24h/1e3).toFixed(0)+"K":t.volume24h.toFixed(0)}</td>
+                        <td style={{padding:"5px 10px",color:K.tx,fontSize:9}}>${t.liquidity>=1e6?(t.liquidity/1e6).toFixed(1)+"M":t.liquidity>=1e3?(t.liquidity/1e3).toFixed(0)+"K":t.liquidity.toFixed(0)}</td>
+                        <td style={{padding:"5px 10px",fontSize:9}}>
+                          <span style={{color:K.g}}>{t.buys}▲</span><span style={{color:K.dim}}>/</span><span style={{color:K.r}}>{t.sells}▼</span>
+                        </td>
+                        <td style={{padding:"5px 10px"}}>
+                          <div style={{display:"flex",alignItems:"center",gap:5}}>
+                            <div style={{width:36,height:4,background:"#040910",borderRadius:2}}>
+                              <div style={{width:rs+"%",height:"100%",background:rCol,borderRadius:2}}/>
+                            </div>
+                            <span style={{fontSize:9,color:rCol,fontWeight:700}}>{rs}</span>
+                            <span style={{fontSize:7,color:rCol}}>{rs<30?"SAFE":rs<60?"WARN":"RISK"}</span>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>}
+        </div>
+      )}
 
       {tab==="crisis"&&(
         <div style={{flex:1,padding:10,display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,overflow:"auto"}}>
