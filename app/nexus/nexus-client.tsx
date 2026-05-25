@@ -1289,8 +1289,8 @@ export default function KYMIA(){
       // spread > 0 = Raydium more expensive than Jupiter → sell on Raydium, buy on Jupiter
       const sig=spread>0.3?"BUY":spread<-0.3?"SELL":"HOLD";
       const conf=Math.round(50+Math.min(Math.abs(spread)*50,45));
-      console.log("[DELTA] jup=$"+d.jupiterPrice?.toFixed(4)+" ray=$"+d.raydiumPrice?.toFixed(4)+" spread="+spread.toFixed(4)+"% → SIG:"+sig+" CONF:"+conf);
-      updates["delta"]={sig,conf,real:true,th:`Jupiter: $${(d.jupiterPrice||0).toFixed(4)}\nRaydium: $${(d.raydiumPrice||0).toFixed(4)}\nSpread: ${spread>0?"+":""}${spread.toFixed(4)}%\n${Math.abs(spread)>0.3?"Arb opportunity active":"Prices converged"}`};
+      console.log("[DELTA] kraken=$"+d.krakenPrice?.toFixed(4)+" ray=$"+d.raydiumPrice?.toFixed(4)+" spread="+spread.toFixed(4)+"% → SIG:"+sig+" CONF:"+conf);
+      updates["delta"]={sig,conf,real:true,th:`Kraken (CEX): $${(d.krakenPrice||0).toFixed(4)}\nRaydium (DEX): $${(d.raydiumPrice||0).toFixed(4)}\nSpread: ${spread>0?"+":""}${spread.toFixed(4)}%\n${Math.abs(spread)>0.3?"CEX/DEX arb opportunity":"Prices converged"}`};
     }catch(e){console.error("[DELTA] FAILED",e);updates["delta"]={real:false};}
 
     // RAZOR: 1m RSI + MACD scalping signal

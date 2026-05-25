@@ -260,42 +260,34 @@ export async function GET(req: Request) {
       }
     }
 
-    // DELTA — Cross-exchange arbitrage: Jupiter vs Raydium
+    // DELTA — Cross-exchange arbitrage: Kraken (CEX) vs Raydium DEX (DexScreener)
     if (type === "arb") {
       const SOL_MINT = "So11111111111111111111111111111111111111112";
-      const [jupRes, rayRes] = await Promise.allSettled([
-        fetch(`https://price.jup.ag/v6/price?ids=${SOL_MINT}`, { next: { revalidate: 0 } }),
-        fetch("https://api.raydium.io/v2/main/price", { next: { revalidate: 0 } }),
-      ]);
-      const jupPrice: number =
-        jupRes.status === "fulfilled"
-          ? ((await jupRes.value.json())?.data?.[SOL_MINT]?.price ?? 0)
-          : 0;
+      // Kraken last trade price (CEX reference — already proven to work from Vercel)
+      const krakenRows = await krakenOHLC(1, 2);
+      const krakenPrice = krakenRows[krakenRows.length - 1]?.[4] ?? 0;
+      // Raydium DEX price via DexScreener
       let raydiumPrice = 0;
-      if (rayRes.status === "fulfilled") {
-        try {
-          const rd = await rayRes.value.json();
-          // Raydium v2 price returns {SOL: price, ...} or {data: {SOL: ...}}
-          raydiumPrice = rd?.[SOL_MINT] ?? rd?.SOL ?? rd?.data?.[SOL_MINT] ?? rd?.data?.SOL ?? 0;
-        } catch { raydiumPrice = 0; }
-      }
-      // Fallback: DexScreener Raydium pair
-      if (!raydiumPrice) {
-        try {
-          const dsr = await fetch(
-            "https://api.dexscreener.com/latest/dex/tokens/" + SOL_MINT,
-            { next: { revalidate: 0 } }
-          );
-          const dsd = await dsr.json();
-          const raydiumPair = (dsd?.pairs ?? []).find(
-            (p: Record<string, unknown>) => p.chainId === "solana" && p.dexId === "raydium"
-          );
-          raydiumPrice = parseFloat(String(raydiumPair?.priceUsd ?? 0));
-        } catch { raydiumPrice = jupPrice; }
-      }
-      const spread = raydiumPrice && jupPrice ? raydiumPrice - jupPrice : 0;
-      const spreadPct = jupPrice ? (spread / jupPrice) * 100 : 0;
-      return NextResponse.json({ type: "arb", jupiterPrice: jupPrice, raydiumPrice, spread, spreadPct });
+      try {
+        const dsr = await fetch(
+          "https://api.dexscreener.com/latest/dex/tokens/" + SOL_MINT,
+          { next: { revalidate: 0 } }
+        );
+        const dsd = await dsr.json();
+        const raydiumPair = (dsd?.pairs ?? []).find(
+          (p: Record<string, unknown>) => p.chainId === "solana" && (p.dexId === "raydium" || String(p.dexId).includes("ray"))
+        );
+        if (raydiumPair) {
+          raydiumPrice = parseFloat(String(raydiumPair.priceUsd ?? 0));
+        } else {
+          // Any Solana pair as fallback
+          const anyPair = (dsd?.pairs ?? []).find((p: Record<string, unknown>) => p.chainId === "solana");
+          raydiumPrice = parseFloat(String(anyPair?.priceUsd ?? 0));
+        }
+      } catch { raydiumPrice = 0; }
+      const spread = krakenPrice && raydiumPrice ? raydiumPrice - krakenPrice : 0;
+      const spreadPct = krakenPrice ? (spread / krakenPrice) * 100 : 0;
+      return NextResponse.json({ type: "arb", krakenPrice, raydiumPrice, spread, spreadPct, jupiterPrice: krakenPrice });
     }
 
     // RAZOR — 1m RSI + MACD scalping signal
