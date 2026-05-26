@@ -193,7 +193,7 @@ type PriceData={price:number,prev:number,trend:string,change:number,rsi:number,h
 type AgentState={on:boolean,conf:number|null,sig:string|null,th:string,real?:boolean};
 type NewToken={address:string,name:string,price:string,change1h:number,volume24h:number,liquidity:number,rugScore:number,buys:number,sells:number};
 type DataStatus={jupiter:"ok"|"err"|"loading",binance:"ok"|"err"|"loading",coingecko:"ok"|"err"|"loading",lastUpdate:number};
-type Position={qty:number,avg:number,peak?:number,entryMs?:number};
+type Position={qty:number,avg:number,peak?:number,entryMs?:number,trailActive?:boolean};
 type Trade={id:string,sym:string,side:string,qty:number,price:number,pnl:number,conf:number,t:string,ms:number,agent?:string,reason?:string};
 type LogEntry={t:string,ag:string,msg:string,col:string};
 type WinCard={id:string,sym:string,pnl:number,pct:number,price:number,agent:string,t:string,origin?:{x:number,y:number}};
@@ -321,221 +321,247 @@ function BootSequence({onDone}:{onDone:()=>void}){
   );
 }
 
+// Trade chart modal — SVG price line + entry/SL/TP lines + P&L
+function TradeChartModal({sym,pos,prices,onClose}:{sym:string,pos:Position,prices:{[k:string]:PriceData},onClose:()=>void}){
+  const p=prices[sym];
+  const cur=p?.price||pos.avg;
+  const hist=p?.hist||[pos.avg];
+  const pnlVal=(cur-pos.avg)*pos.qty;
+  const pnlPct=((cur-pos.avg)/pos.avg)*100;
+  const sl=pos.avg*.975;
+  const tp=pos.avg*1.05;
+  const trail=pos.peak?pos.peak*.988:null;
+  const W=360,H=180;
+  const mn=Math.min(...hist,sl)*.998,mx=Math.max(...hist,tp,cur)*1.002;
+  const yp=(v:number)=>H-(((v-mn)/(mx-mn))*H*.85+H*.05);
+  const xp=(i:number)=>(i/(Math.max(hist.length-1,1)))*W;
+  const pts=hist.map((v,i)=>`${xp(i).toFixed(1)},${yp(v).toFixed(1)}`).join(" ");
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.82)",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={onClose}>
+      <div style={{background:"#050f1c",border:"1px solid "+K.c+"44",borderRadius:8,padding:20,width:400,maxWidth:"95vw"}} onClick={e=>e.stopPropagation()}>
+        <div style={{display:"flex",justifyContent:"space-between",marginBottom:12}}>
+          <div style={{fontFamily:"monospace",fontWeight:700,fontSize:15,color:K.hi}}>{sym} POSITION</div>
+          <div style={{fontFamily:"monospace",fontSize:13,color:pnlVal>=0?K.g:K.r,fontWeight:700}}>{pnlVal>=0?"+$":"-$"}{f2(Math.abs(pnlVal))} ({fP(pnlPct)})</div>
+        </div>
+        <svg width={W} height={H} style={{display:"block",marginBottom:12}}>
+          {/* Entry line */}
+          <line x1={0} y1={yp(pos.avg)} x2={W} y2={yp(pos.avg)} stroke={K.gold} strokeWidth="1" strokeDasharray="4 3" opacity=".7"/>
+          <text x={4} y={yp(pos.avg)-3} fontSize="9" fontFamily="monospace" fill={K.gold} opacity=".8">ENTRY ${f2(pos.avg)}</text>
+          {/* SL line */}
+          <line x1={0} y1={yp(sl)} x2={W} y2={yp(sl)} stroke={K.r} strokeWidth="1" strokeDasharray="3 3" opacity=".6"/>
+          <text x={4} y={yp(sl)-3} fontSize="9" fontFamily="monospace" fill={K.r} opacity=".7">SL ${f2(sl)}</text>
+          {/* TP line */}
+          <line x1={0} y1={yp(tp)} x2={W} y2={yp(tp)} stroke={K.g} strokeWidth="1" strokeDasharray="3 3" opacity=".6"/>
+          <text x={4} y={yp(tp)-3} fontSize="9" fontFamily="monospace" fill={K.g} opacity=".7">TP ${f2(tp)}</text>
+          {/* Trail line */}
+          {trail&&<><line x1={0} y1={yp(trail)} x2={W} y2={yp(trail)} stroke={K.c} strokeWidth="1" strokeDasharray="2 2" opacity=".55"/><text x={4} y={yp(trail)-3} fontSize="9" fontFamily="monospace" fill={K.c} opacity=".65">TRAIL ${f2(trail)}</text></>}
+          {/* Price polyline */}
+          <polyline points={pts} fill="none" stroke={K.c} strokeWidth="1.5" opacity=".9"/>
+          {/* Current price dot */}
+          <circle cx={xp(hist.length-1)} cy={yp(cur)} r="3" fill={pnlVal>=0?K.g:K.r}/>
+        </svg>
+        <div style={{display:"flex",gap:8,fontFamily:"monospace",fontSize:11,color:K.dim,marginBottom:14}}>
+          <span>Avg: <b style={{color:K.hi}}>${f2(pos.avg)}</b></span>
+          <span>·</span>
+          <span>Cur: <b style={{color:pnlVal>=0?K.g:K.r}}>${f2(cur)}</b></span>
+          <span>·</span>
+          <span>Qty: <b style={{color:K.hi}}>{pos.qty.toFixed(4)}</b></span>
+          {pos.trailActive&&<><span>·</span><span style={{color:K.gold}}>TRAILING ✓</span></>}
+        </div>
+        <button onClick={onClose} style={{width:"100%",padding:"8px 0",background:"none",border:"1px solid "+K.c+"55",borderRadius:4,color:K.c,fontFamily:"monospace",fontSize:12,cursor:"pointer",letterSpacing:".06em"}}>CLOSE</button>
+      </div>
+    </div>
+  );
+}
+
+// Confirm close modal
+function ConfirmCloseModal({sym,onCancel,onConfirm}:{sym:string,onCancel:()=>void,onConfirm:()=>void}){
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.82)",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={onCancel}>
+      <div style={{background:"#050f1c",border:"1px solid "+K.r+"55",borderRadius:8,padding:24,width:320,textAlign:"center"}} onClick={e=>e.stopPropagation()}>
+        <div style={{fontSize:13,fontFamily:"monospace",fontWeight:700,color:K.hi,marginBottom:8}}>CLOSE POSITION</div>
+        <div style={{fontSize:11,fontFamily:"monospace",color:K.dim,marginBottom:20}}>Manually close <b style={{color:K.gold}}>{sym}</b>?<br/>P&L will be locked at current price.</div>
+        <div style={{display:"flex",gap:10}}>
+          <button onClick={onCancel} style={{flex:1,padding:"8px 0",background:"none",border:"1px solid "+K.dim+"44",borderRadius:4,color:K.dim,fontFamily:"monospace",fontSize:11,cursor:"pointer"}}>CANCEL</button>
+          <button onClick={onConfirm} style={{flex:1,padding:"8px 0",background:K.r+"22",border:"1px solid "+K.r+"88",borderRadius:4,color:K.r,fontFamily:"monospace",fontSize:12,fontWeight:700,cursor:"pointer",letterSpacing:".04em"}}>CONFIRM CLOSE</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Globe3D({trades,blackSwan,whaleAlert,totalPnL,tradeCount}:{trades:Trade[],blackSwan:boolean,whaleAlert:boolean,totalPnL:number,tradeCount:number}){
   const mountRef=useRef<HTMLDivElement>(null);
   const [moneyLabels,setMoneyLabels]=useState<MoneyLabel[]>([]);
-  const [radarWaves,setRadarWaves]=useState<Array<{id:string,x:number,y:number,col:string,born:number}>>([]);
   const [observers]=useState(()=>2800+Math.floor(Math.random()*200));
   const W=280,H=248;
   const prevLen=useRef(0);
-  // Fixed 2D overlay coords — (W=280,H=248)
-  const CITIES_2D:Array<[number,number,string]>=[[W*.28,H*.38,"NYC"],[W*.50,H*.34,"LON"],[W*.76,H*.38,"TYO"],[W*.73,H*.53,"SGP"],[W*.63,H*.43,"DXB"],[W*.74,H*.45,"HKG"]];
+  const arcsRef=useRef<THREE.Line[]>([]);
+  const rendererRef=useRef<THREE.WebGLRenderer|null>(null);
+  const sceneRef=useRef<THREE.Scene|null>(null);
 
   // Session: which market is open by UTC hour
   const h=new Date().getUTCHours();
-  const session=h<8?{name:"ASIA",col:K.gold,cities:[2,3,4,5]}:h<15?{name:"EU",col:K.c,cities:[1]}:{name:"US",col:K.g,cities:[0]};
+  const session=h<8?{name:"ASIA",col:K.gold}:h<15?{name:"EU",col:K.c}:{name:"US",col:K.g};
 
-  // Trade fires → money label + radar wave
+  // Trade fires → money label + arc
   useEffect(()=>{
     if(trades.length>prevLen.current){
       const t=trades[0];
       if(t&&t.pnl!==0){
-        const city=CITIES_2D[Math.floor(Math.random()*CITIES_2D.length)];
-        const wc=CITIES_2D[Math.floor(Math.random()*3)]; // NYSE/LON/TYO only
         const now=Date.now();
-        setMoneyLabels(p=>[...p.slice(-6),{id:Math.random().toString(36).slice(2),x:city[0]+(Math.random()-.5)*18,y:city[1]+(Math.random()-.5)*12,val:t.pnl,born:now}]);
-        setRadarWaves(p=>[...p.slice(-12),{id:Math.random().toString(36).slice(2),x:wc[0],y:wc[1],col:t.pnl>=0?K.g:K.r,born:now}]);
+        setMoneyLabels(p=>[...p.slice(-6),{id:Math.random().toString(36).slice(2),x:60+Math.random()*160,y:60+Math.random()*120,val:t.pnl,born:now}]);
       }
       prevLen.current=trades.length;
     }
   });
 
-  // Periodic radar ping every 2–3s regardless of trades
+  // Money label cleanup
   useEffect(()=>{
-    // NYC=78.4,94.2 | LON=140,84.3 | TYO=212.8,94.2
-    const wcs:Array<[number,number]>=[[78.4,94.2],[140,84.3],[212.8,94.2]];
-    let t:ReturnType<typeof setTimeout>;
-    const fire=()=>{const[wx,wy]=wcs[Math.floor(Math.random()*3)];setRadarWaves(p=>[...p.slice(-12),{id:Math.random().toString(36).slice(2),x:wx,y:wy,col:K.c,born:Date.now()}]);};
-    const sched=()=>{t=setTimeout(()=>{fire();sched();},2000+Math.random()*1500);};
-    sched();
-    return()=>clearTimeout(t);
-  },[]);
-
-  // Unified cleanup
-  useEffect(()=>{
-    const iv=setInterval(()=>{const now=Date.now();setMoneyLabels(p=>p.filter(m=>now-m.born<2800));setRadarWaves(p=>p.filter(w=>now-w.born<1200));},100);
+    const iv=setInterval(()=>{const now=Date.now();setMoneyLabels(p=>p.filter(m=>now-m.born<2800));},100);
     return()=>clearInterval(iv);
   },[]);
+
+  // Three.js Earth setup
   useEffect(()=>{
     const mount=mountRef.current;if(!mount)return;
     const scene=new THREE.Scene();
-    const camera=new THREE.PerspectiveCamera(50,W/H,.1,100);
-    camera.position.z=2.85;
+    sceneRef.current=scene;
+    const camera=new THREE.PerspectiveCamera(45,W/H,.1,1000);
+    camera.position.z=2.8;
     const renderer=new THREE.WebGLRenderer({antialias:true,alpha:true});
+    rendererRef.current=renderer;
     renderer.setSize(W,H);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
     renderer.setClearColor(0x000000,0);
     mount.appendChild(renderer.domElement);
-    const mainHex=blackSwan?K.r:K.c;
-    const mainCol=new THREE.Color(mainHex);
-    const brightCol=new THREE.Color(blackSwan?"#FF8899":"#80F8FF");
-    const dimCol=new THREE.Color(blackSwan?"#280008":"#003055");
 
-    // Tilted globe group — axial tilt reveals true 3D depth as it rotates
+    // Globe group with tilt
     const globeGroup=new THREE.Group();
-    globeGroup.rotation.z=0.22;
+    globeGroup.rotation.z=0.2;
     scene.add(globeGroup);
 
-    // SOLID CORE — opaque sphere occludes back-hemisphere particles naturally via depth testing
-    const coreGeo=new THREE.SphereGeometry(.975,48,48);
-    const coreMat=new THREE.MeshBasicMaterial({color:0x040810});
-    globeGroup.add(new THREE.Mesh(coreGeo,coreMat));
+    // Earth sphere with Phong material + texture
+    const earthGeo=new THREE.SphereGeometry(1,64,64);
+    const loader=new THREE.TextureLoader();
+    const earthMat=new THREE.MeshPhongMaterial({color:0x1a3a5c,shininess:8,specular:new THREE.Color(0x112244)});
+    const earthMesh=new THREE.Mesh(earthGeo,earthMat);
+    globeGroup.add(earthMesh);
+    // Load texture async — won't block render
+    loader.load("https://unpkg.com/three-globe/example/img/earth-blue-marble.jpg",(tex)=>{earthMat.map=tex;earthMat.needsUpdate=true;});
 
-    // PARTICLES — 5000, Fibonacci lattice, front-biased brightness
-    const N=5000;
-    const pPos=new Float32Array(N*3);
-    const pCol=new Float32Array(N*3);
-    for(let i=0;i<N;i++){
-      const phi=Math.acos(1-2*(i+.5)/N);
-      const theta=Math.PI*(1+Math.sqrt(5))*i;
-      const x=Math.sin(phi)*Math.cos(theta),y=Math.sin(phi)*Math.sin(theta),z=Math.cos(phi);
-      pPos[i*3]=x;pPos[i*3+1]=y;pPos[i*3+2]=z;
-      const front=Math.pow(Math.max(0,(z+1)/2),.6);
-      const rnd=Math.random();
-      const mix=dimCol.clone().lerp(mainCol,front*.6+rnd*.4).lerp(brightCol,front*.18);
-      pCol[i*3]=mix.r;pCol[i*3+1]=mix.g;pCol[i*3+2]=mix.b;
-    }
-    const pGeo=new THREE.BufferGeometry();
-    pGeo.setAttribute("position",new THREE.BufferAttribute(pPos,3));
-    pGeo.setAttribute("color",new THREE.BufferAttribute(pCol,3));
-    const pMat=new THREE.PointsMaterial({size:.026,vertexColors:true,transparent:true,opacity:.92,sizeAttenuation:true,depthWrite:false});
-    const globe=new THREE.Points(pGeo,pMat);
-    globeGroup.add(globe);
-
-    // LATITUDE RINGS — 5 rings
-    const latYs=[-0.65,-0.35,0,0.35,0.65];
-    latYs.forEach(yp=>{
-      const r=Math.sqrt(Math.max(0,1-yp*yp));
-      const pts=Array.from({length:65},(_,j)=>new THREE.Vector3(r*Math.cos(j/64*Math.PI*2),yp,r*Math.sin(j/64*Math.PI*2)));
-      const op=yp===0?.32:.16;
-      globeGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),new THREE.LineBasicMaterial({color:mainCol,transparent:true,opacity:op})));
-    });
-
-    // MERIDIAN LINES — 8 longitude lines
-    for(let m=0;m<8;m++){
-      const th=m*Math.PI/8;
-      const pts=Array.from({length:33},(_,j)=>{
-        const p=j/32*Math.PI;
-        return new THREE.Vector3(Math.sin(p)*Math.cos(th),Math.cos(p),Math.sin(p)*Math.sin(th));
-      });
-      globeGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),new THREE.LineBasicMaterial({color:mainCol,transparent:true,opacity:.1})));
-    }
-
-    // CITY NODES — bright pulsing dots on surface
-    const cityLatLon:Array<[number,number]>=[[40.7,-74],[51.5,0],[35.7,139.7],[1.3,103.8],[25.2,55.3],[22.3,114.2]];
-    const cPos2=new Float32Array(cityLatLon.length*3);
-    const cCol2=new Float32Array(cityLatLon.length*3);
-    cityLatLon.forEach(([lat,lon],i)=>{
-      const phi2=(90-lat)*Math.PI/180,th=(lon+180)*Math.PI/180;
-      cPos2[i*3]=Math.sin(phi2)*Math.cos(th);cPos2[i*3+1]=Math.cos(phi2);cPos2[i*3+2]=Math.sin(phi2)*Math.sin(th);
+    // City markers via lat/lng → sphere surface
+    const CITIES:Array<[number,number,string]>=[[40.7,-74,"NYC"],[51.5,0,"LON"],[35.7,139.7,"TYO"],[1.3,103.8,"SGP"],[25.2,55.3,"DXB"],[22.3,114.2,"HKG"]];
+    const latLonToVec3=(lat:number,lon:number,r=1.02)=>{
+      const phi=(90-lat)*Math.PI/180,th=(lon+180)*Math.PI/180;
+      return new THREE.Vector3(r*Math.sin(phi)*Math.cos(th),r*Math.cos(phi),r*Math.sin(phi)*Math.sin(th));
+    };
+    const cityPositions=new Float32Array(CITIES.length*3);
+    const cityColors=new Float32Array(CITIES.length*3);
+    CITIES.forEach(([lat,lon],i)=>{
+      const v=latLonToVec3(lat,lon);
+      cityPositions[i*3]=v.x;cityPositions[i*3+1]=v.y;cityPositions[i*3+2]=v.z;
       const cc=new THREE.Color(blackSwan?K.r:K.g);
-      cCol2[i*3]=cc.r;cCol2[i*3+1]=cc.g;cCol2[i*3+2]=cc.b;
+      cityColors[i*3]=cc.r;cityColors[i*3+1]=cc.g;cityColors[i*3+2]=cc.b;
     });
-    const cGeo=new THREE.BufferGeometry();
-    cGeo.setAttribute("position",new THREE.BufferAttribute(cPos2,3));
-    cGeo.setAttribute("color",new THREE.BufferAttribute(cCol2,3));
-    const cMat=new THREE.PointsMaterial({size:.092,vertexColors:true,transparent:true,opacity:.95,depthWrite:false});
-    globeGroup.add(new THREE.Points(cGeo,cMat));
+    const cityGeo=new THREE.BufferGeometry();
+    cityGeo.setAttribute("position",new THREE.BufferAttribute(cityPositions,3));
+    cityGeo.setAttribute("color",new THREE.BufferAttribute(cityColors,3));
+    const cityMat=new THREE.PointsMaterial({size:.06,vertexColors:true,transparent:true,opacity:.95,depthWrite:false});
+    globeGroup.add(new THREE.Points(cityGeo,cityMat));
 
-    // ATMOSPHERE — two backside shells create edge glow without geometry
-    [{r:1.05,op:.055},{r:1.12,op:.025}].forEach(({r,op})=>{
-      const g=new THREE.SphereGeometry(r,32,32);
-      const m=new THREE.MeshBasicMaterial({color:mainCol,transparent:true,opacity:op,side:THREE.BackSide,depthWrite:false});
-      scene.add(new THREE.Mesh(g,m));
-    });
+    // Atmosphere glow — BackSide shell
+    const atmoGeo=new THREE.SphereGeometry(1.08,32,32);
+    const atmoMat=new THREE.MeshBasicMaterial({color:blackSwan?new THREE.Color(K.r):new THREE.Color(0x0044ff),transparent:true,opacity:.06,side:THREE.BackSide,depthWrite:false});
+    scene.add(new THREE.Mesh(atmoGeo,atmoMat));
+    const atmoGeo2=new THREE.SphereGeometry(1.14,32,32);
+    const atmoMat2=new THREE.MeshBasicMaterial({color:blackSwan?new THREE.Color(K.r):new THREE.Color(0x0066ff),transparent:true,opacity:.025,side:THREE.BackSide,depthWrite:false});
+    scene.add(new THREE.Mesh(atmoGeo2,atmoMat2));
 
-    // INNER EYE — pulsing wireframe core
-    const eyeGeo=new THREE.SphereGeometry(.13,14,10);
-    const eyeMat=new THREE.MeshBasicMaterial({color:mainCol,transparent:true,opacity:.45,wireframe:true});
-    const eye=new THREE.Mesh(eyeGeo,eyeMat);
-    scene.add(eye);
-    const light=new THREE.PointLight(mainCol,1.1,3.5);
-    scene.add(light);
+    // Star field — 3000 points in a large sphere
+    const starPos=new Float32Array(3000*3);
+    for(let i=0;i<3000;i++){
+      const r=80+Math.random()*120;
+      const th2=Math.random()*Math.PI*2,ph=Math.acos(2*Math.random()-1);
+      starPos[i*3]=r*Math.sin(ph)*Math.cos(th2);starPos[i*3+1]=r*Math.sin(ph)*Math.sin(th2);starPos[i*3+2]=r*Math.cos(ph);
+    }
+    const starGeo=new THREE.BufferGeometry();
+    starGeo.setAttribute("position",new THREE.BufferAttribute(starPos,3));
+    const starMat=new THREE.PointsMaterial({size:.4,color:0xffffff,transparent:true,opacity:.55,depthWrite:false});
+    scene.add(new THREE.Points(starGeo,starMat));
+
+    // Sun directional light (from upper-right)
+    const sun=new THREE.DirectionalLight(0xfff0cc,1.4);
+    sun.position.set(5,3,5);
+    scene.add(sun);
+    // Rim light (opposite)
+    const rim=new THREE.DirectionalLight(blackSwan?0xff2244:0x0044ff,0.3);
+    rim.position.set(-5,-2,-4);
+    scene.add(rim);
+    scene.add(new THREE.AmbientLight(0x111122,.5));
+
+    // Trade arc spawner — fires every 2s between random city pairs
+    const addArc=()=>{
+      const a=CITIES[Math.floor(Math.random()*CITIES.length)];
+      const b=CITIES[Math.floor(Math.random()*CITIES.length)];
+      if(a===b)return;
+      const va=latLonToVec3(a[0],a[1],1.02);
+      const vb=latLonToVec3(b[0],b[1],1.02);
+      const mid=va.clone().add(vb).multiplyScalar(0.5).normalize().multiplyScalar(1.5);
+      const curve=new THREE.QuadraticBezierCurve3(va,mid,vb);
+      const pts=curve.getPoints(40);
+      const arcGeo=new THREE.BufferGeometry().setFromPoints(pts);
+      const arcMat=new THREE.LineBasicMaterial({color:blackSwan?new THREE.Color(K.r):new THREE.Color(K.c),transparent:true,opacity:.7});
+      const arc=new THREE.Line(arcGeo,arcMat);
+      globeGroup.add(arc);
+      arcsRef.current.push(arc);
+      // Fade out and remove after 1.5s
+      let op=.7;
+      const fade=setInterval(()=>{op-=.05;arcMat.opacity=Math.max(0,op);if(op<=0){clearInterval(fade);globeGroup.remove(arc);arcGeo.dispose();arcMat.dispose();arcsRef.current=arcsRef.current.filter(l=>l!==arc);}},50);
+    };
+    const arcIv=setInterval(addArc,2000);
 
     let af:number,angle=0;
     const tick=()=>{
       af=requestAnimationFrame(tick);
-      angle+=.0045;
+      angle+=.003;
       globeGroup.rotation.y=angle;
-      eye.rotation.y=angle*1.8;
-      eye.scale.setScalar(.88+Math.sin(angle*2.5)*.12);
       renderer.render(scene,camera);
     };
     tick();
     return()=>{
       cancelAnimationFrame(af);
+      clearInterval(arcIv);
       if(mount.contains(renderer.domElement))mount.removeChild(renderer.domElement);
       renderer.dispose();
-      pGeo.dispose();pMat.dispose();cGeo.dispose();cMat.dispose();coreGeo.dispose();coreMat.dispose();eyeGeo.dispose();eyeMat.dispose();
+      earthGeo.dispose();earthMat.dispose();cityGeo.dispose();cityMat.dispose();
+      atmoGeo.dispose();atmoMat.dispose();atmoGeo2.dispose();atmoMat2.dispose();
+      starGeo.dispose();starMat.dispose();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[blackSwan]);
+
   const pnl=totalPnL;
   return(
     <div style={{position:"relative",width:W,height:270}}>
       {/* Three.js canvas */}
       <div ref={mountRef} style={{position:"absolute",top:0,left:0,width:W,height:H}}/>
 
-      {/* SVG overlay — city markers, radar waves, HUD text */}
+      {/* HUD overlay */}
       <svg width={W} height={H} style={{position:"absolute",top:0,left:0,pointerEvents:"none",overflow:"visible"}}>
-        {/* Session city glow + labels */}
-        {CITIES_2D.map(([cx,cy,name],i)=>{
-          const act=session.cities.includes(i);
-          const col=act?session.col:K.dim;
-          return(
-            <g key={name}>
-              {act&&<circle cx={cx} cy={cy} r="12" fill={col} opacity=".1" style={{animation:"breathe 2s ease-in-out infinite"}}/>}
-              <circle cx={cx} cy={cy} r={act?3.5:2} fill={col} opacity={act?.9:.28}/>
-              <text x={cx} y={cy-8} textAnchor="middle" fontSize="5.5" fontFamily="monospace" fill={col} opacity={act?.85:.32}>{name}</text>
-            </g>
-          );
-        })}
-
-        {/* Radar waves — SMIL expand from city center */}
-        {radarWaves.map(w=>(
-          <g key={w.id}>
-            <circle cx={w.x} cy={w.y} r="0" fill="none" stroke={w.col} strokeWidth="2">
-              <animate attributeName="r" from="0" to="48" dur=".85s" fill="freeze"/>
-              <animate attributeName="opacity" from="1" to="0" dur=".85s" fill="freeze"/>
-            </circle>
-            <circle cx={w.x} cy={w.y} r="0" fill="none" stroke={w.col} strokeWidth=".7" opacity=".5">
-              <animate attributeName="r" from="0" to="64" dur="1.15s" fill="freeze"/>
-              <animate attributeName="opacity" from=".5" to="0" dur="1.15s" fill="freeze"/>
-            </circle>
-          </g>
-        ))}
-
-        {/* North pole — observer count */}
-        <text x={W/2} y={20} textAnchor="middle" fontSize="6" fontFamily="monospace" fill={K.c} opacity=".68" style={{animation:"breathe 3s ease-in-out infinite"}}>{observers.toLocaleString()} ONLINE</text>
-
-        {/* Equator left — trade counter */}
+        <text x={W/2} y={18} textAnchor="middle" fontSize="6" fontFamily="monospace" fill={K.c} opacity=".65" style={{animation:"breathe 3s ease-in-out infinite"}}>{observers.toLocaleString()} ONLINE</text>
         <text x={22} y={H/2-2} textAnchor="middle" fontSize="7" fontFamily="monospace" fill={K.dim} opacity=".5" fontWeight="700">{tradeCount}</text>
         <text x={22} y={H/2+7} textAnchor="middle" fontSize="4.5" fontFamily="monospace" fill={K.dim} opacity=".38">TRADES</text>
-
-        {/* South pole — agents */}
         <text x={W/2} y={H-14} textAnchor="middle" fontSize="6" fontFamily="monospace" fill={K.c} opacity=".6" style={{animation:"breathe 1.8s ease-in-out infinite"}}>18 AGENTS</text>
-
-        {/* Session badge — top-left */}
         <rect x={4} y={6} width={58} height={14} rx="2" fill={session.col} fillOpacity=".1" stroke={session.col} strokeWidth=".7" strokeOpacity=".45"/>
         <text x={33} y={16.5} textAnchor="middle" fontSize="6.5" fontFamily="monospace" fill={session.col} fontWeight="700">{session.name} OPEN</text>
       </svg>
 
-      {/* Whale alert — 3 staggered expanding rings + text */}
+      {/* Whale alert */}
       {whaleAlert&&(
         <>
           <div style={{position:"absolute",top:(H/2-110)+"px",left:(W/2-110)+"px",width:220,height:220,borderRadius:"50%",border:"2px solid "+K.pu,animation:"whalePulse 1.4s ease-out infinite",pointerEvents:"none"}}/>
           <div style={{position:"absolute",top:(H/2-75)+"px",left:(W/2-75)+"px",width:150,height:150,borderRadius:"50%",border:"1.4px solid "+K.pu+"99",animation:"whalePulse 1.4s ease-out .45s infinite",pointerEvents:"none"}}/>
-          <div style={{position:"absolute",top:(H/2-42)+"px",left:(W/2-42)+"px",width:84,height:84,borderRadius:"50%",border:"1px solid "+K.pu+"55",animation:"whalePulse 1.4s ease-out .9s infinite",pointerEvents:"none"}}/>
           <div style={{position:"absolute",top:Math.round(H*.38),left:0,right:0,textAlign:"center",fontSize:10,fontFamily:"monospace",fontWeight:700,color:K.pu,animation:"pu .55s ease-in-out infinite",pointerEvents:"none",textShadow:"0 0 10px "+K.pu,letterSpacing:".12em"}}>🐋 WHALE</div>
         </>
       )}
@@ -543,7 +569,7 @@ function Globe3D({trades,blackSwan,whaleAlert,totalPnL,tradeCount}:{trades:Trade
       {/* Black swan shockwave */}
       {blackSwan&&<div style={{position:"absolute",top:(H/2-116)+"px",left:(W/2-116)+"px",width:232,height:232,borderRadius:"50%",border:"1.2px solid "+K.r,animation:"whalePulse 1.5s ease-out infinite",pointerEvents:"none"}}/>}
 
-      {/* Floating money labels — pop at trade location, float up */}
+      {/* Floating money labels */}
       {moneyLabels.map(m=>(
         <div key={m.id} style={{position:"absolute",left:m.x,top:m.y,fontSize:10,fontFamily:"monospace",fontWeight:700,color:m.val>=0?K.g:K.r,animation:"moneyFloat 2.8s ease-out forwards",pointerEvents:"none",transform:"translateX(-50%)",whiteSpace:"nowrap",textShadow:`0 0 8px ${m.val>=0?K.g:K.r}`}}>
           {m.val>=0?"+$":"-$"}{f2(Math.abs(m.val))}
@@ -866,9 +892,9 @@ function WinCardEl({card,onDone}:{card:WinCard,onDone:()=>void}){
       style={{width:210,padding:"11px 15px",background:"linear-gradient(135deg,"+K.pan+" 0%,"+col+"0E 100%)",border:"1px solid "+col+"55",borderRadius:3,boxShadow:"0 4px 22px "+col+"30"}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
         <span style={{color:col,fontSize:11,fontWeight:700}}>{pos?"▲ PROFIT":"▼ LOSS"} · {card.sym}</span>
-        <span style={{fontSize:8,color:K.dim}}>{card.agent}</span>
+        <span style={{fontSize:11,color:K.dim}}>{card.agent}</span>
       </div>
-      <div style={{fontSize:8,color:K.dim,marginBottom:7}}>{card.t}</div>
+      <div style={{fontSize:11,color:K.dim,marginBottom:7}}>{card.t}</div>
       <div style={{fontSize:21,fontWeight:900,color:col,letterSpacing:".04em",marginBottom:3,textShadow:"0 0 14px "+col}}>
         {pos?"+$":"-$"}{f2(Math.abs(card.pnl))}
       </div>
@@ -1113,6 +1139,8 @@ export default function KYMIA(){
   const [newTokens,setNewTokens]=useState<NewToken[]>([]);
   const [scannerLoading,setScannerLoading]=useState(false);
   const [dataStatus,setDataStatus]=useState<DataStatus>({jupiter:"loading",binance:"loading",coingecko:"loading",lastUpdate:0});
+  const [selectedTrade,setSelectedTrade]=useState<{sym:string,pos:Position}|null>(null);
+  const [confirmClose,setConfirmClose]=useState<string|null>(null);
   const logRef=useRef<HTMLDivElement>(null);
   const swarmRef=useRef<HTMLDivElement>(null);
   const entropyRef=useRef(entropy);
@@ -1393,7 +1421,7 @@ export default function KYMIA(){
 
   useEffect(()=>{
     runRealAgents();
-    const iv=setInterval(runRealAgents,30000);
+    const iv=setInterval(runRealAgents,15000);
     return()=>clearInterval(iv);
   },[runRealAgents]);
 
@@ -1413,23 +1441,21 @@ export default function KYMIA(){
     return()=>clearInterval(iv);
   },[scanNewTokens]);
 
-  // Demo burst: fire 3 trades quickly after start
+  // Demo burst: fire 3 trades quickly after start (SOL/JUP/WIF with named agents)
   useEffect(()=>{
     if(!running)return;
-    const syms=Object.keys(SYMS);
-    const burst=(delay:number)=>setTimeout(()=>{
-      const sym=syms[Math.floor(Math.random()*syms.length)];
+    const burst=(delay:number,sym:string,agent:string,conf:number)=>setTimeout(()=>{
       const p=pricesRef.current[sym];if(!p)return;
       const prt=portRef.current;if(prt.cash<500||prt.pos[sym])return;
-      const alloc=Math.min(prt.cash*.12,prt.cash*.9);
+      const alloc=Math.min(prt.cash*.13,prt.cash*.9);
       const qty=alloc/p.price;
-      setPort(prev=>{if(prev.pos[sym])return prev;return{...prev,cash:prev.cash-alloc,pos:{...prev.pos,[sym]:{qty,avg:p.price}}};});
-      setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym,side:"BUY",qty,price:p.price,pnl:0,conf:72,t:ts(),ms:Date.now()},...t.slice(0,99)]);
-      log("EXEC","▶ DEMO BURST "+sym+" @ $"+f2(p.price),K.g);
+      setPort(prev=>{if(prev.pos[sym])return prev;return{...prev,cash:prev.cash-alloc,pos:{...prev.pos,[sym]:{qty,avg:p.price,entryMs:Date.now()}}};});
+      setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym,side:"BUY",qty,price:p.price,pnl:0,conf,t:ts(),ms:Date.now(),agent,reason:"Demo Burst"},...t.slice(0,99)]);
+      log("EXEC","▶ BURST ["+agent+"] "+sym+" @ $"+f2(p.price)+" conf:"+conf+"%",K.g);
     },delay);
-    const t1=burst(5000);
-    const t2=burst(12000);
-    const t3=burst(17000);
+    const t1=burst(5000,"SOL","SURGE",74);
+    const t2=burst(11000,"JUP","RADAR",68);
+    const t3=burst(17000,"WIF","LENS",71);
     return()=>{clearTimeout(t1);clearTimeout(t2);clearTimeout(t3);};
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[running]);
@@ -1453,9 +1479,11 @@ export default function KYMIA(){
     for(const[sym,pos]of Object.entries(port.pos)){
       const cur=prices[sym]?.price;if(!cur)continue;
       const pct=((cur-pos.avg)/pos.avg)*100;
-      // Update peak
+      // Update peak + activate trailing stop at +1.5%
       if(!pos.peak||cur>pos.peak){
-        setPort(prev=>{if(!prev.pos[sym])return prev;return{...prev,pos:{...prev.pos,[sym]:{...prev.pos[sym],peak:cur}}};});
+        const trailJustActivated=!pos.trailActive&&pct>=1.5;
+        setPort(prev=>{if(!prev.pos[sym])return prev;return{...prev,pos:{...prev.pos,[sym]:{...prev.pos[sym],peak:cur,trailActive:prev.pos[sym].trailActive||pct>=1.5}}};});
+        if(trailJustActivated)log("TRAIL","🎯 TRAILING STOP activated: "+sym+" +"+f2(pct,1)+"%",K.gold);
         continue;
       }
       // 4-hour max hold
@@ -1538,7 +1566,7 @@ export default function KYMIA(){
   useEffect(()=>{
     if(!running||circuit)return;
     let tradeCount=0;
-    // Force one trade within 10s if none
+    // Force one trade within 8s if none
     const forceT=setTimeout(()=>{
       if(tradeCount>0)return;
       const pool=Object.keys(SYMS).filter(s=>!STABLE_SYMS.has(s));
@@ -1550,10 +1578,10 @@ export default function KYMIA(){
       setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym,side:"BUY",qty,price:p.price,pnl:0,conf:65,t:ts(),ms:Date.now(),reason:"Force Entry"},...t.slice(0,99)]);
       log("EXEC","▶ FORCE ENTRY "+sym+" @ "+fPrice(p.price)+" [DEMO]",K.g);
       tradeCount++;
-    },10000);
+    },8000);
     const iv=setInterval(()=>{
       const cs=agStRef.current["consensus"];
-      if(!cs?.on||!cs.conf||cs.conf<55)return;
+      if(!cs?.on||!cs.conf||cs.conf<45)return;
       // Pick volatile non-stable token
       const allKeys=Object.keys(SYMS);
       const pool=allKeys.filter(sym=>{
@@ -1612,6 +1640,49 @@ export default function KYMIA(){
     },14000);
     return()=>clearInterval(iv);
   },[running,log]);
+
+  // Force a specific trade (used by cinematic sequence)
+  const forceTrade=useCallback((sym:string,side:"BUY"|"SELL",agent:string,conf=70)=>{
+    const p=pricesRef.current[sym];if(!p)return;
+    const prt=portRef.current;
+    if(side==="BUY"){
+      if(prt.cash<500||prt.pos[sym])return;
+      const alloc=Math.min(prt.cash*.12,prt.cash*.9);
+      const qty=alloc/p.price;
+      setPort(prev=>{if(prev.pos[sym])return prev;return{...prev,cash:prev.cash-alloc,pos:{...prev.pos,[sym]:{qty,avg:p.price,entryMs:Date.now()}}};});
+      setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym,side:"BUY",qty,price:p.price,pnl:0,conf,t:ts(),ms:Date.now(),agent,reason:"AI Signal"},...t.slice(0,99)]);
+      log("EXEC","▶ ["+agent+"] LONG "+sym+" @ $"+f2(p.price)+" conf:"+conf+"%",K.g);
+    }else{
+      const pos=prt.pos[sym];if(!pos)return;
+      const pnl=(p.price-pos.avg)*pos.qty;
+      setPort(prev=>{const p2={...prev.pos};delete p2[sym];return{...prev,cash:prev.cash+pos.qty*p.price,pos:p2};});
+      addWinCard(sym,pnl,((p.price-pos.avg)/pos.avg)*100,p.price,agent,"Signal Exit");
+      log("EXEC","◀ ["+agent+"] CLOSE "+sym+" PnL:"+fU(pnl),pnl>=0?K.g:K.r);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[]);
+
+  // Cinematic first-60s auto-play sequence
+  useEffect(()=>{
+    const timers:ReturnType<typeof setTimeout>[]=[];
+    timers.push(setTimeout(()=>{setRunning(true);log("SYS","▶ KYMIA systems online",K.c);},3000));
+    timers.push(setTimeout(()=>{runAI&&runAI();},8000));
+    timers.push(setTimeout(()=>{forceTrade("SOL","BUY","SURGE",76);},15000));
+    timers.push(setTimeout(()=>{
+      const ev=EDGE_EVENTS.find(e=>e.type==="WHALE")||EDGE_EVENTS[0];
+      setEdgeToasts(p=>[...p.slice(-1),{id:Math.random().toString(36).slice(2),...ev}]);
+      setWhaleAlert(true);setTimeout(()=>setWhaleAlert(false),4000);
+      log("LVTH","🐋 "+ev.title+": "+ev.body.replace("\n"," "),K.pu);
+    },25000));
+    timers.push(setTimeout(()=>{forceTrade("JUP","BUY","RADAR",69);},32000));
+    timers.push(setTimeout(()=>{
+      const ev:EdgeToast={id:Math.random().toString(36).slice(2),type:"MILESTONE",icon:"🏆",col:K.gold,title:"60s MILESTONE",body:"KYMIA AI: first minute complete\nPortfolio live — agents tracking"};
+      setEdgeToasts(p=>[...p.slice(-1),ev]);
+      log("SYS","🏆 60s milestone — all systems nominal",K.gold);
+    },60000));
+    return()=>timers.forEach(clearTimeout);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[]);
 
   const runAI=useCallback(async()=>{
     if(analyzing)return;
@@ -1718,7 +1789,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
         @keyframes odometerRoll{from{transform:translateY(-100%);opacity:0}to{transform:translateY(0);opacity:1}}
         @keyframes glitch{0%{transform:translateX(0)}25%{transform:translateX(-2px) skewX(2deg)}75%{transform:translateX(2px) skewX(-2deg)}100%{transform:translateX(0)}}
         @keyframes scan{0%{transform:translateY(4px)}100%{transform:translateY(36px)}}
-        .tab{background:none;border:none;cursor:pointer;font-family:inherit;font-size:10px;letter-spacing:.1em;padding:7px 14px;color:#1E3A55;transition:all .2s;text-transform:uppercase;border-bottom:2px solid transparent}
+        .tab{background:none;border:none;cursor:pointer;font-family:inherit;font-size:12px;letter-spacing:.1em;padding:7px 14px;color:#1E3A55;transition:all .2s;text-transform:uppercase;border-bottom:2px solid transparent}
         .tab:hover{color:${K.c}}.tab.on{color:${K.c};border-bottom-color:${K.c}}
         .tr:hover{background:#060B14}
         .panel{background:${K.pan};border:1px solid ${K.brd};border-radius:2px}
@@ -1865,13 +1936,13 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
                             <span style={{color:K.hi,fontSize:10,fontWeight:600}}>{sym}</span>
                             {sv?.cat&&<span style={{fontSize:6,color:sv.col,opacity:.6,padding:"0px 3px",border:"1px solid "+sv.col+"30",borderRadius:1}}>{sv.cat}</span>}
                           </div>
-                          <span style={{color:up?K.g:K.r,fontSize:10,fontWeight:600}}>{fPrice(d.price)}</span>
+                          <span style={{color:up?K.g:K.r,fontSize:14,fontWeight:600}}>{fPrice(d.price)}</span>
                         </div>
                         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                           <Spark data={d.hist} color={up?K.g:K.r} w={56} h={14}/>
                           <div style={{textAlign:"right"}}>
                             <div style={{fontSize:8,color:up?K.g:K.r}}>{fP(d.change)}</div>
-                            <div style={{fontSize:7,color:d.rsi>70?K.r:d.rsi<30?K.g:K.tx}}>RSI {f2(d.rsi,0)}</div>
+                            <div style={{fontSize:11,color:d.rsi>70?K.r:d.rsi<30?K.g:K.tx}}>RSI {f2(d.rsi,0)}</div>
                           </div>
                         </div>
                         {pos&&<div style={{marginTop:1,fontSize:7,display:"flex",gap:5}}><span style={{color:K.c}}>LONG</span><span style={{color:((prices[sym]?.price||pos.avg)-pos.avg)/pos.avg*100>=0?K.g:K.r}}>{fP(((prices[sym]?.price||pos.avg)-pos.avg)/pos.avg*100)}</span></div>}
@@ -1930,7 +2001,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
           {/* RIGHT */}
           <div style={{gridRow:"1/2",display:"flex",flexDirection:"column",gap:6,overflow:"hidden"}}>
             <div className="panel" style={{overflow:"hidden",display:"flex",flexDirection:"column",maxHeight:190}}>
-              <div style={{fontSize:8,color:K.dim,padding:"6px 10px 4px",borderBottom:"1px solid #060A14",letterSpacing:".12em"}}>◉ SIGNAL STREAM</div>
+              <div style={{fontSize:11,color:K.dim,padding:"6px 10px 4px",borderBottom:"1px solid #060A14",letterSpacing:".12em"}}>◉ SIGNAL STREAM</div>
               <div style={{overflow:"auto",flex:1}}>
                 {AGENTS.filter(a=>agSt[a.id]?.on&&!disabled.has(a.id)).slice(0,8).map(({id,s})=>{
                   const ag=agSt[id]||{};
@@ -1942,14 +2013,14 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
                       <svg width="24" height="24" style={{flexShrink:0}}>
                         <circle cx="12" cy="12" r="10" fill="none" stroke={K.brd} strokeWidth="2"/>
                         <circle cx="12" cy="12" r="10" fill="none" stroke={col} strokeWidth="2" strokeDasharray={`${conf/100*circ} ${circ}`} strokeLinecap="round" transform="rotate(-90 12 12)" opacity=".8"/>
-                        <text x="12" y="15" textAnchor="middle" fontSize="6" fontFamily="monospace" fill={col}>{conf}</text>
+                        <text x="12" y="15" textAnchor="middle" fontSize="8" fontFamily="monospace" fill={col}>{conf}</text>
                       </svg>
                       <div style={{flex:1,minWidth:0}}>
                         <div style={{display:"flex",gap:5,alignItems:"center",marginBottom:1}}>
-                          <span style={{padding:"1px 5px",background:col+"15",color:col,border:"1px solid "+col+"30",fontSize:7,borderRadius:1}}>{ag.sig==="BUY"?"▲":ag.sig==="SELL"?"▼":"◆"} {s}</span>
+                          <span style={{padding:"1px 5px",background:col+"15",color:col,border:"1px solid "+col+"30",fontSize:11,borderRadius:1}}>{ag.sig==="BUY"?"▲":ag.sig==="SELL"?"▼":"◆"} {s}</span>
                           {ag.real&&<span style={{padding:"1px 4px",background:K.g+"20",color:K.g,border:"1px solid "+K.g+"40",fontSize:6,borderRadius:1,letterSpacing:".06em"}}>LIVE</span>}
                         </div>
-                        <div style={{fontSize:8,color:K.tx,lineHeight:1.3,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:150}}>{ag.th}</div>
+                        <div style={{fontSize:11,color:K.tx,lineHeight:1.3,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:150}}>{ag.th}</div>
                       </div>
                     </div>
                   );
@@ -1963,9 +2034,9 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
                 :Object.entries(port.pos).map(([sym,pos])=>{
                   const cur=prices[sym]?.price||pos.avg,pnl=(cur-pos.avg)*pos.qty,pp=(cur-pos.avg)/pos.avg*100;
                   return(
-                    <div key={sym} style={{marginBottom:6,padding:7,background:(pnl>=0?K.g:K.r)+"08",borderRadius:2,border:"1px solid "+(pnl>=0?K.g:K.r)+"20"}}>
+                    <div key={sym} onClick={()=>setSelectedTrade({sym,pos})} style={{marginBottom:6,padding:7,background:(pnl>=0?K.g:K.r)+"08",borderRadius:2,border:"1px solid "+(pnl>=0?K.g:K.r)+"20",cursor:"pointer",transition:"border-color .2s"}} title="Click to view chart">
                       <div style={{display:"flex",justifyContent:"space-between",marginBottom:2}}>
-                        <span style={{color:K.c,fontWeight:700,fontSize:10}}>{sym} LONG</span>
+                        <span style={{color:K.c,fontWeight:700,fontSize:10}}>{sym} LONG {pos.trailActive&&<span style={{color:K.gold,fontSize:8}}> ◈TRAIL</span>}</span>
                         <span style={{color:pnl>=0?K.g:K.r,fontSize:10}}>{fU(pnl)}</span>
                       </div>
                       <div style={{display:"flex",justifyContent:"space-between",fontSize:8,color:K.tx}}>
@@ -1974,8 +2045,9 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
                       <div style={{marginTop:3,height:2,background:"#050810",borderRadius:1}}>
                         <div style={{height:"100%",borderRadius:1,background:pnl>=0?K.g:K.r,width:Math.min(100,Math.max(0,50+pp*8))+"%",transition:"width .5s"}}/>
                       </div>
-                      <div style={{display:"flex",justifyContent:"space-between",marginTop:2,fontSize:7,color:K.dim}}>
+                      <div style={{display:"flex",justifyContent:"space-between",marginTop:3,fontSize:7,color:K.dim,alignItems:"center"}}>
                         <span>STOP:{fPrice(getStop(pos,cur))}</span><span>PEAK:{fPrice(pos.peak||pos.avg)}</span>
+                        <button onClick={e=>{e.stopPropagation();setConfirmClose(sym);}} style={{fontSize:7,padding:"1px 5px",background:K.r+"18",border:"1px solid "+K.r+"55",borderRadius:2,color:K.r,cursor:"pointer",fontFamily:"monospace"}}>✕ CLOSE</button>
                       </div>
                     </div>
                   );
@@ -2026,8 +2098,8 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
             <div className="panel" style={{padding:9}}>
               <div style={{fontSize:8,color:K.dim,marginBottom:5,letterSpacing:".12em"}}>◉ STATUS</div>
               {([{l:"Execution",v:circuit?"LOCKED":"ACTIVE",c:circuit?K.r:K.g},{l:"SL/TP",v:"Tiered Trail",c:K.tx},{l:"Agents",v:(AGENTS.length-disabled.size)+"/18",c:disabled.size>0?K.gold:K.g},{l:"Positions",v:Object.keys(port.pos).length+"/5",c:K.tx},{l:"Entropy",v:Math.round(entropy)+"/100",c:entropyCol}] as Array<{l:string,v:string,c:string}>).map((r,i)=>(
-                <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"2px 0",borderBottom:i<4?"1px solid #040910":"none",fontSize:9}}>
-                  <span style={{color:K.dim}}>{r.l}</span><span style={{color:r.c,fontWeight:600}}>{r.v}</span>
+                <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"2px 0",borderBottom:i<4?"1px solid #040910":"none",fontSize:10}}>
+                  <span style={{color:K.dim}}>{r.l}</span><span style={{color:r.c,fontWeight:600,fontSize:13}}>{r.v}</span>
                 </div>
               ))}
             </div>
@@ -2046,15 +2118,15 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
               <div ref={logRef} style={{flex:1,overflow:"auto",padding:"2px 0"}}>
                 {logs.map((e,i)=>(
                   <div key={i} className="fi" style={{display:"flex",gap:7,padding:"2px 10px",borderBottom:"1px solid #030810"}}>
-                    <span style={{color:K.dim,minWidth:46,fontSize:9,whiteSpace:"nowrap"}}>{e.t}</span>
-                    <span style={{color:"#0D1E30",minWidth:52,fontSize:9,fontWeight:600}}>[{e.ag}]</span>
-                    <span style={{color:e.col,fontSize:10}}>{e.msg}</span>
+                    <span style={{color:K.dim,minWidth:46,fontSize:11,whiteSpace:"nowrap"}}>{e.t}</span>
+                    <span style={{color:"#0D1E30",minWidth:52,fontSize:11,fontWeight:600}}>[{e.ag}]</span>
+                    <span style={{color:e.col,fontSize:11}}>{e.msg}</span>
                   </div>
                 ))}
                 {analyzing&&<div style={{display:"flex",gap:7,padding:"2px 10px"}}>
-                  <span style={{color:K.dim,minWidth:46,fontSize:9}}>{ts()}</span>
-                  <span style={{color:"#0D1E30",minWidth:52,fontSize:9}}>[CLAUDE]</span>
-                  <span style={{color:K.c,fontSize:10,animation:"pu 1s infinite"}}>⟳ Debate running...</span>
+                  <span style={{color:K.dim,minWidth:46,fontSize:11}}>{ts()}</span>
+                  <span style={{color:"#0D1E30",minWidth:52,fontSize:11}}>[CLAUDE]</span>
+                  <span style={{color:K.c,fontSize:11,animation:"pu 1s infinite"}}>⟳ Debate running...</span>
                 </div>}
               </div>
             </div>
@@ -2244,6 +2316,23 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
 
       {/* Performance Card Modal */}
       {modal==="share"&&<PerformanceCard trades={trades} totalPnL={totalPnL} onClose={()=>setModal(null)}/>}
+
+      {/* Trade Chart Modal */}
+      {selectedTrade&&<TradeChartModal sym={selectedTrade.sym} pos={selectedTrade.pos} prices={prices} onClose={()=>setSelectedTrade(null)}/>}
+
+      {/* Confirm Close Modal */}
+      {confirmClose&&<ConfirmCloseModal sym={confirmClose} onCancel={()=>setConfirmClose(null)} onConfirm={()=>{
+        const sym=confirmClose;
+        setConfirmClose(null);
+        const pos=portRef.current.pos[sym];
+        const cur=pricesRef.current[sym]?.price||pos?.avg||0;
+        if(!pos||!cur)return;
+        const pnl=(cur-pos.avg)*pos.qty;
+        const pct=((cur-pos.avg)/pos.avg)*100;
+        setPort(prev=>{const p2={...prev.pos};delete p2[sym];return{...prev,cash:prev.cash+pos.qty*cur,pos:p2};});
+        addWinCard(sym,pnl,pct,cur,"MANUAL","Manually closed by user");
+        log("EXEC","◀ MANUAL CLOSE "+sym+" @ "+fPrice(cur)+" PnL:"+fU(pnl),pnl>=0?K.g:K.r);
+      }}/>}
 
       {/* Win Cards */}
       <div style={{position:"fixed",bottom:60,right:16,zIndex:200,display:"flex",flexDirection:"column",gap:8,pointerEvents:"none"}}>
