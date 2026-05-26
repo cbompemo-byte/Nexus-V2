@@ -194,7 +194,8 @@ type AgentState={on:boolean,conf:number|null,sig:string|null,th:string,real?:boo
 type NewToken={address:string,name:string,price:string,change1h:number,volume24h:number,liquidity:number,rugScore:number,buys:number,sells:number};
 type DataStatus={jupiter:"ok"|"err"|"loading",binance:"ok"|"err"|"loading",coingecko:"ok"|"err"|"loading",lastUpdate:number};
 type Position={qty:number,avg:number,peak?:number,entryMs?:number,trailActive?:boolean};
-type Trade={id:string,sym:string,side:string,qty:number,price:number,pnl:number,conf:number,t:string,ms:number,agent?:string,reason?:string};
+type AgentSignals={lens?:{rsi:number,signal:string},radar?:{ema9:number,ema21:number,signal:string},razor?:{rsi:number,macd:number,signal:string},vector?:{adx:number,signal:string},surge?:{volumeChange:number,signal:string},leviathan?:{buyPressure:number,signal:string},echo?:{fg:number,signal:string}};
+type Trade={id:string,sym:string,side:string,qty:number,price:number,pnl:number,conf:number,t:string,ms:number,agent?:string,reason?:string,agentSignals?:AgentSignals};
 type LogEntry={t:string,ag:string,msg:string,col:string};
 type WinCard={id:string,sym:string,pnl:number,pct:number,price:number,agent:string,t:string,origin?:{x:number,y:number}};
 type EdgeToast={id:string,type:string,icon:string,col:string,title:string,body:string};
@@ -321,54 +322,326 @@ function BootSequence({onDone}:{onDone:()=>void}){
   );
 }
 
-// Trade chart modal — SVG price line + entry/SL/TP lines + P&L
-function TradeChartModal({sym,pos,prices,onClose}:{sym:string,pos:Position,prices:{[k:string]:PriceData},onClose:()=>void}){
-  const p=prices[sym];
-  const cur=p?.price||pos.avg;
-  const hist=p?.hist||[pos.avg];
-  const pnlVal=(cur-pos.avg)*pos.qty;
-  const pnlPct=((cur-pos.avg)/pos.avg)*100;
-  const sl=pos.avg*.975;
-  const tp=pos.avg*1.05;
-  const trail=pos.peak?pos.peak*.988:null;
-  const W=360,H=180;
-  const mn=Math.min(...hist,sl)*.998,mx=Math.max(...hist,tp,cur)*1.002;
-  const yp=(v:number)=>H-(((v-mn)/(mx-mn))*H*.85+H*.05);
-  const xp=(i:number)=>(i/(Math.max(hist.length-1,1)))*W;
-  const pts=hist.map((v,i)=>`${xp(i).toFixed(1)},${yp(v).toFixed(1)}`).join(" ");
+// Kraken pair map for candle fetching
+const KRAKEN_PAIRS:{[k:string]:string}={SOL:"SOLUSD",BTC:"XBTUSD",ETH:"ETHUSD",JUP:"JUPUSD",WIF:"WIFUSD",BONK:"BONKUSD",BNB:"XBTUSD",AVAX:"XBTUSD",MATIC:"XBTUSD",LINK:"LINKUSD",UNI:"XBTUSD",DOGE:"XDGUSD",PEPE:"XBTUSD",RNDR:"XBTUSD",ARB:"XBTUSD",OP:"XBTUSD",SUI:"XBTUSD",APT:"XBTUSD"};
+const TF_MAP:{[k:string]:number}={"1m":1,"5m":5,"15m":15,"1h":60};
+
+interface Candle{time:number,open:number,high:number,low:number,close:number,volume:number}
+
+async function fetchKrakenCandles(sym:string,tf:string):Promise<Candle[]>{
+  const pair=KRAKEN_PAIRS[sym]||"SOLUSD";
+  const interval=TF_MAP[tf]||5;
+  const res=await fetch(`https://api.kraken.com/0/public/OHLC?pair=${pair}&interval=${interval}`);
+  const data=await res.json();
+  if(data.error?.length)throw new Error(data.error[0]);
+  const raw=Object.values(data.result).find((v):v is unknown[]=>Array.isArray(v)) as unknown[][];
+  if(!raw)throw new Error("No data");
+  return raw.slice(-120).map((c:unknown)=>{
+    const arr=c as (number|string)[];
+    return{time:(arr[0] as number)*1000,open:parseFloat(arr[1] as string),high:parseFloat(arr[2] as string),low:parseFloat(arr[3] as string),close:parseFloat(arr[4] as string),volume:parseFloat(arr[6] as string)};
+  });
+}
+
+function calcEMAArr(data:number[],period:number):number[]{
+  const k=2/(period+1);const emas=[data[0]];
+  for(let i=1;i<data.length;i++)emas.push(data[i]*k+emas[i-1]*(1-k));
+  return emas;
+}
+function calcRSIArr(data:number[],period=14):Array<number|null>{
+  const out:Array<number|null>=Array(period).fill(null);
+  for(let i=period;i<data.length;i++){
+    let g=0,l=0;
+    for(let j=i-period+1;j<=i;j++){const d=data[j]-data[j-1];d>0?g+=d:l-=d;}
+    out.push(l===0?100:100-100/(1+(g/period)/(l/period)));
+  }
+  return out;
+}
+
+function TradingChart({sym,trade,position,agentSignals,onClose,onClosePosition}:{sym:string,trade:Trade|null,position:Position|null,agentSignals?:AgentSignals,onClose:()=>void,onClosePosition?:()=>void}){
+  const [candles,setCandles]=useState<Candle[]>([]);
+  const [tf,setTf]=useState("5m");
+  const [loading,setLoading]=useState(true);
+  const [err,setErr]=useState<string|null>(null);
+
+  useEffect(()=>{
+    setLoading(true);setErr(null);
+    fetchKrakenCandles(sym,tf).then(c=>{setCandles(c);setLoading(false);}).catch(e=>{setErr(String(e));setLoading(false);});
+  },[sym,tf]);
+
+  const W=680,H=280,VH=60,RSI_H=60,PAD={l:60,r:24,t:20,b:20};
+  const entry=trade?.price||position?.avg||0;
+  const sl=entry*0.975;
+  const tp=entry*1.055;
+  const trail=position?.peak?position.peak*0.988:null;
+
+  const chartBody=()=>{
+    if(loading)return(
+      <div style={{height:H+VH+RSI_H+40,display:"flex",alignItems:"center",justifyContent:"center",color:K.dim,fontFamily:"monospace",fontSize:11}}>
+        ⟳ Loading {sym} candles...
+      </div>
+    );
+    if(err||candles.length===0)return(
+      <div style={{height:H+VH+RSI_H+40,display:"flex",alignItems:"center",justifyContent:"center",color:K.r,fontFamily:"monospace",fontSize:10}}>
+        ⚠ {err||"No data"}
+      </div>
+    );
+
+    const closes=candles.map(c=>c.close);
+    const highs=candles.map(c=>c.high);
+    const lows=candles.map(c=>c.low);
+    const allPrices=[...highs,...lows];
+    if(entry){allPrices.push(sl,tp);}
+    const minP=Math.min(...allPrices)*0.9995;
+    const maxP=Math.max(...allPrices)*1.0005;
+    const rangeP=maxP-minP||1;
+
+    const xScale=(i:number)=>PAD.l+(i/(Math.max(candles.length-1,1)))*(W-PAD.l-PAD.r);
+    const yScale=(p:number)=>PAD.t+(1-(p-minP)/rangeP)*(H-PAD.t-PAD.b);
+    const candleWidth=Math.max(2,(W-PAD.l-PAD.r)/candles.length-1);
+
+    const ema9=calcEMAArr(closes,9);
+    const ema21=calcEMAArr(closes,21);
+    const ema50=calcEMAArr(closes,50);
+    const rsiData=calcRSIArr(closes,14);
+    const ema12=calcEMAArr(closes,12);
+    const ema26=calcEMAArr(closes,26);
+    const macdLine=ema12.map((v,i)=>v-ema26[i]);
+
+    const nullCount=rsiData.filter(v=>v===null).length;
+    const rsiValid=rsiData.filter((v):v is number=>v!==null);
+    const lastRsi=rsiValid[rsiValid.length-1]??null;
+    const maxVol=Math.max(...candles.map(c=>c.volume))||1;
+
+    // Safe yScale for lines within view
+    const ys=(p:number)=>{const y=yScale(p);return Math.max(PAD.t,Math.min(H-PAD.b,y));};
+
+    return(
+      <svg width="100%" viewBox={`0 0 ${W} ${H+VH+RSI_H+60}`} style={{display:"block",fontFamily:"monospace"}}>
+        <defs>
+          <linearGradient id="tcBullGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={K.g} stopOpacity="0.12"/>
+            <stop offset="100%" stopColor={K.g} stopOpacity="0"/>
+          </linearGradient>
+          <filter id="tcGlow">
+            <feGaussianBlur stdDeviation="1.5" result="blur"/>
+            <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+          </filter>
+        </defs>
+
+        {/* Grid */}
+        {[0,0.25,0.5,0.75,1].map((t,i)=>{
+          const y=PAD.t+t*(H-PAD.t-PAD.b);
+          const price=maxP-t*rangeP;
+          return(
+            <g key={i}>
+              <line x1={PAD.l} y1={y} x2={W-PAD.r} y2={y} stroke="#0A1D33" strokeWidth="0.5"/>
+              <text x={PAD.l-4} y={y+4} textAnchor="end" fontSize="9" fill={K.dim}>${f2(price,price>=1?0:4)}</text>
+            </g>
+          );
+        })}
+
+        {/* EMA 50 */}
+        <polyline points={ema50.map((v,i)=>`${xScale(i)},${ys(v)}`).join(" ")} fill="none" stroke={K.pu} strokeWidth="1" opacity=".45"/>
+
+        {/* EMA 21 */}
+        <polyline points={ema21.map((v,i)=>`${xScale(i)},${ys(v)}`).join(" ")} fill="none" stroke={K.gold} strokeWidth="1.2" opacity=".7"/>
+        <text x={W-PAD.r+2} y={ys(ema21[ema21.length-1])+4} fontSize="8" fill={K.gold}>EMA21</text>
+
+        {/* EMA 9 */}
+        <polyline points={ema9.map((v,i)=>`${xScale(i)},${ys(v)}`).join(" ")} fill="none" stroke={K.c} strokeWidth="1.2" opacity=".7"/>
+        <text x={W-PAD.r+2} y={ys(ema9[ema9.length-1])+4} fontSize="8" fill={K.c}>EMA9</text>
+
+        {/* Candlesticks */}
+        {candles.map((c,i)=>{
+          const x=xScale(i);
+          const isBull=c.close>=c.open;
+          const col=isBull?K.g:K.r;
+          const bodyTop=yScale(Math.max(c.open,c.close));
+          const bodyBot=yScale(Math.min(c.open,c.close));
+          const bodyH=Math.max(1,bodyBot-bodyTop);
+          return(
+            <g key={i}>
+              <line x1={x} y1={yScale(c.high)} x2={x} y2={yScale(c.low)} stroke={col} strokeWidth="0.8" opacity="0.7"/>
+              <rect x={x-candleWidth/2} y={bodyTop} width={candleWidth} height={bodyH} fill={isBull?col+"30":col+"50"} stroke={col} strokeWidth="0.5"/>
+            </g>
+          );
+        })}
+
+        {/* Entry line */}
+        {entry>0&&(
+          <g filter="url(#tcGlow)">
+            <line x1={PAD.l} y1={ys(entry)} x2={W-PAD.r} y2={ys(entry)} stroke={K.c} strokeWidth="1.5" strokeDasharray="6 3"/>
+            <rect x={W-PAD.r} y={ys(entry)-9} width={70} height={16} fill={K.c} rx="2"/>
+            <text x={W-PAD.r+4} y={ys(entry)+4} fontSize="9" fill="#04060D" fontWeight="700">ENTRY {fPrice(entry)}</text>
+            <polygon points={`${PAD.l+8},${ys(entry)+14} ${PAD.l},${ys(entry)} ${PAD.l+16},${ys(entry)}`} fill={K.c}/>
+            <text x={PAD.l+20} y={ys(entry)+4} fontSize="9" fill={K.c} fontWeight="700">▲ LONG</text>
+          </g>
+        )}
+
+        {/* SL line */}
+        {entry>0&&(
+          <g>
+            <line x1={PAD.l} y1={ys(sl)} x2={W-PAD.r} y2={ys(sl)} stroke={K.r} strokeWidth="1.2" strokeDasharray="4 4" opacity=".8"/>
+            <rect x={W-PAD.r} y={ys(sl)-9} width={56} height={16} fill={K.r} rx="2"/>
+            <text x={W-PAD.r+4} y={ys(sl)+4} fontSize="9" fill="white" fontWeight="700">SL {fPrice(sl)}</text>
+          </g>
+        )}
+
+        {/* TP line */}
+        {entry>0&&(
+          <g>
+            <line x1={PAD.l} y1={ys(tp)} x2={W-PAD.r} y2={ys(tp)} stroke={K.g} strokeWidth="1.2" strokeDasharray="4 4" opacity=".8"/>
+            <rect x={W-PAD.r} y={ys(tp)-9} width={56} height={16} fill={K.g} rx="2"/>
+            <text x={W-PAD.r+4} y={ys(tp)+4} fontSize="9" fill="#04060D" fontWeight="700">TP {fPrice(tp)}</text>
+          </g>
+        )}
+
+        {/* Trailing stop */}
+        {trail&&(
+          <g>
+            <line x1={PAD.l} y1={ys(trail)} x2={W-PAD.r} y2={ys(trail)} stroke={K.gold} strokeWidth="1.5" strokeDasharray="3 3"/>
+            <rect x={W-PAD.r} y={ys(trail)-9} width={70} height={16} fill={K.gold} rx="2"/>
+            <text x={W-PAD.r+4} y={ys(trail)+4} fontSize="9" fill="#04060D" fontWeight="700">TRAIL {fPrice(trail)}</text>
+          </g>
+        )}
+
+        {/* Volume */}
+        <g transform={`translate(0,${H+10})`}>
+          <text x={PAD.l} y={-4} fontSize="8" fill={K.dim}>VOLUME</text>
+          {candles.map((c,i)=>{
+            const x=xScale(i);
+            const barH=(c.volume/maxVol)*VH;
+            return(
+              <rect key={i} x={x-candleWidth/2} y={VH-barH} width={candleWidth} height={barH}
+                fill={c.close>=c.open?K.g+"28":K.r+"28"} stroke={c.close>=c.open?K.g+"50":K.r+"50"} strokeWidth="0.3"/>
+            );
+          })}
+        </g>
+
+        {/* RSI panel */}
+        <g transform={`translate(0,${H+VH+20})`}>
+          <text x={PAD.l} y={-4} fontSize="8" fill={K.dim}>RSI(14)</text>
+          <line x1={PAD.l} y1={RSI_H*0.3} x2={W-PAD.r} y2={RSI_H*0.3} stroke={K.r+"30"} strokeWidth="0.5" strokeDasharray="3 3"/>
+          <text x={PAD.l-4} y={RSI_H*0.3+3} textAnchor="end" fontSize="8" fill={K.r+"70"}>70</text>
+          <line x1={PAD.l} y1={RSI_H*0.7} x2={W-PAD.r} y2={RSI_H*0.7} stroke={K.g+"30"} strokeWidth="0.5" strokeDasharray="3 3"/>
+          <text x={PAD.l-4} y={RSI_H*0.7+3} textAnchor="end" fontSize="8" fill={K.g+"70"}>30</text>
+          <polyline
+            points={rsiValid.map((v,i)=>`${xScale(i+nullCount)},${RSI_H-(v/100)*RSI_H}`).join(" ")}
+            fill="none" stroke={K.pu} strokeWidth="1.5"/>
+          {lastRsi!==null&&(
+            <text x={W-PAD.r+4} y={RSI_H-(lastRsi/100)*RSI_H+3} fontSize="9" fill={K.pu} fontWeight="700">{lastRsi.toFixed(0)}</text>
+          )}
+        </g>
+
+        {/* X-axis time labels */}
+        {[0,Math.floor(candles.length*0.25),Math.floor(candles.length*0.5),Math.floor(candles.length*0.75),candles.length-1].map((idx,i)=>(
+          <text key={i} x={xScale(idx)} y={H+8} textAnchor="middle" fontSize="8" fill={K.dim}>
+            {new Date(candles[idx]?.time||0).toLocaleTimeString("en",{hour:"2-digit",minute:"2-digit"})}
+          </text>
+        ))}
+
+        {/* MACD mini indicator line in RSI area right side */}
+        {macdLine.length>0&&(
+          <g transform={`translate(0,${H+VH+20})`} opacity=".4">
+            {(() => {
+              const ml=macdLine;
+              const mn2=Math.min(...ml),mx2=Math.max(...ml)||1;
+              const rng=mx2-mn2||1;
+              return <polyline points={ml.map((v,i)=>`${xScale(i)},${RSI_H/2-(((v-mn2)/rng-0.5)*RSI_H*0.4)}`).join(" ")} fill="none" stroke={K.c} strokeWidth="0.7"/>;
+            })()}
+          </g>
+        )}
+      </svg>
+    );
+  };
+
+  const lastClose=candles[candles.length-1]?.close||0;
+  const curPnL=position&&entry?((lastClose-entry)*position.qty):null;
+  const curPct=entry?((lastClose-entry)/entry*100):null;
+
   return(
-    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.82)",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={onClose}>
-      <div style={{background:"#050f1c",border:"1px solid "+K.c+"44",borderRadius:8,padding:20,width:400,maxWidth:"95vw"}} onClick={e=>e.stopPropagation()}>
-        <div style={{display:"flex",justifyContent:"space-between",marginBottom:12}}>
-          <div style={{fontFamily:"monospace",fontWeight:700,fontSize:15,color:K.hi}}>{sym} POSITION</div>
-          <div style={{fontFamily:"monospace",fontSize:13,color:pnlVal>=0?K.g:K.r,fontWeight:700}}>{pnlVal>=0?"+$":"-$"}{f2(Math.abs(pnlVal))} ({fP(pnlPct)})</div>
+    <div style={{background:K.bg,border:"1px solid "+K.brd,borderRadius:8,overflow:"hidden",width:"100%"}}>
+      {/* Header */}
+      <div style={{padding:"12px 16px",borderBottom:"1px solid "+K.brd,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <div style={{display:"flex",alignItems:"center",gap:12}}>
+          <div style={{fontSize:16,fontWeight:900,color:K.c,fontFamily:"monospace"}}>{sym}/USD</div>
+          <div style={{fontSize:10,color:position?K.g:K.dim,fontFamily:"monospace"}}>
+            {position?"● POSITION OPEN":"◉ CLOSED"}
+          </div>
+          {curPnL!==null&&(
+            <div style={{fontSize:12,fontWeight:700,color:curPnL>=0?K.g:K.r,fontFamily:"monospace"}}>
+              {curPnL>=0?"+$":"-$"}{f2(Math.abs(curPnL))} ({curPct!==null?fP(curPct):""})
+            </div>
+          )}
         </div>
-        <svg width={W} height={H} style={{display:"block",marginBottom:12}}>
-          {/* Entry line */}
-          <line x1={0} y1={yp(pos.avg)} x2={W} y2={yp(pos.avg)} stroke={K.gold} strokeWidth="1" strokeDasharray="4 3" opacity=".7"/>
-          <text x={4} y={yp(pos.avg)-3} fontSize="9" fontFamily="monospace" fill={K.gold} opacity=".8">ENTRY ${f2(pos.avg)}</text>
-          {/* SL line */}
-          <line x1={0} y1={yp(sl)} x2={W} y2={yp(sl)} stroke={K.r} strokeWidth="1" strokeDasharray="3 3" opacity=".6"/>
-          <text x={4} y={yp(sl)-3} fontSize="9" fontFamily="monospace" fill={K.r} opacity=".7">SL ${f2(sl)}</text>
-          {/* TP line */}
-          <line x1={0} y1={yp(tp)} x2={W} y2={yp(tp)} stroke={K.g} strokeWidth="1" strokeDasharray="3 3" opacity=".6"/>
-          <text x={4} y={yp(tp)-3} fontSize="9" fontFamily="monospace" fill={K.g} opacity=".7">TP ${f2(tp)}</text>
-          {/* Trail line */}
-          {trail&&<><line x1={0} y1={yp(trail)} x2={W} y2={yp(trail)} stroke={K.c} strokeWidth="1" strokeDasharray="2 2" opacity=".55"/><text x={4} y={yp(trail)-3} fontSize="9" fontFamily="monospace" fill={K.c} opacity=".65">TRAIL ${f2(trail)}</text></>}
-          {/* Price polyline */}
-          <polyline points={pts} fill="none" stroke={K.c} strokeWidth="1.5" opacity=".9"/>
-          {/* Current price dot */}
-          <circle cx={xp(hist.length-1)} cy={yp(cur)} r="3" fill={pnlVal>=0?K.g:K.r}/>
-        </svg>
-        <div style={{display:"flex",gap:8,fontFamily:"monospace",fontSize:11,color:K.dim,marginBottom:14}}>
-          <span>Avg: <b style={{color:K.hi}}>${f2(pos.avg)}</b></span>
-          <span>·</span>
-          <span>Cur: <b style={{color:pnlVal>=0?K.g:K.r}}>${f2(cur)}</b></span>
-          <span>·</span>
-          <span>Qty: <b style={{color:K.hi}}>{pos.qty.toFixed(4)}</b></span>
-          {pos.trailActive&&<><span>·</span><span style={{color:K.gold}}>TRAILING ✓</span></>}
+        <div style={{display:"flex",gap:4}}>
+          {(["1m","5m","15m","1h"] as const).map(t=>(
+            <button key={t} onClick={()=>setTf(t)} style={{padding:"3px 9px",background:tf===t?"#001A28":"none",color:tf===t?K.c:K.dim,border:tf===t?"1px solid #003A55":"1px solid transparent",borderRadius:3,fontFamily:"monospace",fontSize:10,cursor:"pointer"}}>{t}</button>
+          ))}
         </div>
-        <button onClick={onClose} style={{width:"100%",padding:"8px 0",background:"none",border:"1px solid "+K.c+"55",borderRadius:4,color:K.c,fontFamily:"monospace",fontSize:12,cursor:"pointer",letterSpacing:".06em"}}>CLOSE</button>
+        <button onClick={onClose} style={{background:"none",border:"none",color:K.dim,cursor:"pointer",fontSize:18,lineHeight:1}}>✕</button>
+      </div>
+
+      {/* Agent signals bar */}
+      {agentSignals&&Object.keys(agentSignals).length>0&&(
+        <div style={{padding:"8px 16px",background:"#050A12",borderBottom:"1px solid "+K.brd,display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+          <div style={{fontSize:9,color:K.dim,fontFamily:"monospace",letterSpacing:".08em"}}>AGENTS THAT VOTED:</div>
+          {(Object.entries(agentSignals) as [string,{signal:string,[k:string]:number|string}][]).map(([agent,d])=>{
+            const col=d.signal==="BUY"?K.g:d.signal==="SELL"?K.r:K.gold;
+            const detail=agent==="lens"&&"rsi" in d?`RSI ${(d.rsi as number).toFixed(0)}`
+              :agent==="radar"&&"ema9" in d?`EMA ${(d.ema9 as number).toFixed(1)} / ${(d.ema21 as number).toFixed(1)}`
+              :agent==="leviathan"&&"buyPressure" in d?`Buy ${((d.buyPressure as number)*100).toFixed(0)}%`
+              :agent==="surge"&&"volumeChange" in d?`Vol +${(d.volumeChange as number).toFixed(1)}%`
+              :agent==="echo"&&"fg" in d?`F&G ${d.fg}`
+              :agent==="razor"&&"macd" in d?`MACD ${(d.macd as number).toFixed(3)}`
+              :agent==="vector"&&"adx" in d?`ADX ${(d.adx as number).toFixed(0)}`
+              :d.signal;
+            return(
+              <div key={agent} style={{display:"flex",alignItems:"center",gap:5,padding:"3px 8px",background:col+"12",border:`1px solid ${col}30`,borderRadius:3,fontFamily:"monospace"}}>
+                <div style={{width:5,height:5,borderRadius:"50%",background:col}}/>
+                <span style={{fontSize:9,color:col,fontWeight:700}}>{agent.toUpperCase()}</span>
+                <span style={{fontSize:8,color:K.dim}}>{detail}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Chart body */}
+      <div style={{padding:"0 4px"}}>{chartBody()}</div>
+
+      {/* Bottom stats + close button */}
+      <div style={{padding:"12px 16px",borderTop:"1px solid "+K.brd,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <div style={{display:"flex",gap:20,fontFamily:"monospace",fontSize:10}}>
+          {[
+            {l:"ENTRY",v:entry?fPrice(entry):"—",c:K.c},
+            {l:"CURRENT",v:lastClose?fPrice(lastClose):"—",c:K.hi},
+            {l:"STOP LOSS",v:entry?fPrice(sl):"—",c:K.r},
+            {l:"TAKE PROFIT",v:entry?fPrice(tp):"—",c:K.g},
+            ...(trail?[{l:"TRAIL",v:fPrice(trail),c:K.gold}]:[]),
+          ].map((r,i)=>(
+            <div key={i}>
+              <div style={{fontSize:8,color:K.dim,marginBottom:2}}>{r.l}</div>
+              <div style={{color:r.c,fontWeight:700}}>{r.v}</div>
+            </div>
+          ))}
+        </div>
+        {position&&onClosePosition&&(
+          <button onClick={onClosePosition} style={{padding:"10px 20px",background:K.r+"18",color:K.r,border:"2px solid "+K.r+"40",borderRadius:6,fontFamily:"monospace",fontSize:11,fontWeight:700,cursor:"pointer",letterSpacing:".1em"}}>
+            ⬛ CLOSE POSITION
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function TradeModal({trade,position,agentSignals,onClose,onClosePosition}:{trade:Trade|null,position:Position|null,agentSignals?:AgentSignals,onClose:()=>void,onClosePosition?:()=>void}){
+  const sym=trade?.sym||"SOL";
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(2,4,10,0.95)",zIndex:600,display:"flex",alignItems:"center",justifyContent:"center",backdropFilter:"blur(8px)"}} onClick={onClose}>
+      <div style={{width:"90vw",maxWidth:780,maxHeight:"90vh",overflow:"auto"}} onClick={e=>e.stopPropagation()}>
+        <TradingChart sym={sym} trade={trade} position={position} agentSignals={agentSignals} onClose={onClose} onClosePosition={onClosePosition}/>
       </div>
     </div>
   );
@@ -1139,7 +1412,7 @@ export default function KYMIA(){
   const [newTokens,setNewTokens]=useState<NewToken[]>([]);
   const [scannerLoading,setScannerLoading]=useState(false);
   const [dataStatus,setDataStatus]=useState<DataStatus>({jupiter:"loading",binance:"loading",coingecko:"loading",lastUpdate:0});
-  const [selectedTrade,setSelectedTrade]=useState<{sym:string,pos:Position}|null>(null);
+  const [chartTrade,setChartTrade]=useState<{trade:Trade|null,position:Position|null,agentSignals?:AgentSignals}|null>(null);
   const [confirmClose,setConfirmClose]=useState<string|null>(null);
   const logRef=useRef<HTMLDivElement>(null);
   const swarmRef=useRef<HTMLDivElement>(null);
@@ -1450,7 +1723,13 @@ export default function KYMIA(){
       const alloc=Math.min(prt.cash*.13,prt.cash*.9);
       const qty=alloc/p.price;
       setPort(prev=>{if(prev.pos[sym])return prev;return{...prev,cash:prev.cash-alloc,pos:{...prev.pos,[sym]:{qty,avg:p.price,entryMs:Date.now()}}};});
-      setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym,side:"BUY",qty,price:p.price,pnl:0,conf,t:ts(),ms:Date.now(),agent,reason:"Demo Burst"},...t.slice(0,99)]);
+      const ags=agStRef.current;
+      const agSig:AgentSignals={};
+      if(agent==="SURGE"&&ags["surge"]?.conf)agSig.surge={volumeChange:ags["surge"].conf/10,signal:"BUY"};
+      if(agent==="RADAR"&&ags["radar"]?.conf)agSig.radar={ema9:p.price,ema21:p.price*0.998,signal:"BUY"};
+      if(agent==="LENS"&&ags["lens"]?.conf)agSig.lens={rsi:38,signal:"BUY"};
+      if(ags["leviathan"]?.sig==="BUY"&&ags["leviathan"]?.conf)agSig.leviathan={buyPressure:0.62,signal:"BUY"};
+      setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym,side:"BUY",qty,price:p.price,pnl:0,conf,t:ts(),ms:Date.now(),agent,reason:"Demo Burst",agentSignals:agSig},...t.slice(0,99)]);
       log("EXEC","▶ BURST ["+agent+"] "+sym+" @ $"+f2(p.price)+" conf:"+conf+"%",K.g);
     },delay);
     const t1=burst(5000,"SOL","SURGE",74);
@@ -1612,7 +1891,16 @@ export default function KYMIA(){
         const alloc=Math.min(prt.cash*frac,prt.cash*.9);
         const qty=alloc/p.price;
         setPort(prev=>{if(prev.pos[sym])return prev;return{...prev,cash:prev.cash-alloc,pos:{...prev.pos,[sym]:{qty,avg:p.price,entryMs:Date.now()}}};});
-        setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym,side:"BUY",qty,price:p.price,pnl:0,conf:Math.round(sig.conf),t:ts(),ms:Date.now()},...t.slice(0,99)]);
+        const ags2=agStRef.current;
+        const agSig2:AgentSignals={};
+        if(ags2["lens"]?.conf&&ags2["lens"]?.sig)agSig2.lens={rsi:calcRSI(p.hist.slice(-15),14),signal:ags2["lens"].sig};
+        if(ags2["radar"]?.conf&&ags2["radar"]?.sig)agSig2.radar={ema9:p.price,ema21:p.price*(ags2["radar"].sig==="BUY"?0.998:1.002),signal:ags2["radar"].sig};
+        if(ags2["leviathan"]?.conf&&ags2["leviathan"]?.sig)agSig2.leviathan={buyPressure:ags2["leviathan"].sig==="BUY"?0.65:0.35,signal:ags2["leviathan"].sig};
+        if(ags2["surge"]?.conf&&ags2["surge"]?.sig)agSig2.surge={volumeChange:ags2["surge"].conf/10,signal:ags2["surge"].sig};
+        if(ags2["echo"]?.conf&&ags2["echo"]?.sig)agSig2.echo={fg:Math.round(entropyRef.current),signal:ags2["echo"].sig};
+        if(ags2["razor"]?.conf&&ags2["razor"]?.sig)agSig2.razor={rsi:calcRSI(p.hist.slice(-15),14),macd:0.002,signal:ags2["razor"].sig};
+        if(ags2["vector"]?.conf&&ags2["vector"]?.sig)agSig2.vector={adx:Math.round(ags2["vector"].conf/2),signal:ags2["vector"].sig};
+        setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym,side:"BUY",qty,price:p.price,pnl:0,conf:Math.round(sig.conf),t:ts(),ms:Date.now(),agentSignals:agSig2},...t.slice(0,99)]);
         log("EXEC","▶ LONG "+sym+" @ "+fPrice(p.price)+" kelly:"+f2(frac*100,0)+"% sig:"+sig.quality,K.g);
         tradeCount++;
       }else if((cs.sig==="SELL"||sig.isSell)&&prt.pos[sym]){
@@ -1650,7 +1938,12 @@ export default function KYMIA(){
       const alloc=Math.min(prt.cash*.12,prt.cash*.9);
       const qty=alloc/p.price;
       setPort(prev=>{if(prev.pos[sym])return prev;return{...prev,cash:prev.cash-alloc,pos:{...prev.pos,[sym]:{qty,avg:p.price,entryMs:Date.now()}}};});
-      setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym,side:"BUY",qty,price:p.price,pnl:0,conf,t:ts(),ms:Date.now(),agent,reason:"AI Signal"},...t.slice(0,99)]);
+      const agsFt=agStRef.current;
+      const agSigFt:AgentSignals={};
+      if(agsFt["lens"]?.sig)agSigFt.lens={rsi:38,signal:agsFt["lens"].sig||"BUY"};
+      if(agsFt["leviathan"]?.sig)agSigFt.leviathan={buyPressure:0.64,signal:agsFt["leviathan"].sig||"BUY"};
+      if(agsFt["surge"]?.sig)agSigFt.surge={volumeChange:4.2,signal:agsFt["surge"].sig||"BUY"};
+      setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym,side:"BUY",qty,price:p.price,pnl:0,conf,t:ts(),ms:Date.now(),agent,reason:"AI Signal",agentSignals:agSigFt},...t.slice(0,99)]);
       log("EXEC","▶ ["+agent+"] LONG "+sym+" @ $"+f2(p.price)+" conf:"+conf+"%",K.g);
     }else{
       const pos=prt.pos[sym];if(!pos)return;
@@ -2034,7 +2327,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
                 :Object.entries(port.pos).map(([sym,pos])=>{
                   const cur=prices[sym]?.price||pos.avg,pnl=(cur-pos.avg)*pos.qty,pp=(cur-pos.avg)/pos.avg*100;
                   return(
-                    <div key={sym} onClick={()=>setSelectedTrade({sym,pos})} style={{marginBottom:6,padding:7,background:(pnl>=0?K.g:K.r)+"08",borderRadius:2,border:"1px solid "+(pnl>=0?K.g:K.r)+"20",cursor:"pointer",transition:"border-color .2s"}} title="Click to view chart">
+                    <div key={sym} onClick={()=>{const tr=trades.find(t=>t.sym===sym&&t.side==="BUY");setChartTrade({trade:tr||null,position:pos,agentSignals:tr?.agentSignals});}} style={{marginBottom:6,padding:7,background:(pnl>=0?K.g:K.r)+"08",borderRadius:2,border:"1px solid "+(pnl>=0?K.g:K.r)+"20",cursor:"pointer",transition:"border-color .2s"}} title="Click to view chart">
                       <div style={{display:"flex",justifyContent:"space-between",marginBottom:2}}>
                         <span style={{color:K.c,fontWeight:700,fontSize:10}}>{sym} LONG {pos.trailActive&&<span style={{color:K.gold,fontSize:8}}> ◈TRAIL</span>}</span>
                         <span style={{color:pnl>=0?K.g:K.r,fontSize:10}}>{fU(pnl)}</span>
@@ -2176,7 +2469,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
                     {sorted2.map(t=>{
                       const sv=SYMS[t.sym],win=t.pnl>0,col=win?K.g:K.r;
                       return(
-                        <tr key={t.id} className="tr" style={{borderBottom:"1px solid #040910",borderLeft:"2px solid "+(win?K.g+"40":K.r+"40")}}>
+                        <tr key={t.id} className="tr" onClick={()=>setChartTrade({trade:t,position:null,agentSignals:t.agentSignals})} style={{borderBottom:"1px solid #040910",borderLeft:"2px solid "+(win?K.g+"40":K.r+"40"),cursor:"pointer"}}>
                           <td style={{padding:"5px 10px",color:"#102030",fontSize:9,whiteSpace:"nowrap"}}>{t.t}</td>
                           <td style={{padding:"5px 10px"}}><span style={{color:sv?.col,marginRight:4}}>{sv?.icon}</span><span style={{color:K.c,fontWeight:700,fontSize:10}}>{t.sym}</span></td>
                           <td style={{padding:"5px 10px"}}><span style={{padding:"1px 5px",background:col+"12",color:col,border:"1px solid "+col+"30",fontSize:8,borderRadius:1}}>{win?"▲ WIN":"▼ LOSS"}</span></td>
@@ -2318,7 +2611,17 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
       {modal==="share"&&<PerformanceCard trades={trades} totalPnL={totalPnL} onClose={()=>setModal(null)}/>}
 
       {/* Trade Chart Modal */}
-      {selectedTrade&&<TradeChartModal sym={selectedTrade.sym} pos={selectedTrade.pos} prices={prices} onClose={()=>setSelectedTrade(null)}/>}
+      {chartTrade&&<TradeModal
+        trade={chartTrade.trade}
+        position={chartTrade.position}
+        agentSignals={chartTrade.agentSignals}
+        onClose={()=>setChartTrade(null)}
+        onClosePosition={chartTrade.position?()=>{
+          const sym=chartTrade.trade?.sym||"";
+          setChartTrade(null);
+          setConfirmClose(sym);
+        }:undefined}
+      />}
 
       {/* Confirm Close Modal */}
       {confirmClose&&<ConfirmCloseModal sym={confirmClose} onCancel={()=>setConfirmClose(null)} onConfirm={()=>{
