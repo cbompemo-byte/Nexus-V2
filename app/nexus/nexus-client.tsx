@@ -2102,8 +2102,8 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
         </div>
       )}
 
-      <header style={{background:blackSwan?"#090203":"#040810",borderBottom:"1px solid "+(blackSwan?K.r+"40":K.brd),padding:"7px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,zIndex:100}}>
-        <div style={{display:"flex",alignItems:"center",gap:16}}>
+      <header style={{background:blackSwan?"#090203":"#040810",borderBottom:"1px solid "+(blackSwan?K.r+"40":K.brd),padding:"4px 12px",display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,zIndex:100}}>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
           <div style={{display:"flex",alignItems:"center",gap:9}}>
             <svg width="30" height="30" viewBox="0 0 30 30" style={{flexShrink:0,filter:"drop-shadow(0 0 6px "+(blackSwan?K.r:K.c)+")"}}>
               <polygon points="15,1 27,8 27,22 15,29 3,22 3,8" fill="none" stroke={blackSwan?K.r:K.c} strokeWidth="1.5"/>
@@ -2112,7 +2112,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
               <circle cx="15" cy="15" r="1.1" fill="#000" opacity=".7"/>
               <line x1="8" y1="15" x2="22" y2="15" stroke={blackSwan?K.r:K.c} strokeWidth=".6" opacity=".35"/>
             </svg>
-            <span style={{fontSize:19,fontWeight:900,color:blackSwan?K.r:K.c,letterSpacing:".25em",textShadow:"0 0 20px "+(blackSwan?K.r:K.c),animation:"glow 2.5s ease-in-out infinite",fontFamily:"'JetBrains Mono','Courier New',monospace"}}>KYMIA</span>
+            <span style={{fontSize:17,fontWeight:900,color:blackSwan?K.r:K.c,letterSpacing:".25em",textShadow:"0 0 20px "+(blackSwan?K.r:K.c),animation:"glow 2.5s ease-in-out infinite",fontFamily:"'JetBrains Mono','Courier New',monospace"}}>KYMIA</span>
           </div>
           <span style={{fontSize:9,color:"#102030",letterSpacing:".1em"}}>QUANT AI · SANDBOX · v2.0</span>
           <div style={{display:"flex",alignItems:"center",gap:4,padding:"2px 7px",background:K.c+"10",border:"1px solid "+K.c+"25",borderRadius:2}}>
@@ -2134,7 +2134,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
           </div>
           {aiData&&<span style={{padding:"2px 7px",background:rc+"20",color:rc,border:"1px solid "+rc+"40",fontSize:9,borderRadius:2}}>{String(aiData.regime||"")}</span>}
         </div>
-        <div style={{display:"flex",alignItems:"center",gap:12}}>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
           {([{l:"EQUITY",v:"$"+f2(port.equity),col:totalPnL>=0?K.g:K.r},{l:"P&L",v:fU(totalPnL)+" ("+fP(pct)+")",col:totalPnL>=0?K.g:K.r},{l:"DD",v:"-"+f2(dd)+"%",col:dd>5?K.r:K.gold}]).map((x,i)=>(
             <div key={i} style={{textAlign:"right"}}>
               <div style={{fontSize:8,color:"#102030"}}>{x.l}</div>
@@ -2192,7 +2192,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
       </div>
 
       {tab==="terminal"&&(
-        <div style={{flex:1,display:"grid",gridTemplateColumns:"240px 1fr 260px",gridTemplateRows:"1fr 170px",gap:6,padding:8,overflow:"hidden",minHeight:0}}>
+        <div style={{flex:1,display:"grid",gridTemplateColumns:"220px 1fr 260px",gridTemplateRows:"1fr 180px",gap:6,padding:8,overflow:"hidden",minHeight:0}}>
           {/* LEFT */}
           <div style={{gridRow:"1/3",display:"flex",flexDirection:"column",gap:6,overflow:"hidden"}}>
             <div className="panel" style={{display:"flex",flexDirection:"column",alignItems:"center",padding:"8px 4px 6px"}}>
@@ -2221,24 +2221,17 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
                   return display.map(([sym,d])=>{
                     const sv=SYMS[sym],up=d.trend==="up",pos=port.pos[sym];
                     const isOpp=mktTab==="RADAR";
+                    const rsi=d.rsi;
+                    const rsiCol=rsi>70?K.r:rsi<30?K.g:K.gold;
                     return(
-                      <div key={sym} className="tr" style={{padding:"5px 8px",borderBottom:"1px solid #050810",borderLeft:"2px solid "+(pos?K.c:isOpp?K.gold+"60":"transparent")}}>
-                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:1}}>
-                          <div style={{display:"flex",alignItems:"center",gap:4}}>
-                            <span style={{color:sv?.col,fontSize:10}}>{sv?.icon}</span>
-                            <span style={{color:K.hi,fontSize:10,fontWeight:600}}>{sym}</span>
-                            {sv?.cat&&<span style={{fontSize:6,color:sv.col,opacity:.6,padding:"0px 3px",border:"1px solid "+sv.col+"30",borderRadius:1}}>{sv.cat}</span>}
-                          </div>
-                          <span style={{color:up?K.g:K.r,fontSize:14,fontWeight:600}}>{fPrice(d.price)}</span>
+                      <div key={sym} className="tr" style={{display:"grid",gridTemplateColumns:"28px 1fr 52px 32px",alignItems:"center",gap:4,padding:"4px 6px",height:36,borderBottom:"1px solid #050810",borderLeft:"2px solid "+(pos?K.c:isOpp?K.gold+"60":"transparent"),cursor:"pointer"}} onClick={()=>{const tr=trades.find(t=>t.sym===sym&&t.side==="BUY");if(pos)setChartTrade({trade:tr||null,position:pos,agentSignals:tr?.agentSignals});}}>
+                        <Spark data={d.hist} color={up?K.g:K.r} w={28} h={18}/>
+                        <div style={{minWidth:0}}>
+                          <div style={{fontSize:10,fontWeight:700,color:K.hi,lineHeight:1}}>{sym}</div>
+                          <div style={{fontSize:10,color:up?K.g:K.r,lineHeight:1.2}}>{fPrice(d.price)}</div>
                         </div>
-                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                          <Spark data={d.hist} color={up?K.g:K.r} w={56} h={14}/>
-                          <div style={{textAlign:"right"}}>
-                            <div style={{fontSize:8,color:up?K.g:K.r}}>{fP(d.change)}</div>
-                            <div style={{fontSize:11,color:d.rsi>70?K.r:d.rsi<30?K.g:K.tx}}>RSI {f2(d.rsi,0)}</div>
-                          </div>
-                        </div>
-                        {pos&&<div style={{marginTop:1,fontSize:7,display:"flex",gap:5}}><span style={{color:K.c}}>LONG</span><span style={{color:((prices[sym]?.price||pos.avg)-pos.avg)/pos.avg*100>=0?K.g:K.r}}>{fP(((prices[sym]?.price||pos.avg)-pos.avg)/pos.avg*100)}</span></div>}
+                        <div style={{fontSize:9,color:up?K.g:K.r,textAlign:"right"}}>{up?"+":""}{d.change.toFixed(1)}%</div>
+                        <div style={{fontSize:8,textAlign:"center",padding:"1px 2px",borderRadius:2,background:rsiCol+"18",color:rsiCol,border:"1px solid "+rsiCol+"40"}}>{Math.round(rsi)}</div>
                       </div>
                     );
                   });
@@ -2262,37 +2255,35 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
 
           {/* CENTER */}
           <div style={{gridRow:"1/2",display:"flex",flexDirection:"column",gap:6,overflow:"hidden"}}>
-            <div className="panel" style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
-              <div style={{padding:"6px 12px 4px",borderBottom:"1px solid #060A14",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <div className="panel" style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",position:"relative"}}>
+              {/* Neural grid background */}
+              <svg style={{position:"absolute",inset:0,width:"100%",height:"100%",opacity:.09,pointerEvents:"none"}} aria-hidden>
+                <defs>
+                  <pattern id="hexgrid" x="0" y="0" width="40" height="46" patternUnits="userSpaceOnUse">
+                    <polygon points="20,2 38,12 38,34 20,44 2,34 2,12" fill="none" stroke={K.c} strokeWidth="0.5"/>
+                  </pattern>
+                </defs>
+                <rect width="100%" height="100%" fill="url(#hexgrid)"/>
+              </svg>
+              {/* Radial depth gradient */}
+              <div style={{position:"absolute",inset:0,background:"radial-gradient(ellipse at center, #0A1628 0%, #04060D 65%, #030508 100%)",pointerEvents:"none"}}/>
+              {/* Scan lines */}
+              <div style={{position:"absolute",inset:0,background:"repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,242,254,0.012) 3px,rgba(0,242,254,0.012) 4px)",pointerEvents:"none"}}/>
+              {/* Header */}
+              <div style={{padding:"5px 12px 4px",borderBottom:"1px solid #060A14",display:"flex",justifyContent:"space-between",alignItems:"center",position:"relative",zIndex:1}}>
                 <div style={{fontSize:8,color:K.dim,letterSpacing:".12em"}}>◈ NEURAL SWARM — 18 COGNITIVE AGENTS</div>
                 <div style={{display:"flex",gap:8,fontSize:8}}>
                   {([["BUY",K.g],["SELL",K.r],["ACTIVE",K.c]] as Array<[string,string]>).map(([l,c])=><span key={l} style={{color:c}}>● {l}</span>)}
                 </div>
               </div>
-              <div style={{flex:1,display:"flex",justifyContent:"center",alignItems:"center",padding:4}}>
+              <div style={{flex:1,display:"flex",justifyContent:"center",alignItems:"center",padding:4,position:"relative",zIndex:1,boxShadow:"inset 0 0 60px rgba(0,0,0,0.55)"}}>
                 <SwarmGraph st={agSt} debate={debate} disabled={disabled} swarmRef={swarmRef}/>
               </div>
             </div>
-            <ConsensusBar agSt={agSt}/>
-            {aiData&&(
-              <div className="panel" style={{padding:"9px 13px",borderColor:rc+"30",background:"linear-gradient(135deg,"+K.pan+" 0%,"+rc+"08 100%)",animation:"breathe 4s ease-in-out infinite"}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
-                  <span style={{fontSize:8,color:rc,letterSpacing:".14em"}}>◈ CLAUDE CONSENSUS</span>
-                  {(aiData.consensus as {signal?:string,symbol?:string,confidence?:number})?.signal&&(
-                    <div style={{display:"flex",gap:6,alignItems:"center"}}>
-                      <span style={{padding:"2px 8px",background:((aiData.consensus as {signal?:string}).signal==="BUY"?K.g:K.r)+"20",color:(aiData.consensus as {signal?:string}).signal==="BUY"?K.g:K.r,border:"1px solid "+((aiData.consensus as {signal?:string}).signal==="BUY"?K.g:K.r)+"40",fontSize:10,borderRadius:1}}>{String((aiData.consensus as {signal?:string}).signal||"")} {String((aiData.consensus as {symbol?:string}).symbol||"")} {String((aiData.consensus as {confidence?:number}).confidence||0)}%</span>
-                      <button className="btn" onClick={()=>setModal("debate")} style={{background:K.c+"10",color:K.c,border:"1px solid "+K.c+"30",fontSize:8}}>THEATER ▶</button>
-                    </div>
-                  )}
-                </div>
-                <p style={{fontSize:9,color:K.tx,lineHeight:1.55}}>{String(aiData.marketSummary||"")}</p>
-                {!!aiData.riskWarning&&<div style={{marginTop:3,fontSize:9,color:K.r,padding:"2px 8px",background:K.r+"10",borderRadius:1}}>⚠ {String(aiData.riskWarning)}</div>}
-              </div>
-            )}
           </div>
 
           {/* RIGHT */}
-          <div style={{gridRow:"1/2",display:"flex",flexDirection:"column",gap:6,overflow:"hidden"}}>
+          <div style={{gridRow:"1/3",display:"flex",flexDirection:"column",gap:6,overflow:"hidden"}}>
             <div className="panel" style={{overflow:"hidden",display:"flex",flexDirection:"column",maxHeight:190}}>
               <div style={{fontSize:11,color:K.dim,padding:"6px 10px 4px",borderBottom:"1px solid #060A14",letterSpacing:".12em"}}>◉ SIGNAL STREAM</div>
               <div style={{overflow:"auto",flex:1}}>
@@ -2398,17 +2389,33 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
             </div>
           </div>
 
-          {/* BOTTOM LOG */}
-          <div style={{gridColumn:"2/4",overflow:"hidden"}}>
-            <div className="panel" style={{height:"100%",display:"flex",flexDirection:"column",overflow:"hidden"}}>
-              <div style={{padding:"4px 10px",borderBottom:"1px solid #060A14",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                <div style={{fontSize:8,color:K.dim,letterSpacing:".12em"}}>◉ LIVE REASONING LOG</div>
-                <div style={{display:"flex",gap:5,alignItems:"center"}}>
-                  {running&&<div style={{width:4,height:4,borderRadius:"50%",background:K.c,animation:"pu 1s infinite"}}/>}
-                  <button className="btn" onClick={()=>setLogs([{t:ts(),ag:"SYS",msg:"Log cleared",col:K.tx}])} style={{background:"#040810",color:K.dim,border:"1px solid "+K.brd,padding:"2px 8px",fontSize:8}}>CLR</button>
-                </div>
+          {/* BOTTOM CENTER — Consensus + Log, always visible */}
+          <div style={{gridColumn:"2/3",overflow:"hidden",display:"flex",flexDirection:"column",gap:4}}>
+            {/* Compact consensus bar */}
+            <div style={{flexShrink:0}}>
+              <ConsensusBar agSt={agSt}/>
+            </div>
+            {/* Compact Claude AI bar (if available) */}
+            {aiData&&(
+              <div className="panel" style={{flexShrink:0,padding:"5px 12px",borderColor:rc+"30",background:"linear-gradient(135deg,"+K.pan+" 0%,"+rc+"08 100%)",display:"flex",alignItems:"center",gap:10}}>
+                <span style={{fontSize:8,color:rc,letterSpacing:".1em",flexShrink:0}}>◈ CLAUDE</span>
+                {(aiData.consensus as {signal?:string,symbol?:string,confidence?:number})?.signal&&(
+                  <span style={{padding:"1px 7px",background:((aiData.consensus as {signal?:string}).signal==="BUY"?K.g:K.r)+"20",color:(aiData.consensus as {signal?:string}).signal==="BUY"?K.g:K.r,border:"1px solid "+((aiData.consensus as {signal?:string}).signal==="BUY"?K.g:K.r)+"40",fontSize:9,borderRadius:1,flexShrink:0}}>{String((aiData.consensus as {signal?:string}).signal||"")} {String((aiData.consensus as {symbol?:string}).symbol||"")} {String((aiData.consensus as {confidence?:number}).confidence||0)}%</span>
+                )}
+                <span style={{fontSize:8,color:K.tx,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{String(aiData.marketSummary||"").slice(0,120)}</span>
+                <button className="btn" onClick={()=>setModal("debate")} style={{background:K.c+"10",color:K.c,border:"1px solid "+K.c+"30",fontSize:7,padding:"2px 8px",flexShrink:0}}>THEATER</button>
               </div>
-              <div ref={logRef} style={{flex:1,overflow:"auto",padding:"2px 0"}}>
+            )}
+            {/* Log — fills remaining space, always visible */}
+            <div className="panel" style={{flex:1,overflow:"hidden",display:"flex",flexDirection:"column",minHeight:0}}>
+              <div style={{padding:"3px 10px",borderBottom:"1px solid #060A14",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
+                <div style={{display:"flex",alignItems:"center",gap:6}}>
+                  {running&&<div style={{width:4,height:4,borderRadius:"50%",background:K.c,animation:"pu 1s infinite"}}/>}
+                  <div style={{fontSize:8,color:K.dim,letterSpacing:".12em"}}>◉ LIVE REASONING</div>
+                </div>
+                <button className="btn" onClick={()=>setLogs([{t:ts(),ag:"SYS",msg:"Log cleared",col:K.tx}])} style={{background:"#040810",color:K.dim,border:"1px solid "+K.brd,padding:"2px 8px",fontSize:8}}>CLR</button>
+              </div>
+              <div ref={logRef} style={{flex:1,overflowY:"auto",padding:"2px 0"}}>
                 {logs.map((e,i)=>(
                   <div key={i} className="fi" style={{display:"flex",gap:7,padding:"2px 10px",borderBottom:"1px solid #030810"}}>
                     <span style={{color:K.dim,minWidth:46,fontSize:11,whiteSpace:"nowrap"}}>{e.t}</span>
