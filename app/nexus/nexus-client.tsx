@@ -1050,12 +1050,13 @@ function ElectricArc({x1,y1,x2,y2,col,active}:{x1:number,y1:number,x2:number,y2:
   );
 }
 
-function SwarmGraph({st,debate,disabled,swarmRef}:{st:{[k:string]:AgentState},debate:string[],disabled:Set<string>,swarmRef?:React.RefObject<HTMLDivElement|null>}){
+function SwarmGraph({st,debate,disabled,swarmRef,flashingAgent,highConviction,convCol}:{st:{[k:string]:AgentState},debate:string[],disabled:Set<string>,swarmRef?:React.RefObject<HTMLDivElement|null>,flashingAgent?:string|null,highConviction?:boolean,convCol?:string}){
   const [hov,setHov]=useState<string|null>(null);
   const nm:{[k:string]:{pos:{x:number,y:number},id:string,name:string,s:string,lv:number,ag:number}}={};
   for(const a of AGENTS)nm[a.id]={...a,pos:gpos(a)};
+  const glowCol=convCol||K.c;
   return(
-    <div ref={swarmRef} style={{position:"relative",display:"inline-block"}}>
+    <div ref={swarmRef} style={{position:"relative",display:"inline-block",transition:"filter .5s",filter:highConviction?`drop-shadow(0 0 18px ${glowCol}60)`:undefined}}>
       <svg width="480" height="468" style={{display:"block"}}>
         <defs>
           <filter id="agf"><feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
@@ -1076,8 +1077,10 @@ function SwarmGraph({st,debate,disabled,swarmRef}:{st:{[k:string]:AgentState},de
           const col=dis?"#101820":ag.sig==="BUY"?K.g:ag.sig==="SELL"?K.r:id==="consensus"?K.c:K.co;
           const active=ag.on&&!dis;
           const conflict=isAegis&&ag.sig==="SELL"&&!dis;
+          const isFlashing=flashingAgent===id;
+          const isHighConvActive=highConviction&&active;
           return(
-            <g key={id} filter={active?"url(#faceglow)":undefined} opacity={dis?.18:1} style={{cursor:"pointer"}} onMouseEnter={()=>setHov(id)} onMouseLeave={()=>setHov(null)}>
+            <g key={id} filter={active?"url(#faceglow)":undefined} opacity={dis?.18:1} style={{cursor:"pointer",animation:isFlashing?"nodeFlash 1.2s ease-out":isHighConvActive?"breathe 1.4s ease-in-out infinite":undefined}} onMouseEnter={()=>setHov(id)} onMouseLeave={()=>setHov(null)}>
               <CyberFace cx={n.pos.x} cy={n.pos.y} size={r*2} col={col} active={active} conflict={conflict}/>
               <text x={n.pos.x} y={n.pos.y+r+11} textAnchor="middle" fontSize={id==="consensus"?8:6} fontFamily="monospace" fill={dis?K.dim:active?col:K.tx} fontWeight="700">{s}</text>
               {ag.conf!==null&&!dis&&<text x={n.pos.x} y={n.pos.y+r+20} textAnchor="middle" fontSize="7" fontFamily="monospace" fill={col} opacity=".8">{ag.conf}%</text>}
@@ -1106,35 +1109,78 @@ function SwarmGraph({st,debate,disabled,swarmRef}:{st:{[k:string]:AgentState},de
   );
 }
 
-function ConsensusBar({agSt}:{agSt:{[k:string]:AgentState}}){
+function DecisionZone({agSt,running,onExecute}:{agSt:{[k:string]:AgentState},running:boolean,onExecute:(sym:string,side:"BUY"|"SELL")=>void}){
   const active=AGENTS.filter(a=>a.id!=="consensus"&&agSt[a.id]?.on&&agSt[a.id]?.sig);
   const buy=active.filter(a=>agSt[a.id].sig==="BUY").length;
   const sell=active.filter(a=>agSt[a.id].sig==="SELL").length;
   const hold=active.filter(a=>agSt[a.id].sig==="HOLD").length;
   const total=buy+sell+hold||1;
+  const bP=Math.round(buy/total*100);const sP=Math.round(sell/total*100);
   const dom=buy>sell&&buy>hold?"BUY":sell>buy&&sell>hold?"SELL":"HOLD";
-  const domPct=dom==="BUY"?buy:dom==="SELL"?sell:hold;
   const col=dom==="BUY"?K.g:dom==="SELL"?K.r:K.gold;
+  const highConv=bP>72||sP>72;
+  const showExec=running&&dom!=="HOLD"&&(dom==="BUY"?bP:sP)>=55;
+  const pulseAnim=highConv?(dom==="BUY"?"convBuyPulse":"convPulse"):"none";
+  const topSym=Object.entries(agSt).filter(([id,s])=>id!=="consensus"&&s.sig===dom).sort((a,b)=>(b[1].conf||0)-(a[1].conf||0))[0];
   return(
-    <div style={{padding:"9px 12px",background:K.pan,border:"1px solid "+col+"30",borderRadius:2}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5}}>
-        <span style={{fontSize:8,color:K.dim,letterSpacing:".12em"}}>◈ SWARM CONSENSUS</span>
-        <div style={{display:"flex",alignItems:"center",gap:6}}>
-          <span style={{padding:"2px 9px",background:col+"20",color:col,border:"1px solid "+col+"40",fontSize:10,borderRadius:1,fontWeight:700,boxShadow:`0 0 8px ${col}40`}}>
-            {dom==="BUY"?"▲":dom==="SELL"?"▼":"◆"} {dom} {Math.round(domPct/total*100)}%
-          </span>
-          <span style={{fontSize:8,color:K.dim}}>{active.length}/18</span>
+    <div className="panel" style={{padding:"10px 14px",borderColor:col+"35",animation:highConv?`${pulseAnim} 1.8s ease-in-out infinite`:"none"}}>
+      <div style={{display:"flex",alignItems:"center",gap:12}}>
+        {/* Big vote number */}
+        <div style={{textAlign:"center",minWidth:56}}>
+          <div style={{fontSize:38,fontWeight:900,color:col,lineHeight:1,letterSpacing:"-.02em",textShadow:`0 0 20px ${col}80`}}>{dom==="BUY"?bP:dom==="SELL"?sP:Math.round(hold/total*100)}</div>
+          <div style={{fontSize:7,color:col,letterSpacing:".12em",opacity:.8,marginTop:2}}>{dom==="BUY"?"▲":dom==="SELL"?"▼":"◆"} {dom}%</div>
+        </div>
+        {/* Vote bar + counters */}
+        <div style={{flex:1}}>
+          <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+            <span style={{fontSize:7,color:K.dim,letterSpacing:".1em"}}>◈ DECISION ZONE</span>
+            <div style={{display:"flex",gap:8,fontSize:8}}>
+              {([["▲",K.g,buy],["▼",K.r,sell],["◆",K.gold,hold]] as Array<[string,string,number]>).map(([l,c,v])=>(
+                <span key={l} style={{color:c}}>{l} {v}</span>
+              ))}
+              <span style={{color:K.dim}}>{active.length}/18</span>
+            </div>
+          </div>
+          <div style={{display:"flex",gap:1,height:8,borderRadius:4,overflow:"hidden",marginBottom:5}}>
+            <div style={{width:bP+"%",background:`linear-gradient(90deg,${K.g}80,${K.g})`,transition:"width .5s",boxShadow:bP>72?`0 0 8px ${K.g}60`:undefined}}/>
+            <div style={{width:sP+"%",background:`linear-gradient(90deg,${K.r}80,${K.r})`,transition:"width .5s",boxShadow:sP>72?`0 0 8px ${K.r}60`:undefined}}/>
+            <div style={{width:Math.round(hold/total*100)+"%",background:`linear-gradient(90deg,${K.gold}80,${K.gold})`,transition:"width .5s"}}/>
+          </div>
+          {highConv&&<div style={{fontSize:7,color:col,letterSpacing:".14em",animation:"glow 1.5s infinite",marginBottom:3}}>⚡ HIGH CONVICTION — {active.length} AGENTS ALIGNED</div>}
+          {showExec&&(
+            <div style={{display:"flex",gap:5}}>
+              <button className="btn" onClick={()=>onExecute(topSym?AGENTS.find(a=>a.id===topSym[0])?.id||"SOL":"SOL",dom as "BUY"|"SELL")} style={{background:col+"20",color:col,border:"1px solid "+col+"50",padding:"3px 12px",fontSize:8,flex:1}}>⚡ EXECUTE {dom}</button>
+              <button className="btn" style={{background:"#060A12",color:K.dim,border:"1px solid #0A1D33",padding:"3px 10px",fontSize:8}}>✕ REJECT</button>
+            </div>
+          )}
         </div>
       </div>
-      <div style={{display:"flex",gap:1,height:5,borderRadius:3,overflow:"hidden",marginBottom:5}}>
-        <div style={{width:(buy/total*100)+"%",background:K.g,transition:"width .5s"}}/>
-        <div style={{width:(sell/total*100)+"%",background:K.r,transition:"width .5s"}}/>
-        <div style={{width:(hold/total*100)+"%",background:K.gold,transition:"width .5s"}}/>
+    </div>
+  );
+}
+
+function TimeScrubber({sessionStart,trades}:{sessionStart:number,trades:Trade[]}){
+  const [now,setNow]=useState(Date.now());
+  useEffect(()=>{const iv=setInterval(()=>setNow(Date.now()),5000);return()=>clearInterval(iv);},[]);
+  const dur=now-sessionStart;
+  const fmtDur=(ms:number)=>{const s=Math.floor(ms/1000);const m=Math.floor(s/60);const h=Math.floor(m/60);return h>0?`${h}h ${m%60}m`:`${m}m ${s%60}s`;};
+  const closed=trades.filter(t=>t.pnl!==0&&t.ms);
+  const pct=(ms:number)=>Math.min(100,(ms-sessionStart)/dur*100);
+  return(
+    <div style={{position:"fixed",bottom:0,left:0,right:0,height:28,zIndex:202,background:"rgba(3,5,10,0.92)",borderTop:"1px solid #0A1D33",display:"flex",alignItems:"center",padding:"0 14px",gap:10,backdropFilter:"blur(8px)"}}>
+      <span style={{fontSize:7,color:K.dim,letterSpacing:".12em",flexShrink:0}}>◈ SESSION</span>
+      <span style={{fontSize:9,fontWeight:700,color:K.c,flexShrink:0,minWidth:52}}>{fmtDur(dur)}</span>
+      <div style={{flex:1,position:"relative",height:4,background:"#060A14",borderRadius:2,overflow:"visible"}}>
+        <div style={{position:"absolute",inset:0,background:`linear-gradient(90deg,${K.c}40,${K.c}90)`,borderRadius:2,width:"100%",opacity:.35}}/>
+        {closed.map((t,i)=>{
+          const p=pct(t.ms||sessionStart);
+          return<div key={t.id||i} style={{position:"absolute",top:"50%",left:p+"%",transform:"translate(-50%,-50%)",width:4,height:4,borderRadius:"50%",background:t.pnl>0?K.g:K.r,boxShadow:`0 0 4px ${t.pnl>0?K.g:K.r}`,cursor:"pointer"}} title={`${t.sym} ${t.side} ${t.pnl>0?"+":""}$${t.pnl.toFixed(2)}`}/>;
+        })}
       </div>
-      <div style={{display:"flex",gap:12,fontSize:8}}>
-        {([["▲ BUY",K.g,buy],["▼ SELL",K.r,sell],["◆ HOLD",K.gold,hold]] as Array<[string,string,number]>).map(([l,c,v])=>(
-          <span key={l} style={{color:c}}>● {l} {Math.round(v/total*100)}%</span>
-        ))}
+      <div style={{display:"flex",gap:8,fontSize:7,color:K.dim,flexShrink:0}}>
+        <span style={{color:K.g}}>▲ {closed.filter(t=>t.pnl>0).length} WINS</span>
+        <span style={{color:K.r}}>▼ {closed.filter(t=>t.pnl<0).length} LOSSES</span>
+        <span style={{color:K.dim}}>{closed.length} TOTAL</span>
       </div>
     </div>
   );
@@ -1414,10 +1460,24 @@ export default function KYMIA(){
   const [dataStatus,setDataStatus]=useState<DataStatus>({jupiter:"loading",binance:"loading",coingecko:"loading",lastUpdate:0});
   const [chartTrade,setChartTrade]=useState<{trade:Trade|null,position:Position|null,agentSignals?:AgentSignals}|null>(null);
   const [confirmClose,setConfirmClose]=useState<string|null>(null);
+  const [focusMode,setFocusMode]=useState(false);
+  const [flashingAgent,setFlashingAgent]=useState<string|null>(null);
+  const prevAgStRef=useRef<{[k:string]:AgentState}>({});
+  const sessionStartRef=useRef(Date.now());
   const logRef=useRef<HTMLDivElement>(null);
   const swarmRef=useRef<HTMLDivElement>(null);
   const entropyRef=useRef(entropy);
   useEffect(()=>{entropyRef.current=entropy;},[entropy]);
+
+  // Node Flash — detect signal changes between render cycles
+  useEffect(()=>{
+    const prev=prevAgStRef.current;
+    for(const id of Object.keys(agSt)){
+      const prevSig=prev[id]?.sig;const curSig=agSt[id]?.sig;
+      if(prevSig&&curSig&&prevSig!==curSig){setFlashingAgent(id);setTimeout(()=>setFlashingAgent(f=>f===id?null:f),1200);break;}
+    }
+    prevAgStRef.current={...agSt};
+  },[agSt]);
 
   const log=useCallback((ag:string,msg:string,col=K.hi)=>setLogs(l=>[...l.slice(-150),{t:ts(),ag,msg,col}]),[]);
 
@@ -1429,6 +1489,22 @@ export default function KYMIA(){
 
   // Black swan user spike
   useEffect(()=>{if(blackSwan)setLiveUsers(u=>u+340);},[blackSwan]);
+
+  // Conviction pulse log banner
+  const prevConvRef=useRef(false);
+  useEffect(()=>{
+    const active=AGENTS.filter(a=>a.id!=="consensus"&&agSt[a.id]?.on&&agSt[a.id]?.sig);
+    const buy=active.filter(a=>agSt[a.id].sig==="BUY").length;
+    const sell=active.filter(a=>agSt[a.id].sig==="SELL").length;
+    const total=active.length||1;
+    const bP=Math.round(buy/total*100),sP=Math.round(sell/total*100);
+    const isHigh=bP>72||sP>72;
+    if(isHigh&&!prevConvRef.current){
+      const dom=bP>sP?"BUY":"SELL";const col=dom==="BUY"?K.g:K.r;
+      log("CONV",`⚡ HIGH CONVICTION — ${active.length} agents ${dom} ${Math.max(bP,sP)}%`,col);
+    }
+    prevConvRef.current=isHigh;
+  },[agSt,log]);
 
   // ── Real agent data fetch (30s cycle) ────────────────────────────────
   const calcEMA=(prices:number[],period:number):number=>{
@@ -2059,7 +2135,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
   };
 
   return(
-    <div style={{fontFamily:"'JetBrains Mono','Courier New',monospace",background:blackSwan?"#0C0304":K.bg,color:K.hi,minHeight:"100vh",display:"flex",flexDirection:"column",overflow:"hidden",fontSize:12,transition:"background 1s"}}>
+    <div style={{fontFamily:"'JetBrains Mono','Courier New',monospace",background:blackSwan?"#0C0304":K.bg,color:K.hi,minHeight:"100vh",display:"flex",flexDirection:"column",overflow:"hidden",fontSize:12,transition:"background 1s",paddingBottom:28}}>
       <style>{`
         *{box-sizing:border-box;margin:0;padding:0}
         ::-webkit-scrollbar{width:3px}::-webkit-scrollbar-track{background:#020508}::-webkit-scrollbar-thumb{background:#0A1D33;border-radius:2px}
@@ -2082,13 +2158,20 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
         @keyframes odometerRoll{from{transform:translateY(-100%);opacity:0}to{transform:translateY(0);opacity:1}}
         @keyframes glitch{0%{transform:translateX(0)}25%{transform:translateX(-2px) skewX(2deg)}75%{transform:translateX(2px) skewX(-2deg)}100%{transform:translateX(0)}}
         @keyframes scan{0%{transform:translateY(4px)}100%{transform:translateY(36px)}}
+        @keyframes convPulse{0%,100%{box-shadow:0 0 0 rgba(0,242,254,0);border-color:rgba(0,242,254,.15)}50%{box-shadow:0 0 28px rgba(0,242,254,.25),inset 0 0 18px rgba(0,242,254,.07);border-color:rgba(0,242,254,.55)}}
+        @keyframes convBuyPulse{0%,100%{box-shadow:0 0 0 rgba(0,255,136,0);border-color:rgba(0,255,136,.15)}50%{box-shadow:0 0 28px rgba(0,255,136,.25),inset 0 0 18px rgba(0,255,136,.07);border-color:rgba(0,255,136,.55)}}
+        @keyframes nodeFlash{0%{filter:brightness(1)}25%{filter:brightness(3) saturate(2)}75%{filter:brightness(2)}100%{filter:brightness(1)}}
         .tab{background:none;border:none;cursor:pointer;font-family:inherit;font-size:12px;letter-spacing:.1em;padding:7px 14px;color:#1E3A55;transition:all .2s;text-transform:uppercase;border-bottom:2px solid transparent}
         .tab:hover{color:${K.c}}.tab.on{color:${K.c};border-bottom-color:${K.c}}
         .tr:hover{background:#060B14}
-        .panel{background:${K.pan};border:1px solid ${K.brd};border-radius:2px}
+        .panel{background:rgba(6,10,18,0.75);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid #0A1D33;border-radius:2px;box-shadow:0 4px 24px rgba(0,0,0,.45),inset 0 1px 0 rgba(0,242,254,.04)}
+        .panel:hover{border-color:#0F2840;box-shadow:0 4px 28px rgba(0,0,0,.55),inset 0 1px 0 rgba(0,242,254,.07)}
         .btn{font-family:inherit;font-size:9px;letter-spacing:.1em;cursor:pointer;border-radius:2px;text-transform:uppercase;border:none;transition:all .2s;padding:5px 11px}
         .btn:hover{filter:brightness(1.2)}
       `}</style>
+
+      {/* Vignette overlay */}
+      <div style={{position:"fixed",inset:0,zIndex:201,pointerEvents:"none",background:"radial-gradient(ellipse at center, transparent 55%, rgba(2,4,10,0.72) 100%)"}}/>
 
       {booting&&<BootSequence onDone={()=>{setBooting(false);setTimeout(()=>{setRunning(true);log("SYS","▶ AUTO-START — 18 agents online",K.g);},800);}}/>}
 
@@ -2149,6 +2232,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
           </div>
           <div style={{display:"flex",gap:5}}>
             <button className="btn" onClick={()=>setModal("share")} style={{background:"#0A1428",color:K.gold,border:"1px solid "+K.gold+"50"}}>◈ SHARE</button>
+            <button className="btn" onClick={()=>setFocusMode(f=>!f)} style={{background:focusMode?K.c+"20":"#040810",color:focusMode?K.c:K.dim,border:"1px solid "+(focusMode?K.c+"50":K.brd)}}>{focusMode?"◈ EXIT FOCUS":"◈ FOCUS"}</button>
             <button className="btn" onClick={runAI} disabled={analyzing} style={{background:analyzing?"#06111E":"#001428",color:analyzing?"#1A4A6A":K.c,border:"1px solid "+(analyzing?"#0A2040":K.c+"60")}}>{analyzing?"⟳":"⚡ DEBATE"}</button>
             <button className="btn" onClick={runDNA} disabled={dnaLoading} style={{background:"#100020",color:K.pu,border:"1px solid "+K.pu+"50"}}>{dnaLoading?"⟳":"🧬 DNA"}</button>
             <button className="btn" onClick={()=>setModal("beat")} style={{background:"#001820",color:K.gold,border:"1px solid "+K.gold+"50"}}>🎮 BEAT AI</button>
@@ -2191,8 +2275,17 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
         </div>
       </div>
 
-      {tab==="terminal"&&(
-        <div style={{flex:1,display:"grid",gridTemplateColumns:"220px 1fr 260px",gridTemplateRows:"1fr 180px",gap:6,padding:8,overflow:"hidden",minHeight:0}}>
+      {tab==="terminal"&&(()=>{
+        const activeAgents=AGENTS.filter(a=>a.id!=="consensus"&&agSt[a.id]?.on&&agSt[a.id]?.sig);
+        const buyVotes=activeAgents.filter(a=>agSt[a.id].sig==="BUY").length;
+        const sellVotes=activeAgents.filter(a=>agSt[a.id].sig==="SELL").length;
+        const totalVotes=activeAgents.length||1;
+        const swarmBP=Math.round(buyVotes/totalVotes*100);const swarmSP=Math.round(sellVotes/totalVotes*100);
+        const highConviction=swarmBP>72||swarmSP>72;
+        const convDom=swarmBP>swarmSP?"BUY":"SELL";
+        const convCol=convDom==="BUY"?K.g:K.r;
+        return(
+        <div style={{flex:1,display:"grid",gridTemplateColumns:focusMode?"0px 1fr 0px":"220px 1fr 260px",gridTemplateRows:"1fr 180px",gap:focusMode?0:6,padding:8,overflow:"hidden",minHeight:0,transition:"grid-template-columns .4s ease"}}>
           {/* LEFT */}
           <div style={{gridRow:"1/3",display:"flex",flexDirection:"column",gap:6,overflow:"hidden"}}>
             <div className="panel" style={{display:"flex",flexDirection:"column",alignItems:"center",padding:"8px 4px 6px"}}>
@@ -2277,7 +2370,9 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
                 </div>
               </div>
               <div style={{flex:1,display:"flex",justifyContent:"center",alignItems:"center",padding:4,position:"relative",zIndex:1,boxShadow:"inset 0 0 60px rgba(0,0,0,0.55)"}}>
-                <SwarmGraph st={agSt} debate={debate} disabled={disabled} swarmRef={swarmRef}/>
+                <SwarmGraph st={agSt} debate={debate} disabled={disabled} swarmRef={swarmRef} flashingAgent={flashingAgent} highConviction={highConviction} convCol={convCol}/>
+                {/* Focus mode: Globe overlay in top-left */}
+                {focusMode&&<div style={{position:"absolute",top:8,left:8,zIndex:10,opacity:.85,borderRadius:4,overflow:"hidden",border:"1px solid "+K.c+"30"}}><Globe3D trades={trades} blackSwan={blackSwan} whaleAlert={whaleAlert} totalPnL={totalPnL} tradeCount={trades.length}/></div>}
               </div>
             </div>
           </div>
@@ -2389,11 +2484,11 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
             </div>
           </div>
 
-          {/* BOTTOM CENTER — Consensus + Log, always visible */}
+          {/* BOTTOM CENTER — Decision Zone + Log, always visible */}
           <div style={{gridColumn:"2/3",overflow:"hidden",display:"flex",flexDirection:"column",gap:4}}>
-            {/* Compact consensus bar */}
+            {/* Decision Zone */}
             <div style={{flexShrink:0}}>
-              <ConsensusBar agSt={agSt}/>
+              <DecisionZone agSt={agSt} running={running} onExecute={(sym,side)=>{const syms=Object.keys(port.pos).length<5?["SOL","JUP","WIF","BTC","ETH"]:[];const target=syms[0]||"SOL";forceTrade(target,side,"CONSENSUS",70);log("EXEC","⚡ Manual execute: "+side+" "+target,side==="BUY"?K.g:K.r);}}/>
             </div>
             {/* Compact Claude AI bar (if available) */}
             {aiData&&(
@@ -2432,7 +2527,8 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {tab==="trades"&&(()=>{
         const now2=Date.now();
@@ -2762,10 +2858,12 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
         </div>
       )}
 
-      <div style={{background:"#020608",borderTop:"1px solid #050A12",padding:"3px 16px",display:"flex",justifyContent:"space-between",fontSize:8,color:"#081525",letterSpacing:".1em"}}>
+      <div style={{background:"#020608",borderTop:"1px solid #050A12",padding:"3px 16px",display:"flex",justifyContent:"space-between",fontSize:8,color:"#081525",letterSpacing:".1em",paddingBottom:31}}>
         <span>◈ KYMIA v2.0 — PAPER TRADING · $10,000 SANDBOX CAPITAL · NO REAL FUNDS AT RISK</span>
         <span>Claude Sonnet · 18 Agents · {new Date().toLocaleString("en-US")}</span>
       </div>
+
+      <TimeScrubber sessionStart={sessionStartRef.current} trades={trades}/>
     </div>
   );
 }
