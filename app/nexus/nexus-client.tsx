@@ -1825,7 +1825,7 @@ export default function KYMIA(){
 
   useEffect(()=>{setBlackSwan(Object.values(prices).filter((d)=>Math.abs((d as PriceData).change)>8).length>=2);},[prices]);
 
-  useEffect(()=>{if(logRef.current)logRef.current.scrollTop=logRef.current.scrollHeight;},[logs]);
+  useEffect(()=>{if(logRef.current)logRef.current.scrollTo({top:logRef.current.scrollHeight,behavior:"smooth"});},[logs]);
 
   // Smart trailing stop + SL/TP + 4h expiry
   useEffect(()=>{
@@ -2158,6 +2158,8 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
         @keyframes odometerRoll{from{transform:translateY(-100%);opacity:0}to{transform:translateY(0);opacity:1}}
         @keyframes glitch{0%{transform:translateX(0)}25%{transform:translateX(-2px) skewX(2deg)}75%{transform:translateX(2px) skewX(-2deg)}100%{transform:translateX(0)}}
         @keyframes scan{0%{transform:translateY(4px)}100%{transform:translateY(36px)}}
+        @keyframes logSlideIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+        .log-entry{animation:logSlideIn .3s ease forwards}
         @keyframes convPulse{0%,100%{box-shadow:0 0 0 rgba(0,242,254,0);border-color:rgba(0,242,254,.15)}50%{box-shadow:0 0 28px rgba(0,242,254,.25),inset 0 0 18px rgba(0,242,254,.07);border-color:rgba(0,242,254,.55)}}
         @keyframes convBuyPulse{0%,100%{box-shadow:0 0 0 rgba(0,255,136,0);border-color:rgba(0,255,136,.15)}50%{box-shadow:0 0 28px rgba(0,255,136,.25),inset 0 0 18px rgba(0,255,136,.07);border-color:rgba(0,255,136,.55)}}
         @keyframes nodeFlash{0%{filter:brightness(1)}25%{filter:brightness(3) saturate(2)}75%{filter:brightness(2)}100%{filter:brightness(1)}}
@@ -2285,7 +2287,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
         const convDom=swarmBP>swarmSP?"BUY":"SELL";
         const convCol=convDom==="BUY"?K.g:K.r;
         return(
-        <div style={{flex:1,display:"grid",gridTemplateColumns:focusMode?"0px 1fr 0px":"220px 1fr 260px",gridTemplateRows:"1fr 180px",gap:focusMode?0:6,padding:8,overflow:"hidden",minHeight:0,transition:"grid-template-columns .4s ease"}}>
+        <div style={{flex:1,display:"grid",gridTemplateColumns:focusMode?"0px 1fr 0px":"220px 1fr 260px",gridTemplateRows:"1fr 240px",gap:focusMode?0:6,padding:8,overflow:"hidden",minHeight:0,transition:"grid-template-columns .4s ease"}}>
           {/* LEFT */}
           <div style={{gridRow:"1/3",display:"flex",flexDirection:"column",gap:6,overflow:"hidden"}}>
             <div className="panel" style={{display:"flex",flexDirection:"column",alignItems:"center",padding:"8px 4px 6px"}}>
@@ -2510,9 +2512,9 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
                 </div>
                 <button className="btn" onClick={()=>setLogs([{t:ts(),ag:"SYS",msg:"Log cleared",col:K.tx}])} style={{background:"#040810",color:K.dim,border:"1px solid "+K.brd,padding:"2px 8px",fontSize:8}}>CLR</button>
               </div>
-              <div ref={logRef} style={{flex:1,overflowY:"auto",padding:"2px 0"}}>
+              <div ref={logRef} style={{flex:1,overflowY:"auto",padding:"2px 0",scrollBehavior:"smooth"}}>
                 {logs.map((e,i)=>(
-                  <div key={i} className="fi" style={{display:"flex",gap:7,padding:"2px 10px",borderBottom:"1px solid #030810"}}>
+                  <div key={i} className="log-entry" style={{display:"flex",gap:7,padding:"2px 10px",borderBottom:"1px solid #030810"}}>
                     <span style={{color:K.dim,minWidth:46,fontSize:11,whiteSpace:"nowrap"}}>{e.t}</span>
                     <span style={{color:"#0D1E30",minWidth:52,fontSize:11,fontWeight:600}}>[{e.ag}]</span>
                     <span style={{color:e.col,fontSize:11}}>{e.msg}</span>
