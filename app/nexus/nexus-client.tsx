@@ -51,6 +51,13 @@ const CORRELATED:{[k:string]:string[]}={
   SOL:["JUP","RAY","ORCA","JTO","DRIFT"],BTC:["ETH"],ETH:["BTC"],
   JUP:["SOL","RAY"],RAY:["SOL","JUP"],ORCA:["SOL"],JTO:["SOL"],DRIFT:["SOL"],
 };
+const MISSIONS=[
+  {id:1,name:"FIRST BLOOD",target:0.05,reward:"$500",message:"First alpha captured. Swarm efficiency: NOMINAL.",color:"#00FF88",icon:"⚡"},
+  {id:2,name:"ALPHA CONFIRMED",target:0.10,reward:"$1,000",message:"10% threshold breached. Swarm intelligence: VALIDATED.",color:"#00F2FE",icon:"◈"},
+  {id:3,name:"MOMENTUM PREDATOR",target:0.25,reward:"$2,500",message:"Exceptional performance. You are in the top 2% of traders.",color:"#FFD700",icon:"🏆"},
+  {id:4,name:"MARKET DOMINATOR",target:0.50,reward:"$5,000",message:"Extraordinary. KYMIA has doubled your risk-adjusted returns.",color:"#BD00FF",icon:"👑"},
+  {id:5,name:"NEXUS ELITE",target:1.00,reward:"$10,000",message:"LEGENDARY. Portfolio doubled. You have transcended normal trading.",color:"#FF3366",icon:"◈"},
+];
 
 function OdometerChar({ch,col}:{ch:string,col:string}){
   const prevCh=useRef(ch);
@@ -193,7 +200,7 @@ type PriceData={price:number,prev:number,trend:string,change:number,rsi:number,h
 type AgentState={on:boolean,conf:number|null,sig:string|null,th:string,real?:boolean};
 type NewToken={address:string,name:string,price:string,change1h:number,volume24h:number,liquidity:number,rugScore:number,buys:number,sells:number};
 type DataStatus={jupiter:"ok"|"err"|"loading",binance:"ok"|"err"|"loading",coingecko:"ok"|"err"|"loading",lastUpdate:number};
-type Position={qty:number,avg:number,peak?:number,entryMs?:number,trailActive?:boolean};
+type Position={qty:number,avg:number,peak?:number,entryMs?:number,trailActive?:boolean,side?:"LONG"|"SHORT"};
 type AgentSignals={lens?:{rsi:number,signal:string},radar?:{ema9:number,ema21:number,signal:string},razor?:{rsi:number,macd:number,signal:string},vector?:{adx:number,signal:string},surge?:{volumeChange:number,signal:string},leviathan?:{buyPressure:number,signal:string},echo?:{fg:number,signal:string}};
 type Trade={id:string,sym:string,side:string,qty:number,price:number,pnl:number,conf:number,t:string,ms:number,agent?:string,reason?:string,agentSignals?:AgentSignals};
 type LogEntry={t:string,ag:string,msg:string,col:string};
@@ -455,6 +462,28 @@ function TradingViewChart({sym,entryPrice,sl,tp,trailPrice,interval}:{sym:string
             <span style={{fontSize:8,color:"#2A5070",fontFamily:"monospace"}}>{a.ind}</span>
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+function MissionComplete({mission,onDismiss}:{mission:typeof MISSIONS[0],onDismiss:()=>void}){
+  const next=MISSIONS.find(m=>m.id===mission.id+1);
+  return(
+    <div style={{position:"fixed",inset:0,zIndex:800,background:"rgba(2,4,10,0.93)",backdropFilter:"blur(16px)",display:"flex",alignItems:"center",justifyContent:"center",animation:"fi .5s ease"}} onClick={onDismiss}>
+      <div style={{textAlign:"center",maxWidth:480,padding:40,background:"rgba(6,10,18,0.92)",border:`2px solid ${mission.color}60`,borderRadius:12,boxShadow:`0 0 80px ${mission.color}25,inset 0 0 60px ${mission.color}08`}} onClick={e=>e.stopPropagation()}>
+        <div style={{fontSize:56,marginBottom:16,filter:`drop-shadow(0 0 20px ${mission.color})`}}>{mission.icon}</div>
+        <div style={{fontSize:11,color:mission.color,letterSpacing:".4em",fontWeight:700,fontFamily:"monospace",marginBottom:8,opacity:.8}}>◈ MISSION COMPLETE</div>
+        <div style={{fontSize:30,fontWeight:900,color:mission.color,fontFamily:"monospace",letterSpacing:".12em",textShadow:`0 0 30px ${mission.color}`,marginBottom:12}}>{mission.name}</div>
+        <div style={{fontSize:20,fontWeight:700,color:K.g,fontFamily:"monospace",marginBottom:16,textShadow:`0 0 16px ${K.g}`}}>+{mission.reward} VIRTUAL ALPHA</div>
+        <div style={{fontSize:13,color:"#A8D0EC",lineHeight:1.7,fontStyle:"italic",marginBottom:24,fontFamily:"monospace"}}>"{mission.message}"</div>
+        {next&&(
+          <div style={{padding:"10px 16px",background:mission.color+"10",border:`1px solid ${mission.color}30`,borderRadius:4,marginBottom:16}}>
+            <div style={{fontSize:9,color:"#2A5070",marginBottom:3}}>NEXT MISSION</div>
+            <div style={{fontSize:12,color:mission.color,fontWeight:700}}>{next.name} → +{(next.target*100).toFixed(0)}%</div>
+          </div>
+        )}
+        <div style={{fontSize:9,color:"#2A5070",fontFamily:"monospace"}}>Click to dismiss</div>
       </div>
     </div>
   );
@@ -1421,12 +1450,34 @@ export default function KYMIA(){
   const [confirmClose,setConfirmClose]=useState<string|null>(null);
   const [focusMode,setFocusMode]=useState(false);
   const [flashingAgent,setFlashingAgent]=useState<string|null>(null);
+  const [completedMissions,setCompletedMissions]=useState<number[]>([]);
+  const [missionCelebration,setMissionCelebration]=useState<typeof MISSIONS[0]|null>(null);
+  const [signalCount,setSignalCount]=useState(0);
+  const agentLastActiveRef=useRef<{[id:string]:number}>({});
+  const completedMissionsRef=useRef<number[]>([]);
   const prevAgStRef=useRef<{[k:string]:AgentState}>({});
   const sessionStartRef=useRef(Date.now());
   const logRef=useRef<HTMLDivElement>(null);
   const swarmRef=useRef<HTMLDivElement>(null);
   const entropyRef=useRef(entropy);
   useEffect(()=>{entropyRef.current=entropy;},[entropy]);
+
+  // Keep completedMissions ref in sync for use inside effects
+  useEffect(()=>{completedMissionsRef.current=completedMissions;},[completedMissions]);
+
+  // Mission check on equity change
+  useEffect(()=>{
+    const pct=(port.equity-CAP)/CAP;
+    for(const mission of MISSIONS){
+      if(pct>=mission.target&&!completedMissionsRef.current.includes(mission.id)){
+        setCompletedMissions(prev=>{const n=[...prev,mission.id];completedMissionsRef.current=n;return n;});
+        setMissionCelebration(mission);
+        setTimeout(()=>setMissionCelebration(null),8000);
+        break;
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[port.equity]);
 
   // Node Flash — detect signal changes between render cycles
   useEffect(()=>{
@@ -1715,7 +1766,9 @@ export default function KYMIA(){
       updates["consensus"]={sig,conf,real:true,on:true,th:`${active.length}/17 agents reporting\nBUY weight: ${Math.round(buyPct*100)}% | SELL: ${Math.round(sellPct*100)}%\nAgreement: ${Math.round(agreePct*100)}%\n${sig==="HOLD"?"No consensus (need 60%+)":dir+" consensus confirmed"}`};
     }catch(e){console.error("[CONSENSUS] FAILED",e);updates["consensus"]={real:false};}
 
-    // Apply all updates
+    // Apply all updates + track last-active timestamps
+    const now=Date.now();
+    for(const id of Object.keys(updates)){agentLastActiveRef.current[id]=now;}
     console.log("[KYMIA] All agents:",Object.fromEntries(Object.entries(updates).map(([k,v])=>[k,{sig:v.sig,conf:v.conf,real:v.real}])));
     console.groupEnd();
     setAgSt(prev=>{
@@ -1725,6 +1778,7 @@ export default function KYMIA(){
       }
       return n;
     });
+    setSignalCount(n=>n+Object.keys(updates).length);
   },[]);
 
   useEffect(()=>{
@@ -1777,7 +1831,15 @@ export default function KYMIA(){
   useEffect(()=>{
     setPort(p=>{
       let eq=p.cash;
-      for(const[s,pos]of Object.entries(p.pos))eq+=pos.qty*(prices[s]?.price||pos.avg);
+      for(const[s,pos]of Object.entries(p.pos)){
+        const cur=prices[s]?.price||pos.avg;
+        if(pos.side==="SHORT"){
+          // SHORT: collateral (avg*qty) + unrealised P&L
+          eq+=pos.avg*pos.qty+(pos.avg-cur)*pos.qty;
+        }else{
+          eq+=pos.qty*cur;
+        }
+      }
       return{...p,equity:eq,peak:Math.max(p.peak,eq)};
     });
   },[prices]);
@@ -1786,32 +1848,53 @@ export default function KYMIA(){
 
   useEffect(()=>{if(logRef.current)logRef.current.scrollTo({top:logRef.current.scrollHeight,behavior:"smooth"});},[logs]);
 
-  // Smart trailing stop + SL/TP + 4h expiry
+  // Smart trailing stop + SL/TP + 4h expiry (LONG + SHORT)
   useEffect(()=>{
     if(!running)return;
     const now=Date.now();
     for(const[sym,pos]of Object.entries(port.pos)){
       const cur=prices[sym]?.price;if(!cur)continue;
-      const pct=((cur-pos.avg)/pos.avg)*100;
-      // Update peak + activate trailing stop at +1.5%
+      const isShort=pos.side==="SHORT";
+      const pnl=isShort?(pos.avg-cur)*pos.qty:(cur-pos.avg)*pos.qty;
+      const pct=isShort?((pos.avg-cur)/pos.avg)*100:((cur-pos.avg)/pos.avg)*100;
+
+      if(isShort){
+        // SHORT: SL = entry*1.025, TP = entry*0.945
+        const sl=pos.avg*1.025,tp=pos.avg*0.945;
+        // 4h expiry
+        if(pos.entryMs&&now-pos.entryMs>4*60*60*1000){
+          setPort(prev=>{const p2={...prev.pos};delete p2[sym];return{...prev,cash:prev.cash+pos.avg*pos.qty+pnl,pos:p2};});
+          addWinCard(sym,pnl,pct,cur,"TIMER","4H SHORT Expiry");
+          log("TIMER","⏱ 4H SHORT EXPIRY: "+sym+" | "+fU(pnl),pnl>=0?K.g:K.gold);
+          continue;
+        }
+        if(cur>=sl){
+          setPort(prev=>{const p2={...prev.pos};delete p2[sym];return{...prev,cash:prev.cash+pos.avg*pos.qty+pnl,pos:p2};});
+          addWinCard(sym,pnl,pct,cur,"AEGIS","SHORT SL");
+          log("AEGIS","⛔ SHORT SL "+sym+" | "+fU(pnl),K.r);
+        }else if(cur<=tp){
+          setPort(prev=>{const p2={...prev.pos};delete p2[sym];return{...prev,cash:prev.cash+pos.avg*pos.qty+pnl,pos:p2};});
+          addWinCard(sym,pnl,pct,cur,"AEGIS","SHORT TP");
+          log("AEGIS","💰 SHORT TP "+sym+" | "+fU(pnl),K.g);
+        }
+        continue;
+      }
+
+      // LONG path (unchanged)
       if(!pos.peak||cur>pos.peak){
         const trailJustActivated=!pos.trailActive&&pct>=1.5;
         setPort(prev=>{if(!prev.pos[sym])return prev;return{...prev,pos:{...prev.pos,[sym]:{...prev.pos[sym],peak:cur,trailActive:prev.pos[sym].trailActive||pct>=1.5}}};});
         if(trailJustActivated)log("TRAIL","🎯 TRAILING STOP activated: "+sym+" +"+f2(pct,1)+"%",K.gold);
         continue;
       }
-      // 4-hour max hold
       if(pos.entryMs&&now-pos.entryMs>4*60*60*1000){
-        const pnl=(cur-pos.avg)*pos.qty;
         setPort(prev=>{const p2={...prev.pos};delete p2[sym];return{...prev,cash:prev.cash+cur*pos.qty,pos:p2};});
         addWinCard(sym,pnl,pct,cur,"TIMER","4H Expiry");
         log("TIMER","⏱ 4H EXPIRY: "+sym+" | "+fU(pnl),pnl>=0?K.g:K.gold);
         continue;
       }
-      // Tiered trailing stop
       const stop=getStop(pos,cur);
       if(cur<=stop){
-        const pnl=(cur-pos.avg)*pos.qty;
         setPort(prev=>{const p2={...prev.pos};delete p2[sym];return{...prev,cash:prev.cash+cur*pos.qty,pos:p2};});
         const reason=pct>=5?"Lock +5%":pct>=3?"Trail -1.5%":pct>=1.5?"Breakeven":"SL -2.5%";
         addWinCard(sym,pnl,pct,cur,pct>=1.5?"TRAIL":"AEGIS",reason);
@@ -1925,7 +2008,8 @@ export default function KYMIA(){
         const frac=kellySize(sig.conf,wr*100);
         const alloc=Math.min(prt.cash*frac,prt.cash*.9);
         const qty=alloc/p.price;
-        setPort(prev=>{if(prev.pos[sym])return prev;return{...prev,cash:prev.cash-alloc,pos:{...prev.pos,[sym]:{qty,avg:p.price,entryMs:Date.now()}}};});
+        setPort(prev=>{if(prev.pos[sym])return prev;return{...prev,cash:prev.cash-alloc,pos:{...prev.pos,[sym]:{qty,avg:p.price,peak:p.price,entryMs:Date.now(),trailActive:false,side:"LONG"}}};});
+        setSignalCount(n=>n+1);
         const ags2=agStRef.current;
         const agSig2:AgentSignals={};
         if(ags2["lens"]?.conf&&ags2["lens"]?.sig)agSig2.lens={rsi:calcRSI(p.hist.slice(-15),14),signal:ags2["lens"].sig};
@@ -1938,12 +2022,22 @@ export default function KYMIA(){
         setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym,side:"BUY",qty,price:p.price,pnl:0,conf:Math.round(sig.conf),t:ts(),ms:Date.now(),agentSignals:agSig2},...t.slice(0,99)]);
         log("EXEC","▶ LONG "+sym+" @ "+fPrice(p.price)+" kelly:"+f2(frac*100,0)+"% sig:"+sig.quality,K.g);
         tradeCount++;
-      }else if((cs.sig==="SELL"||sig.isSell)&&prt.pos[sym]){
+      }else if((cs.sig==="SELL"||sig.isSell)&&prt.pos[sym]&&prt.pos[sym].side!=="SHORT"){
+        // Close existing LONG position
         const pos=prt.pos[sym];
         const pnl=(p.price-pos.avg)*pos.qty;
         setPort(prev=>{const p2={...prev.pos};delete p2[sym];return{...prev,cash:prev.cash+pos.qty*p.price,pos:p2};});
         addWinCard(sym,pnl,((p.price-pos.avg)/pos.avg)*100,p.price,"CONSENSUS","Signal Exit");
         log("EXEC","◀ CLOSE "+sym+" @ "+fPrice(p.price)+" PnL:"+fU(pnl),pnl>=0?K.g:K.r);
+        tradeCount++;
+      }else if(cs.sig==="SELL"&&!prt.pos[sym]&&prt.cash>500&&Object.keys(prt.pos).length<5){
+        // Open SHORT position
+        const alloc=Math.min(prt.cash*0.08,prt.cash*.9);
+        const qty=alloc/p.price;
+        setPort(prev=>{if(prev.pos[sym])return prev;return{...prev,cash:prev.cash-alloc,pos:{...prev.pos,[sym]:{qty,avg:p.price,peak:p.price,entryMs:Date.now(),trailActive:false,side:"SHORT"}}};});
+        setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym,side:"SHORT",qty,price:p.price,pnl:0,conf:Math.round(sig.conf),t:ts(),ms:Date.now()},...t.slice(0,99)]);
+        log("EXEC","▼ SHORT "+sym+" @ "+fPrice(p.price)+" conf:"+Math.round(sig.conf)+"%",K.r);
+        setSignalCount(n=>n+1);
         tradeCount++;
       }
     },2000);
@@ -2176,6 +2270,8 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
             <span style={{fontSize:8,color:K.dim}}>ENTROPY</span>
             <span style={{fontSize:10,color:entropyCol,fontWeight:700}}>{Math.round(entropy)}</span>
           </div>
+          {(()=>{const nextM=MISSIONS.find(m=>!completedMissions.includes(m.id));if(!nextM)return null;const mp=Math.min(100,((port.equity-CAP)/CAP)/nextM.target*100);return(<div style={{display:"flex",alignItems:"center",gap:5,padding:"2px 8px",background:nextM.color+"10",border:`1px solid ${nextM.color}25`,borderRadius:2}}><span style={{fontSize:9,color:nextM.color}}>{nextM.icon}</span><div style={{width:52,height:3,background:"#06090F",borderRadius:2}}><div style={{height:"100%",borderRadius:2,background:nextM.color,width:mp+"%",transition:"width .5s",boxShadow:`0 0 6px ${nextM.color}`}}/></div><span style={{fontSize:8,color:"#2A5070"}}>{mp.toFixed(0)}%</span></div>);})()}
+          {running&&<div style={{display:"flex",alignItems:"center",gap:4,padding:"2px 7px",background:K.g+"10",border:"1px solid "+K.g+"25",borderRadius:2}}><div style={{width:5,height:5,borderRadius:"50%",background:K.g,animation:"pu 1s infinite"}}/><span style={{fontSize:7,color:K.g,letterSpacing:".1em"}}>24/7</span></div>}
           {aiData&&<span style={{padding:"2px 7px",background:rc+"20",color:rc,border:"1px solid "+rc+"40",fontSize:9,borderRadius:2}}>{String(aiData.regime||"")}</span>}
         </div>
         <div style={{display:"flex",alignItems:"center",gap:8}}>
@@ -2305,6 +2401,53 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
                 </div>
               ))}
             </div>
+            {/* Portfolio Health + Mission Progress */}
+            <div className="panel" style={{padding:"8px 10px"}}>
+              {(()=>{
+                const pnl=port.equity-CAP;const pct=(pnl/CAP)*100;
+                const cl=trades.filter(t=>t.pnl!==0);
+                const wr=cl.length?cl.filter(t=>t.pnl>0).length/cl.length*100:0;
+                const nextM=MISSIONS.find(m=>!completedMissions.includes(m.id));
+                const pnlCol=pnl>=0?K.g:K.r;
+                const mp=nextM?Math.min(100,pct/(nextM.target*100)*100):100;
+                return(<>
+                  <div style={{fontSize:19,fontWeight:900,color:pnlCol,textShadow:`0 0 12px ${pnlCol}`,marginBottom:2,fontFamily:"monospace"}}>{pnl>=0?"+":""}{fU(pnl)}</div>
+                  <div style={{fontSize:8,color:"#2A5070",marginBottom:8}}>{fP(pct)} since start · WR {f2(wr,0)}% · {signalCount} signals</div>
+                  {nextM&&(<>
+                    <div style={{display:"flex",justifyContent:"space-between",fontSize:8,marginBottom:3}}>
+                      <span style={{color:nextM.color}}>{nextM.icon} {nextM.name}</span>
+                      <span style={{color:"#2A5070"}}>{mp.toFixed(0)}%</span>
+                    </div>
+                    <div style={{height:4,background:"#06090F",borderRadius:2,marginBottom:3}}>
+                      <div style={{height:"100%",borderRadius:2,background:nextM.color,width:mp+"%",transition:"width .5s",boxShadow:`0 0 8px ${nextM.color}`}}/>
+                    </div>
+                    <div style={{fontSize:7,color:"#2A5070",marginBottom:6}}>Target: +{(nextM.target*100).toFixed(0)}% (+{f2(CAP*nextM.target)} virtual)</div>
+                  </>)}
+                  {completedMissions.length>0&&(
+                    <div style={{display:"flex",gap:3,flexWrap:"wrap"}}>
+                      {completedMissions.map(id=>{const m=MISSIONS.find(x=>x.id===id)!;return(<div key={id} style={{padding:"1px 5px",fontSize:7,background:m.color+"15",color:m.color,border:`1px solid ${m.color}30`,borderRadius:2}}>{m.icon} {m.name}</div>);})}
+                    </div>
+                  )}
+                </>);
+              })()}
+            </div>
+            {/* Agent Activity Monitor */}
+            <div className="panel" style={{padding:"6px 9px"}}>
+              <div style={{fontSize:7,color:K.dim,letterSpacing:".12em",marginBottom:5}}>◉ AGENT ACTIVITY</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"2px 6px"}}>
+                {AGENTS.filter(a=>a.id!=="consensus").slice(0,12).map(a=>{
+                  const last=agentLastActiveRef.current[a.id]||0;
+                  const secAgo=last?(Date.now()-last)/1000:999;
+                  const status=secAgo<20?"ACTIVE":secAgo<60?"SCAN":"IDLE";
+                  const col=status==="ACTIVE"?K.g:status==="SCAN"?K.gold:K.dim;
+                  return(<div key={a.id} style={{display:"flex",justifyContent:"space-between",fontSize:7,padding:"1px 0"}}>
+                    <span style={{color:K.tx}}>{a.s}</span>
+                    <span style={{color:col,letterSpacing:".06em"}}>{status}</span>
+                  </div>);
+                })}
+              </div>
+              <div style={{marginTop:5,fontSize:7,color:"#2A5070"}}>⚡ {signalCount} signals analyzed</div>
+            </div>
           </div>
 
           {/* CENTER */}
@@ -2372,11 +2515,15 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
               {Object.keys(port.pos).length===0
                 ?<div style={{textAlign:"center",color:"#0A1E30",padding:"12px 0",fontSize:9}}>No open positions</div>
                 :Object.entries(port.pos).map(([sym,pos])=>{
-                  const cur=prices[sym]?.price||pos.avg,pnl=(cur-pos.avg)*pos.qty,pp=(cur-pos.avg)/pos.avg*100;
+                  const cur=prices[sym]?.price||pos.avg;
+                  const isShort=pos.side==="SHORT";
+                  const pnl=isShort?(pos.avg-cur)*pos.qty:(cur-pos.avg)*pos.qty;
+                  const pp=isShort?((pos.avg-cur)/pos.avg*100):((cur-pos.avg)/pos.avg*100);
+                  const posCol=isShort?K.r:K.c;
                   return(
-                    <div key={sym} onClick={()=>{const tr=trades.find(t=>t.sym===sym&&t.side==="BUY");setChartTrade({trade:tr||null,position:pos,agentSignals:tr?.agentSignals});}} style={{marginBottom:6,padding:7,background:(pnl>=0?K.g:K.r)+"08",borderRadius:2,border:"1px solid "+(pnl>=0?K.g:K.r)+"20",cursor:"pointer",transition:"border-color .2s"}} title="Click to view chart">
+                    <div key={sym} onClick={()=>{const tr=trades.find(t=>t.sym===sym&&(t.side==="BUY"||t.side==="SHORT"));setChartTrade({trade:tr||null,position:pos,agentSignals:tr?.agentSignals});}} style={{marginBottom:6,padding:7,background:(pnl>=0?K.g:K.r)+"08",borderRadius:2,border:"1px solid "+(pnl>=0?K.g:K.r)+"20",cursor:"pointer",transition:"border-color .2s"}} title="Click to view chart">
                       <div style={{display:"flex",justifyContent:"space-between",marginBottom:2}}>
-                        <span style={{color:K.c,fontWeight:700,fontSize:10}}>{sym} LONG {pos.trailActive&&<span style={{color:K.gold,fontSize:8}}> ◈TRAIL</span>}</span>
+                        <span style={{color:posCol,fontWeight:700,fontSize:10}}>{sym} {isShort?"▼ SHORT":"LONG"} {pos.trailActive&&<span style={{color:K.gold,fontSize:8}}> ◈TRAIL</span>}</span>
                         <span style={{color:pnl>=0?K.g:K.r,fontSize:10}}>{fU(pnl)}</span>
                       </div>
                       <div style={{display:"flex",justifyContent:"space-between",fontSize:8,color:K.tx}}>
@@ -2675,6 +2822,8 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
       {modal==="share"&&<PerformanceCard trades={trades} totalPnL={totalPnL} onClose={()=>setModal(null)}/>}
 
       {/* Trade Chart Modal */}
+      {missionCelebration&&<MissionComplete mission={missionCelebration} onDismiss={()=>setMissionCelebration(null)}/>}
+
       {chartTrade&&<TradeModal
         trade={chartTrade.trade}
         position={chartTrade.position}
