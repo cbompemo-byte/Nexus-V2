@@ -357,291 +357,180 @@ function calcRSIArr(data:number[],period=14):Array<number|null>{
   return out;
 }
 
-function TradingChart({sym,trade,position,agentSignals,onClose,onClosePosition}:{sym:string,trade:Trade|null,position:Position|null,agentSignals?:AgentSignals,onClose:()=>void,onClosePosition?:()=>void}){
-  const [candles,setCandles]=useState<Candle[]>([]);
-  const [tf,setTf]=useState("5m");
-  const [loading,setLoading]=useState(true);
-  const [err,setErr]=useState<string|null>(null);
+const TV_SYMBOLS:{[k:string]:string}={
+  SOL:"BINANCE:SOLUSDT",BTC:"BINANCE:BTCUSDT",ETH:"BINANCE:ETHUSDT",
+  JUP:"BINANCE:JUPUSDT",WIF:"BINANCE:WIFUSDT",BONK:"BINANCE:BONKUSDT",
+  PYTH:"BINANCE:PYTHUSDT",RAY:"BINANCE:RAYUSDT",ORCA:"BINANCE:ORCAUSDT",
+  PEPE:"BINANCE:PEPEUSDT",POPCAT:"BINANCE:POPCATUSDT",DRIFT:"BINANCE:DRIFTUSDT",
+};
+
+function TradingViewChart({sym,entryPrice,sl,tp,trailPrice,interval}:{sym:string,entryPrice:number,sl:number,tp:number,trailPrice:number|null,interval:string}){
+  const containerRef=useRef<HTMLDivElement>(null);
+  const tvSym=TV_SYMBOLS[sym]||`BINANCE:${sym}USDT`;
 
   useEffect(()=>{
-    setLoading(true);setErr(null);
-    fetchKrakenCandles(sym,tf).then(c=>{setCandles(c);setLoading(false);}).catch(e=>{setErr(String(e));setLoading(false);});
-  },[sym,tf]);
-
-  const W=680,H=280,VH=60,RSI_H=60,PAD={l:60,r:24,t:20,b:20};
-  const entry=trade?.price||position?.avg||0;
-  const sl=entry*0.975;
-  const tp=entry*1.055;
-  const trail=position?.peak?position.peak*0.988:null;
-
-  const chartBody=()=>{
-    if(loading)return(
-      <div style={{height:H+VH+RSI_H+40,display:"flex",alignItems:"center",justifyContent:"center",color:K.dim,fontFamily:"monospace",fontSize:11}}>
-        ⟳ Loading {sym} candles...
-      </div>
-    );
-    if(err||candles.length===0)return(
-      <div style={{height:H+VH+RSI_H+40,display:"flex",alignItems:"center",justifyContent:"center",color:K.r,fontFamily:"monospace",fontSize:10}}>
-        ⚠ {err||"No data"}
-      </div>
-    );
-
-    const closes=candles.map(c=>c.close);
-    const highs=candles.map(c=>c.high);
-    const lows=candles.map(c=>c.low);
-    const allPrices=[...highs,...lows];
-    if(entry){allPrices.push(sl,tp);}
-    const minP=Math.min(...allPrices)*0.9995;
-    const maxP=Math.max(...allPrices)*1.0005;
-    const rangeP=maxP-minP||1;
-
-    const xScale=(i:number)=>PAD.l+(i/(Math.max(candles.length-1,1)))*(W-PAD.l-PAD.r);
-    const yScale=(p:number)=>PAD.t+(1-(p-minP)/rangeP)*(H-PAD.t-PAD.b);
-    const candleWidth=Math.max(2,(W-PAD.l-PAD.r)/candles.length-1);
-
-    const ema9=calcEMAArr(closes,9);
-    const ema21=calcEMAArr(closes,21);
-    const ema50=calcEMAArr(closes,50);
-    const rsiData=calcRSIArr(closes,14);
-    const ema12=calcEMAArr(closes,12);
-    const ema26=calcEMAArr(closes,26);
-    const macdLine=ema12.map((v,i)=>v-ema26[i]);
-
-    const nullCount=rsiData.filter(v=>v===null).length;
-    const rsiValid=rsiData.filter((v):v is number=>v!==null);
-    const lastRsi=rsiValid[rsiValid.length-1]??null;
-    const maxVol=Math.max(...candles.map(c=>c.volume))||1;
-
-    // Safe yScale for lines within view
-    const ys=(p:number)=>{const y=yScale(p);return Math.max(PAD.t,Math.min(H-PAD.b,y));};
-
-    return(
-      <svg width="100%" viewBox={`0 0 ${W} ${H+VH+RSI_H+60}`} style={{display:"block",fontFamily:"monospace"}}>
-        <defs>
-          <linearGradient id="tcBullGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={K.g} stopOpacity="0.12"/>
-            <stop offset="100%" stopColor={K.g} stopOpacity="0"/>
-          </linearGradient>
-          <filter id="tcGlow">
-            <feGaussianBlur stdDeviation="1.5" result="blur"/>
-            <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
-          </filter>
-        </defs>
-
-        {/* Grid */}
-        {[0,0.25,0.5,0.75,1].map((t,i)=>{
-          const y=PAD.t+t*(H-PAD.t-PAD.b);
-          const price=maxP-t*rangeP;
-          return(
-            <g key={i}>
-              <line x1={PAD.l} y1={y} x2={W-PAD.r} y2={y} stroke="#0A1D33" strokeWidth="0.5"/>
-              <text x={PAD.l-4} y={y+4} textAnchor="end" fontSize="9" fill={K.dim}>${f2(price,price>=1?0:4)}</text>
-            </g>
-          );
-        })}
-
-        {/* EMA 50 */}
-        <polyline points={ema50.map((v,i)=>`${xScale(i)},${ys(v)}`).join(" ")} fill="none" stroke={K.pu} strokeWidth="1" opacity=".45"/>
-
-        {/* EMA 21 */}
-        <polyline points={ema21.map((v,i)=>`${xScale(i)},${ys(v)}`).join(" ")} fill="none" stroke={K.gold} strokeWidth="1.2" opacity=".7"/>
-        <text x={W-PAD.r+2} y={ys(ema21[ema21.length-1])+4} fontSize="8" fill={K.gold}>EMA21</text>
-
-        {/* EMA 9 */}
-        <polyline points={ema9.map((v,i)=>`${xScale(i)},${ys(v)}`).join(" ")} fill="none" stroke={K.c} strokeWidth="1.2" opacity=".7"/>
-        <text x={W-PAD.r+2} y={ys(ema9[ema9.length-1])+4} fontSize="8" fill={K.c}>EMA9</text>
-
-        {/* Candlesticks */}
-        {candles.map((c,i)=>{
-          const x=xScale(i);
-          const isBull=c.close>=c.open;
-          const col=isBull?K.g:K.r;
-          const bodyTop=yScale(Math.max(c.open,c.close));
-          const bodyBot=yScale(Math.min(c.open,c.close));
-          const bodyH=Math.max(1,bodyBot-bodyTop);
-          return(
-            <g key={i}>
-              <line x1={x} y1={yScale(c.high)} x2={x} y2={yScale(c.low)} stroke={col} strokeWidth="0.8" opacity="0.7"/>
-              <rect x={x-candleWidth/2} y={bodyTop} width={candleWidth} height={bodyH} fill={isBull?col+"30":col+"50"} stroke={col} strokeWidth="0.5"/>
-            </g>
-          );
-        })}
-
-        {/* Entry line */}
-        {entry>0&&(
-          <g filter="url(#tcGlow)">
-            <line x1={PAD.l} y1={ys(entry)} x2={W-PAD.r} y2={ys(entry)} stroke={K.c} strokeWidth="1.5" strokeDasharray="6 3"/>
-            <rect x={W-PAD.r} y={ys(entry)-9} width={70} height={16} fill={K.c} rx="2"/>
-            <text x={W-PAD.r+4} y={ys(entry)+4} fontSize="9" fill="#04060D" fontWeight="700">ENTRY {fPrice(entry)}</text>
-            <polygon points={`${PAD.l+8},${ys(entry)+14} ${PAD.l},${ys(entry)} ${PAD.l+16},${ys(entry)}`} fill={K.c}/>
-            <text x={PAD.l+20} y={ys(entry)+4} fontSize="9" fill={K.c} fontWeight="700">▲ LONG</text>
-          </g>
-        )}
-
-        {/* SL line */}
-        {entry>0&&(
-          <g>
-            <line x1={PAD.l} y1={ys(sl)} x2={W-PAD.r} y2={ys(sl)} stroke={K.r} strokeWidth="1.2" strokeDasharray="4 4" opacity=".8"/>
-            <rect x={W-PAD.r} y={ys(sl)-9} width={56} height={16} fill={K.r} rx="2"/>
-            <text x={W-PAD.r+4} y={ys(sl)+4} fontSize="9" fill="white" fontWeight="700">SL {fPrice(sl)}</text>
-          </g>
-        )}
-
-        {/* TP line */}
-        {entry>0&&(
-          <g>
-            <line x1={PAD.l} y1={ys(tp)} x2={W-PAD.r} y2={ys(tp)} stroke={K.g} strokeWidth="1.2" strokeDasharray="4 4" opacity=".8"/>
-            <rect x={W-PAD.r} y={ys(tp)-9} width={56} height={16} fill={K.g} rx="2"/>
-            <text x={W-PAD.r+4} y={ys(tp)+4} fontSize="9" fill="#04060D" fontWeight="700">TP {fPrice(tp)}</text>
-          </g>
-        )}
-
-        {/* Trailing stop */}
-        {trail&&(
-          <g>
-            <line x1={PAD.l} y1={ys(trail)} x2={W-PAD.r} y2={ys(trail)} stroke={K.gold} strokeWidth="1.5" strokeDasharray="3 3"/>
-            <rect x={W-PAD.r} y={ys(trail)-9} width={70} height={16} fill={K.gold} rx="2"/>
-            <text x={W-PAD.r+4} y={ys(trail)+4} fontSize="9" fill="#04060D" fontWeight="700">TRAIL {fPrice(trail)}</text>
-          </g>
-        )}
-
-        {/* Volume */}
-        <g transform={`translate(0,${H+10})`}>
-          <text x={PAD.l} y={-4} fontSize="8" fill={K.dim}>VOLUME</text>
-          {candles.map((c,i)=>{
-            const x=xScale(i);
-            const barH=(c.volume/maxVol)*VH;
-            return(
-              <rect key={i} x={x-candleWidth/2} y={VH-barH} width={candleWidth} height={barH}
-                fill={c.close>=c.open?K.g+"28":K.r+"28"} stroke={c.close>=c.open?K.g+"50":K.r+"50"} strokeWidth="0.3"/>
-            );
-          })}
-        </g>
-
-        {/* RSI panel */}
-        <g transform={`translate(0,${H+VH+20})`}>
-          <text x={PAD.l} y={-4} fontSize="8" fill={K.dim}>RSI(14)</text>
-          <line x1={PAD.l} y1={RSI_H*0.3} x2={W-PAD.r} y2={RSI_H*0.3} stroke={K.r+"30"} strokeWidth="0.5" strokeDasharray="3 3"/>
-          <text x={PAD.l-4} y={RSI_H*0.3+3} textAnchor="end" fontSize="8" fill={K.r+"70"}>70</text>
-          <line x1={PAD.l} y1={RSI_H*0.7} x2={W-PAD.r} y2={RSI_H*0.7} stroke={K.g+"30"} strokeWidth="0.5" strokeDasharray="3 3"/>
-          <text x={PAD.l-4} y={RSI_H*0.7+3} textAnchor="end" fontSize="8" fill={K.g+"70"}>30</text>
-          <polyline
-            points={rsiValid.map((v,i)=>`${xScale(i+nullCount)},${RSI_H-(v/100)*RSI_H}`).join(" ")}
-            fill="none" stroke={K.pu} strokeWidth="1.5"/>
-          {lastRsi!==null&&(
-            <text x={W-PAD.r+4} y={RSI_H-(lastRsi/100)*RSI_H+3} fontSize="9" fill={K.pu} fontWeight="700">{lastRsi.toFixed(0)}</text>
-          )}
-        </g>
-
-        {/* X-axis time labels */}
-        {[0,Math.floor(candles.length*0.25),Math.floor(candles.length*0.5),Math.floor(candles.length*0.75),candles.length-1].map((idx,i)=>(
-          <text key={i} x={xScale(idx)} y={H+8} textAnchor="middle" fontSize="8" fill={K.dim}>
-            {new Date(candles[idx]?.time||0).toLocaleTimeString("en",{hour:"2-digit",minute:"2-digit"})}
-          </text>
-        ))}
-
-        {/* MACD mini indicator line in RSI area right side */}
-        {macdLine.length>0&&(
-          <g transform={`translate(0,${H+VH+20})`} opacity=".4">
-            {(() => {
-              const ml=macdLine;
-              const mn2=Math.min(...ml),mx2=Math.max(...ml)||1;
-              const rng=mx2-mn2||1;
-              return <polyline points={ml.map((v,i)=>`${xScale(i)},${RSI_H/2-(((v-mn2)/rng-0.5)*RSI_H*0.4)}`).join(" ")} fill="none" stroke={K.c} strokeWidth="0.7"/>;
-            })()}
-          </g>
-        )}
-      </svg>
-    );
-  };
-
-  const lastClose=candles[candles.length-1]?.close||0;
-  const curPnL=position&&entry?((lastClose-entry)*position.qty):null;
-  const curPct=entry?((lastClose-entry)/entry*100):null;
+    if(!containerRef.current)return;
+    containerRef.current.innerHTML="";
+    const script=document.createElement("script");
+    script.src="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js";
+    script.type="text/javascript";
+    script.async=true;
+    script.innerHTML=JSON.stringify({
+      autosize:true,
+      symbol:tvSym,
+      interval,
+      timezone:"Etc/UTC",
+      theme:"dark",
+      style:"1",
+      locale:"en",
+      backgroundColor:"rgba(4,6,13,1)",
+      gridColor:"rgba(10,29,51,0.5)",
+      hide_top_toolbar:false,
+      hide_legend:false,
+      save_image:false,
+      calendar:false,
+      hide_volume:false,
+      support_host:"https://www.tradingview.com",
+      studies:["RSI@tv-basicstudies","MAExp@tv-basicstudies","MACD@tv-basicstudies","Volume@tv-basicstudies"],
+      studies_overrides:{"moving average exponential.length":9,"moving average exponential.source":"close","rsi.length":14,"macd.fast length":12,"macd.slow length":26,"macd.signal smoothing":9},
+      disabled_features:["use_localstorage_for_settings","header_symbol_search","header_compare"],
+      enabled_features:["study_templates","side_toolbar_in_fullscreen_mode"],
+      overrides:{
+        "paneProperties.background":"#04060D","paneProperties.backgroundType":"solid",
+        "paneProperties.vertGridProperties.color":"#0A1D33","paneProperties.horzGridProperties.color":"#0A1D33",
+        "scalesProperties.textColor":"#2A5070","scalesProperties.lineColor":"#0A1D33",
+        "mainSeriesProperties.candleStyle.upColor":"#00FF88","mainSeriesProperties.candleStyle.downColor":"#FF3366",
+        "mainSeriesProperties.candleStyle.borderUpColor":"#00FF88","mainSeriesProperties.candleStyle.borderDownColor":"#FF3366",
+        "mainSeriesProperties.candleStyle.wickUpColor":"#00FF8880","mainSeriesProperties.candleStyle.wickDownColor":"#FF336680",
+      },
+    });
+    containerRef.current.appendChild(script);
+    return()=>{if(containerRef.current)containerRef.current.innerHTML="";};
+  },[tvSym,interval]);
 
   return(
-    <div style={{background:K.bg,border:"1px solid "+K.brd,borderRadius:8,overflow:"hidden",width:"100%"}}>
-      {/* Header */}
-      <div style={{padding:"12px 16px",borderBottom:"1px solid "+K.brd,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-        <div style={{display:"flex",alignItems:"center",gap:12}}>
-          <div style={{fontSize:16,fontWeight:900,color:K.c,fontFamily:"monospace"}}>{sym}/USD</div>
-          <div style={{fontSize:10,color:position?K.g:K.dim,fontFamily:"monospace"}}>
-            {position?"● POSITION OPEN":"◉ CLOSED"}
+    <div style={{position:"relative",width:"100%",height:420}}>
+      <div className="tradingview-widget-container" ref={containerRef} style={{width:"100%",height:"100%"}}/>
+      {/* KYMIA overlay — Entry/SL/TP badges */}
+      <div style={{position:"absolute",top:8,left:8,display:"flex",flexDirection:"column",gap:4,pointerEvents:"none",zIndex:10}}>
+        <div style={{display:"flex",alignItems:"center",gap:6,padding:"4px 10px",background:"rgba(0,242,254,0.15)",border:"1px solid #00F2FE60",borderRadius:3,backdropFilter:"blur(8px)"}}>
+          <div style={{width:8,height:1.5,background:"#00F2FE"}}/>
+          <span style={{fontSize:10,color:"#00F2FE",fontWeight:700,fontFamily:"monospace"}}>ENTRY ${entryPrice?.toFixed(2)}</span>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:6,padding:"4px 10px",background:"rgba(0,255,136,0.12)",border:"1px solid #00FF8850",borderRadius:3,backdropFilter:"blur(8px)"}}>
+          <div style={{width:8,height:1.5,background:"#00FF88"}}/>
+          <span style={{fontSize:10,color:"#00FF88",fontWeight:700,fontFamily:"monospace"}}>TP ${tp?.toFixed(2)}</span>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:6,padding:"4px 10px",background:"rgba(255,51,102,0.12)",border:"1px solid #FF336650",borderRadius:3,backdropFilter:"blur(8px)"}}>
+          <div style={{width:8,height:1.5,background:"#FF3366"}}/>
+          <span style={{fontSize:10,color:"#FF3366",fontWeight:700,fontFamily:"monospace"}}>SL ${sl?.toFixed(2)}</span>
+        </div>
+        {trailPrice&&(
+          <div style={{display:"flex",alignItems:"center",gap:6,padding:"4px 10px",background:"rgba(255,215,0,0.12)",border:"1px solid #FFD70050",borderRadius:3,backdropFilter:"blur(8px)"}}>
+            <div style={{width:8,height:1.5,background:"#FFD700"}}/>
+            <span style={{fontSize:10,color:"#FFD700",fontWeight:700,fontFamily:"monospace"}}>TRAIL ${trailPrice?.toFixed(2)}</span>
           </div>
-          {curPnL!==null&&(
-            <div style={{fontSize:12,fontWeight:700,color:curPnL>=0?K.g:K.r,fontFamily:"monospace"}}>
-              {curPnL>=0?"+$":"-$"}{f2(Math.abs(curPnL))} ({curPct!==null?fP(curPct):""})
-            </div>
-          )}
-        </div>
-        <div style={{display:"flex",gap:4}}>
-          {(["1m","5m","15m","1h"] as const).map(t=>(
-            <button key={t} onClick={()=>setTf(t)} style={{padding:"3px 9px",background:tf===t?"#001A28":"none",color:tf===t?K.c:K.dim,border:tf===t?"1px solid #003A55":"1px solid transparent",borderRadius:3,fontFamily:"monospace",fontSize:10,cursor:"pointer"}}>{t}</button>
-          ))}
-        </div>
-        <button onClick={onClose} style={{background:"none",border:"none",color:K.dim,cursor:"pointer",fontSize:18,lineHeight:1}}>✕</button>
-      </div>
-
-      {/* Agent signals bar */}
-      {agentSignals&&Object.keys(agentSignals).length>0&&(
-        <div style={{padding:"8px 16px",background:"#050A12",borderBottom:"1px solid "+K.brd,display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
-          <div style={{fontSize:9,color:K.dim,fontFamily:"monospace",letterSpacing:".08em"}}>AGENTS THAT VOTED:</div>
-          {(Object.entries(agentSignals) as [string,{signal:string,[k:string]:number|string}][]).map(([agent,d])=>{
-            const col=d.signal==="BUY"?K.g:d.signal==="SELL"?K.r:K.gold;
-            const detail=agent==="lens"&&"rsi" in d?`RSI ${(d.rsi as number).toFixed(0)}`
-              :agent==="radar"&&"ema9" in d?`EMA ${(d.ema9 as number).toFixed(1)} / ${(d.ema21 as number).toFixed(1)}`
-              :agent==="leviathan"&&"buyPressure" in d?`Buy ${((d.buyPressure as number)*100).toFixed(0)}%`
-              :agent==="surge"&&"volumeChange" in d?`Vol +${(d.volumeChange as number).toFixed(1)}%`
-              :agent==="echo"&&"fg" in d?`F&G ${d.fg}`
-              :agent==="razor"&&"macd" in d?`MACD ${(d.macd as number).toFixed(3)}`
-              :agent==="vector"&&"adx" in d?`ADX ${(d.adx as number).toFixed(0)}`
-              :d.signal;
-            return(
-              <div key={agent} style={{display:"flex",alignItems:"center",gap:5,padding:"3px 8px",background:col+"12",border:`1px solid ${col}30`,borderRadius:3,fontFamily:"monospace"}}>
-                <div style={{width:5,height:5,borderRadius:"50%",background:col}}/>
-                <span style={{fontSize:9,color:col,fontWeight:700}}>{agent.toUpperCase()}</span>
-                <span style={{fontSize:8,color:K.dim}}>{detail}</span>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* Chart body */}
-      <div style={{padding:"0 4px"}}>{chartBody()}</div>
-
-      {/* Bottom stats + close button */}
-      <div style={{padding:"12px 16px",borderTop:"1px solid "+K.brd,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-        <div style={{display:"flex",gap:20,fontFamily:"monospace",fontSize:10}}>
-          {[
-            {l:"ENTRY",v:entry?fPrice(entry):"—",c:K.c},
-            {l:"CURRENT",v:lastClose?fPrice(lastClose):"—",c:K.hi},
-            {l:"STOP LOSS",v:entry?fPrice(sl):"—",c:K.r},
-            {l:"TAKE PROFIT",v:entry?fPrice(tp):"—",c:K.g},
-            ...(trail?[{l:"TRAIL",v:fPrice(trail),c:K.gold}]:[]),
-          ].map((r,i)=>(
-            <div key={i}>
-              <div style={{fontSize:8,color:K.dim,marginBottom:2}}>{r.l}</div>
-              <div style={{color:r.c,fontWeight:700}}>{r.v}</div>
-            </div>
-          ))}
-        </div>
-        {position&&onClosePosition&&(
-          <button onClick={onClosePosition} style={{padding:"10px 20px",background:K.r+"18",color:K.r,border:"2px solid "+K.r+"40",borderRadius:6,fontFamily:"monospace",fontSize:11,fontWeight:700,cursor:"pointer",letterSpacing:".1em"}}>
-            ⬛ CLOSE POSITION
-          </button>
         )}
+      </div>
+      {/* Agent legend — top right */}
+      <div style={{position:"absolute",top:8,right:8,display:"flex",flexDirection:"column",gap:3,pointerEvents:"none",zIndex:10}}>
+        <div style={{padding:"4px 8px",background:"rgba(4,6,13,0.85)",border:"1px solid #0A1D33",borderRadius:3,backdropFilter:"blur(8px)",fontSize:9,color:"#2A5070",fontFamily:"monospace"}}>◈ INDICATORS USED BY AGENTS</div>
+        {([{name:"LENS",ind:"RSI(14)",col:K.pu},{name:"RADAR",ind:"EMA 9/21",col:K.c},{name:"RAZOR",ind:"MACD 12/26",col:K.gold},{name:"SURGE",ind:"Volume",col:K.g}] as {name:string,ind:string,col:string}[]).map((a,i)=>(
+          <div key={i} style={{display:"flex",alignItems:"center",gap:5,padding:"3px 7px",background:"rgba(4,6,13,0.8)",border:`1px solid ${a.col}25`,borderRadius:2,backdropFilter:"blur(4px)"}}>
+            <div style={{width:5,height:5,borderRadius:"50%",background:a.col}}/>
+            <span style={{fontSize:8,color:a.col,fontWeight:700,fontFamily:"monospace"}}>{a.name}</span>
+            <span style={{fontSize:8,color:"#2A5070",fontFamily:"monospace"}}>{a.ind}</span>
+          </div>
+        ))}
       </div>
     </div>
   );
 }
 
 function TradeModal({trade,position,agentSignals,onClose,onClosePosition}:{trade:Trade|null,position:Position|null,agentSignals?:AgentSignals,onClose:()=>void,onClosePosition?:()=>void}){
-  const sym=trade?.sym||"SOL";
+  const sym=trade?.sym||position&&Object.keys(position).length?"SOL":"SOL";
+  const [chartInterval,setChartInterval]=useState("5");
+  const entry=trade?.price||position?.avg||0;
+  const sl=entry*0.975;
+  const tp=entry*1.055;
+  const trailPrice=position?.peak?position.peak*0.988:null;
+  // For live P&L we approximate from entry; real-time updates come via pricesRef but we don't have it here — show static entry-based badge
+  const curPnL:number|null=null;
+  const curPct:number|null=null;
+
   return(
-    <div style={{position:"fixed",inset:0,background:"rgba(2,4,10,0.95)",zIndex:600,display:"flex",alignItems:"center",justifyContent:"center",backdropFilter:"blur(8px)"}} onClick={onClose}>
-      <div style={{width:"90vw",maxWidth:780,maxHeight:"90vh",overflow:"auto"}} onClick={e=>e.stopPropagation()}>
-        <TradingChart sym={sym} trade={trade} position={position} agentSignals={agentSignals} onClose={onClose} onClosePosition={onClosePosition}/>
+    <div style={{position:"fixed",inset:0,background:"rgba(2,4,10,0.96)",backdropFilter:"blur(12px)",zIndex:600,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={onClose}>
+      <div style={{width:"90vw",maxWidth:920,background:"#04060D",border:"1px solid #0A1D33",borderRadius:8,overflow:"hidden",boxShadow:"0 24px 80px rgba(0,0,0,0.8),0 0 0 1px rgba(0,242,254,0.05)"}} onClick={e=>e.stopPropagation()}>
+
+        {/* Header */}
+        <div style={{padding:"12px 16px",borderBottom:"1px solid #0A1D33",display:"flex",justifyContent:"space-between",alignItems:"center",background:"rgba(6,10,18,0.8)"}}>
+          <div style={{display:"flex",alignItems:"center",gap:12}}>
+            <span style={{fontSize:18,fontWeight:900,color:K.c,fontFamily:"monospace",letterSpacing:".1em"}}>{sym}/USD</span>
+            {position&&<span style={{fontSize:10,color:K.g,fontWeight:700,padding:"2px 8px",background:K.g+"15",border:"1px solid "+K.g+"40",borderRadius:2}}>● POSITION OPEN</span>}
+            {curPnL!==null&&<span style={{fontSize:16,fontWeight:900,color:0>=0?K.g:K.r,fontFamily:"monospace"}}>{fU(0)} ({fP(0)})</span>}
+          </div>
+          {/* Timeframe selector */}
+          <div style={{display:"flex",gap:4}}>
+            {(["1","5","15","60","240"] as const).map(t=>(
+              <button key={t} onClick={()=>setChartInterval(t)} style={{padding:"3px 8px",background:chartInterval===t?"#001A28":"transparent",color:chartInterval===t?K.c:"#2A5070",border:chartInterval===t?"1px solid #003A55":"1px solid transparent",borderRadius:3,fontFamily:"monospace",fontSize:10,cursor:"pointer"}}>
+                {t==="1"?"1m":t==="5"?"5m":t==="15"?"15m":t==="60"?"1h":"4h"}
+              </button>
+            ))}
+          </div>
+          <button onClick={onClose} style={{background:"none",border:"none",color:"#2A5070",cursor:"pointer",fontSize:20,padding:"0 4px"}}>✕</button>
+        </div>
+
+        {/* Agent signals bar */}
+        {agentSignals&&Object.keys(agentSignals).length>0&&(
+          <div style={{padding:"7px 16px",background:"#050A12",borderBottom:"1px solid #0A1D33",display:"flex",gap:7,flexWrap:"wrap",alignItems:"center"}}>
+            <div style={{fontSize:9,color:K.dim,fontFamily:"monospace",letterSpacing:".08em"}}>AGENTS THAT VOTED:</div>
+            {(Object.entries(agentSignals) as [string,{signal:string,[k:string]:number|string}][]).map(([agent,d])=>{
+              const col=d.signal==="BUY"?K.g:d.signal==="SELL"?K.r:K.gold;
+              const detail=agent==="lens"&&"rsi" in d?`RSI ${(d.rsi as number).toFixed(0)}`
+                :agent==="radar"&&"ema9" in d?`EMA ${(d.ema9 as number).toFixed(1)}/${(d.ema21 as number).toFixed(1)}`
+                :agent==="leviathan"&&"buyPressure" in d?`Buy ${((d.buyPressure as number)*100).toFixed(0)}%`
+                :agent==="surge"&&"volumeChange" in d?`Vol +${(d.volumeChange as number).toFixed(1)}%`
+                :agent==="echo"&&"fg" in d?`F&G ${d.fg}`
+                :agent==="razor"&&"macd" in d?`MACD ${(d.macd as number).toFixed(3)}`
+                :agent==="vector"&&"adx" in d?`ADX ${(d.adx as number).toFixed(0)}`
+                :d.signal;
+              return(
+                <div key={agent} style={{display:"flex",alignItems:"center",gap:5,padding:"3px 8px",background:col+"12",border:`1px solid ${col}30`,borderRadius:3,fontFamily:"monospace"}}>
+                  <div style={{width:5,height:5,borderRadius:"50%",background:col}}/>
+                  <span style={{fontSize:9,color:col,fontWeight:700}}>{agent.toUpperCase()}</span>
+                  <span style={{fontSize:8,color:K.dim}}>{detail}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* TradingView chart */}
+        <TradingViewChart sym={sym} entryPrice={entry} sl={sl} tp={tp} trailPrice={trailPrice} interval={chartInterval}/>
+
+        {/* Footer */}
+        <div style={{padding:"10px 16px",borderTop:"1px solid #0A1D33",background:"rgba(6,10,18,0.8)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <div style={{display:"flex",gap:16,fontSize:10,fontFamily:"monospace"}}>
+            {([
+              {l:"ENTRY",v:entry?fPrice(entry):"—",c:K.c},
+              {l:"SL",v:entry?fPrice(sl):"—",c:K.r},
+              {l:"TP",v:entry?fPrice(tp):"—",c:K.g},
+              ...(trailPrice?[{l:"TRAIL",v:fPrice(trailPrice),c:K.gold}]:[]),
+              {l:"AGENT",v:trade?.agent||"CONSENSUS",c:"#A8D0EC"},
+              {l:"OPENED",v:trade?.t||"",c:"#2A5070"},
+            ] as {l:string,v:string,c:string}[]).map((r,i)=>(
+              <div key={i}>
+                <div style={{fontSize:8,color:"#2A5070",marginBottom:2}}>{r.l}</div>
+                <div style={{color:r.c,fontWeight:700}}>{r.v}</div>
+              </div>
+            ))}
+          </div>
+          {position&&onClosePosition&&(
+            <button onClick={onClosePosition} style={{padding:"10px 24px",background:K.r+"15",color:K.r,border:"2px solid "+K.r+"50",borderRadius:6,fontFamily:"monospace",fontSize:12,fontWeight:900,cursor:"pointer",letterSpacing:".1em",boxShadow:"0 0 20px "+K.r+"20",transition:"all .2s"}}>
+              ⬛ CLOSE POSITION
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
