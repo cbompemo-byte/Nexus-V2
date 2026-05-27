@@ -384,24 +384,37 @@ function TradingViewChart({sym,entryPrice,sl,tp,trailPrice,interval}:{sym:string
       style:"1",
       locale:"en",
       backgroundColor:"rgba(4,6,13,1)",
-      gridColor:"rgba(10,29,51,0.5)",
+      gridColor:"rgba(10,29,51,0.6)",
       hide_top_toolbar:false,
       hide_legend:false,
       save_image:false,
-      calendar:false,
-      hide_volume:false,
+      withdateranges:true,
+      hide_side_toolbar:false,
+      allow_symbol_change:false,
       support_host:"https://www.tradingview.com",
-      studies:["RSI@tv-basicstudies","MAExp@tv-basicstudies","MACD@tv-basicstudies","Volume@tv-basicstudies"],
-      studies_overrides:{"moving average exponential.length":9,"moving average exponential.source":"close","rsi.length":14,"macd.fast length":12,"macd.slow length":26,"macd.signal smoothing":9},
+      studies:["RSI@tv-basicstudies","MAExp@tv-basicstudies","MACD@tv-basicstudies","BB@tv-basicstudies","Volume@tv-basicstudies"],
+      studies_overrides:{
+        "rsi.plot.color":"#BD00FF","rsi.plot.linewidth":2,
+        "rsi.upper band.color":"#FF336650","rsi.lower band.color":"#00FF8850",
+        "macd.macd.color":"#00F2FE","macd.signal.color":"#FFD700",
+        "macd.positive.color":"#00FF8870","macd.negative.color":"#FF336670",
+        "bollinger bands.upper.color":"#00F2FE50","bollinger bands.lower.color":"#00F2FE50","bollinger bands.median.color":"#FFD70050",
+        "moving average exponential.length":9,"moving average exponential.source":"close",
+      },
       disabled_features:["use_localstorage_for_settings","header_symbol_search","header_compare"],
       enabled_features:["study_templates","side_toolbar_in_fullscreen_mode"],
       overrides:{
         "paneProperties.background":"#04060D","paneProperties.backgroundType":"solid",
-        "paneProperties.vertGridProperties.color":"#0A1D33","paneProperties.horzGridProperties.color":"#0A1D33",
-        "scalesProperties.textColor":"#2A5070","scalesProperties.lineColor":"#0A1D33",
+        "paneProperties.backgroundGradientStartColor":"#04060D","paneProperties.backgroundGradientEndColor":"#04060D",
+        "paneProperties.vertGridProperties.color":"#0A1D33","paneProperties.vertGridProperties.style":1,
+        "paneProperties.horzGridProperties.color":"#0A1D33","paneProperties.horzGridProperties.style":1,
+        "scalesProperties.textColor":"#2A5070","scalesProperties.lineColor":"#0A1D33","scalesProperties.fontSize":11,
         "mainSeriesProperties.candleStyle.upColor":"#00FF88","mainSeriesProperties.candleStyle.downColor":"#FF3366",
         "mainSeriesProperties.candleStyle.borderUpColor":"#00FF88","mainSeriesProperties.candleStyle.borderDownColor":"#FF3366",
-        "mainSeriesProperties.candleStyle.wickUpColor":"#00FF8880","mainSeriesProperties.candleStyle.wickDownColor":"#FF336680",
+        "mainSeriesProperties.candleStyle.wickUpColor":"#00FF8870","mainSeriesProperties.candleStyle.wickDownColor":"#FF336670",
+        "mainSeriesProperties.candleStyle.barColorsOnPrevClose":false,
+        "volume.volume.color.0":"#FF336640","volume.volume.color.1":"#00FF8840",
+        "moving average exponential.Plot.color":"#00F2FE","moving average exponential.Plot.linewidth":2,
       },
     });
     containerRef.current.appendChild(script);
@@ -447,6 +460,85 @@ function TradingViewChart({sym,entryPrice,sl,tp,trailPrice,interval}:{sym:string
   );
 }
 
+function AgentAnalysisPanel({agentSignals,entryPrice}:{agentSignals?:AgentSignals,entryPrice:number}){
+  const [revealed,setRevealed]=useState(0);
+  const ag=agentSignals||{};
+
+  const analyses=[
+    {agent:"LENS",color:K.pu,icon:"◎",drawing:"RSI DIVERGENCE",
+      detail:`RSI(14) = ${ag.lens?.rsi?.toFixed(1)||"—"}`,
+      conclusion:ag.lens?.rsi!=null?(ag.lens.rsi<35?"→ OVERSOLD ZONE — historically reverses":ag.lens.rsi>65?"→ OVERBOUGHT — potential rejection":"→ Neutral momentum zone"):"→ No data",
+      signal:ag.lens?.signal||null,lineType:"Horizontal RSI level traced at 30"},
+    {agent:"RADAR",color:K.c,icon:"◈",drawing:"EMA CROSSOVER",
+      detail:`EMA9 = ${ag.radar?.ema9?.toFixed(2)||"—"} | EMA21 = ${ag.radar?.ema21?.toFixed(2)||"—"}`,
+      conclusion:ag.radar?.ema9!=null&&ag.radar?.ema21!=null?(ag.radar.ema9>ag.radar.ema21?"→ EMA9 ABOVE EMA21 — bullish cross confirmed":"→ EMA9 BELOW EMA21 — bearish cross"):"→ No data",
+      signal:ag.radar?.signal||null,lineType:"Two EMA lines drawn on price chart"},
+    {agent:"RAZOR",color:K.gold,icon:"⚡",drawing:"MACD SIGNAL",
+      detail:`MACD = ${ag.razor?.macd?.toFixed(3)||"—"}`,
+      conclusion:ag.razor?.macd!=null?(ag.razor.macd>0?"→ MACD positive — momentum building":"→ MACD negative — selling pressure"):"→ No data",
+      signal:ag.razor?.signal||null,lineType:"MACD histogram drawn below chart"},
+    {agent:"LEVIATHAN",color:K.pu,icon:"🐋",drawing:"WHALE PRESSURE",
+      detail:`Buy pressure = ${ag.leviathan?.buyPressure!=null?((ag.leviathan.buyPressure)*100).toFixed(0)+"%" :"—"}`,
+      conclusion:ag.leviathan?.buyPressure!=null?(ag.leviathan.buyPressure>0.62?"→ ACCUMULATION ZONE — whales buying":ag.leviathan.buyPressure<0.38?"→ DISTRIBUTION — whales selling":"→ Balanced flow"):"→ No data",
+      signal:ag.leviathan?.signal||null,lineType:"Volume profile zone marked"},
+    {agent:"SURGE",color:K.g,icon:"▲",drawing:"VOLUME ANALYSIS",
+      detail:`24h Vol change = ${ag.surge?.volumeChange!=null?"+"+ag.surge.volumeChange.toFixed(1)+"%":"—"}`,
+      conclusion:ag.surge?.volumeChange!=null?(ag.surge.volumeChange>3?"→ ABOVE AVERAGE volume — breakout likely":"→ Normal volume — no confirmation"):"→ No data",
+      signal:ag.surge?.signal||null,lineType:"Volume spike highlighted"},
+  ].filter(a=>a.signal!==null);
+
+  useEffect(()=>{
+    analyses.forEach((_,i)=>setTimeout(()=>setRevealed(i+1),i*550));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[]);
+
+  if(analyses.length===0)return null;
+
+  return(
+    <div style={{background:"rgba(4,6,13,0.97)",borderBottom:"1px solid #0A1D33",padding:"10px 16px",overflow:"hidden"}}>
+      <style>{`@keyframes scanH{0%{transform:translateX(-100%)}100%{transform:translateX(200%)}}`}</style>
+      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+        <div style={{width:6,height:6,borderRadius:"50%",background:K.c,animation:"pu 1s infinite"}}/>
+        <span style={{fontSize:10,color:K.c,fontWeight:700,letterSpacing:".15em",fontFamily:"monospace"}}>◈ AGENT PRE-TRADE ANALYSIS — WHAT THE AI SAW</span>
+        <span style={{fontSize:9,color:"#2A5070",fontFamily:"monospace"}}>Analyzed {analyses.length} indicators before entry @${entryPrice?.toFixed(2)}</span>
+      </div>
+      <div style={{display:"flex",gap:8,overflowX:"auto",paddingBottom:4}}>
+        {analyses.map((a,i)=>{
+          const isRevealed=i<revealed;
+          const sig=a.signal as string;
+          const col=sig==="BUY"?K.g:sig==="SELL"?K.r:K.gold;
+          const rgbFill=sig==="BUY"?"0,255,136":sig==="SELL"?"255,51,102":"255,215,0";
+          return(
+            <div key={a.agent} style={{
+              minWidth:200,flexShrink:0,padding:"10px 12px",
+              background:isRevealed?`rgba(${rgbFill},0.06)`:"rgba(6,10,18,0.8)",
+              border:`1px solid ${isRevealed?col+"40":"#0A1D33"}`,
+              borderRadius:4,opacity:isRevealed?1:0.3,
+              transform:isRevealed?"translateY(0)":"translateY(4px)",
+              transition:"all 0.4s ease",position:"relative",overflow:"hidden",
+            }}>
+              {isRevealed&&<div style={{position:"absolute",top:0,left:0,right:0,height:1,background:`linear-gradient(90deg,transparent,${a.color},transparent)`,animation:"scanH 1.5s ease-out forwards"}}/>}
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                <div style={{display:"flex",alignItems:"center",gap:5}}>
+                  <span style={{fontSize:12,color:a.color}}>{a.icon}</span>
+                  <span style={{fontSize:10,color:a.color,fontWeight:900,fontFamily:"monospace"}}>{a.agent}</span>
+                </div>
+                <span style={{padding:"1px 7px",background:col+"20",color:col,border:`1px solid ${col}40`,borderRadius:2,fontSize:9,fontWeight:700,fontFamily:"monospace"}}>{sig}</span>
+              </div>
+              <div style={{fontSize:9,color:a.color,opacity:.7,fontFamily:"monospace",marginBottom:3,letterSpacing:".08em"}}>✎ {a.drawing}</div>
+              <div style={{fontSize:10,color:"#A8D0EC",fontFamily:"monospace",marginBottom:4,fontWeight:700}}>{a.detail}</div>
+              <div style={{fontSize:9,color:"#2A5070",fontFamily:"monospace",lineHeight:1.5}}>{a.conclusion}</div>
+              <div style={{marginTop:7,height:2,background:"#06090F",borderRadius:1}}>
+                <div style={{height:"100%",borderRadius:1,background:col,width:sig==="BUY"?"75%":sig==="SELL"?"25%":"50%",boxShadow:`0 0 6px ${col}`,transition:"width 0.8s ease"}}/>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function TradeModal({trade,position,agentSignals,onClose,onClosePosition}:{trade:Trade|null,position:Position|null,agentSignals?:AgentSignals,onClose:()=>void,onClosePosition?:()=>void}){
   const sym=trade?.sym||position&&Object.keys(position).length?"SOL":"SOL";
   const [chartInterval,setChartInterval]=useState("5");
@@ -480,30 +572,8 @@ function TradeModal({trade,position,agentSignals,onClose,onClosePosition}:{trade
           <button onClick={onClose} style={{background:"none",border:"none",color:"#2A5070",cursor:"pointer",fontSize:20,padding:"0 4px"}}>✕</button>
         </div>
 
-        {/* Agent signals bar */}
-        {agentSignals&&Object.keys(agentSignals).length>0&&(
-          <div style={{padding:"7px 16px",background:"#050A12",borderBottom:"1px solid #0A1D33",display:"flex",gap:7,flexWrap:"wrap",alignItems:"center"}}>
-            <div style={{fontSize:9,color:K.dim,fontFamily:"monospace",letterSpacing:".08em"}}>AGENTS THAT VOTED:</div>
-            {(Object.entries(agentSignals) as [string,{signal:string,[k:string]:number|string}][]).map(([agent,d])=>{
-              const col=d.signal==="BUY"?K.g:d.signal==="SELL"?K.r:K.gold;
-              const detail=agent==="lens"&&"rsi" in d?`RSI ${(d.rsi as number).toFixed(0)}`
-                :agent==="radar"&&"ema9" in d?`EMA ${(d.ema9 as number).toFixed(1)}/${(d.ema21 as number).toFixed(1)}`
-                :agent==="leviathan"&&"buyPressure" in d?`Buy ${((d.buyPressure as number)*100).toFixed(0)}%`
-                :agent==="surge"&&"volumeChange" in d?`Vol +${(d.volumeChange as number).toFixed(1)}%`
-                :agent==="echo"&&"fg" in d?`F&G ${d.fg}`
-                :agent==="razor"&&"macd" in d?`MACD ${(d.macd as number).toFixed(3)}`
-                :agent==="vector"&&"adx" in d?`ADX ${(d.adx as number).toFixed(0)}`
-                :d.signal;
-              return(
-                <div key={agent} style={{display:"flex",alignItems:"center",gap:5,padding:"3px 8px",background:col+"12",border:`1px solid ${col}30`,borderRadius:3,fontFamily:"monospace"}}>
-                  <div style={{width:5,height:5,borderRadius:"50%",background:col}}/>
-                  <span style={{fontSize:9,color:col,fontWeight:700}}>{agent.toUpperCase()}</span>
-                  <span style={{fontSize:8,color:K.dim}}>{detail}</span>
-                </div>
-              );
-            })}
-          </div>
-        )}
+        {/* Agent pre-trade analysis panel */}
+        <AgentAnalysisPanel agentSignals={agentSignals} entryPrice={entry}/>
 
         {/* TradingView chart */}
         <TradingViewChart sym={sym} entryPrice={entry} sl={sl} tp={tp} trailPrice={trailPrice} interval={chartInterval}/>
