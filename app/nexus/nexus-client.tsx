@@ -59,6 +59,48 @@ const MISSIONS=[
   {id:5,name:"NEXUS ELITE",target:1.00,reward:"$10,000",message:"LEGENDARY. Portfolio doubled. You have transcended normal trading.",color:"#FF3366",icon:"◈"},
 ];
 
+// ── Experienced Trader Rules ──────────────────────────────────────────────────
+const TRADER_RULES={
+  // Peak hours UTC: London open (07-09) + NY open (13-17) + overlap (13-15)
+  peakHoursUTC:[[7,9],[13,17]] as [number,number][],
+  // Minimum confidence required off-peak
+  offPeakMinConf:72,
+  // Minimum confidence during peak hours
+  peakMinConf:55,
+  // Max consecutive losses before reducing position size
+  maxConsecLosses:3,
+  // Size reduction multiplier after max consecutive losses
+  consecLossSizeMultiplier:0.6,
+  // Daily max drawdown from session start before pausing
+  maxDailyDrawdownPct:0.08,
+};
+
+function applyTraderRules(
+  conf:number,
+  kellyFrac:number,
+  trades:{pnl:number}[],
+  sessionEquity:number,
+  currentEquity:number
+):{allow:boolean;frac:number;reason?:string}{
+  const hour=new Date().getUTCHours();
+  const isPeak=TRADER_RULES.peakHoursUTC.some(([s,e])=>hour>=s&&hour<e);
+  const minConf=isPeak?TRADER_RULES.peakMinConf:TRADER_RULES.offPeakMinConf;
+  if(conf<minConf)return{allow:false,frac:0,reason:`Conf ${Math.round(conf)}% < ${minConf}% min (${isPeak?"peak":"off-peak"})`};
+  // Count consecutive losses
+  let consecLosses=0;
+  for(let i=0;i<trades.length;i++){
+    if(trades[i].pnl<0)consecLosses++;else break;
+  }
+  let frac=kellyFrac;
+  if(consecLosses>=TRADER_RULES.maxConsecLosses){
+    frac*=TRADER_RULES.consecLossSizeMultiplier;
+  }
+  // Daily drawdown guard
+  const drawdown=(sessionEquity-currentEquity)/sessionEquity;
+  if(drawdown>TRADER_RULES.maxDailyDrawdownPct)return{allow:false,frac:0,reason:`Daily drawdown ${f2(drawdown*100,1)}% exceeds limit`};
+  return{allow:true,frac};
+}
+
 function OdometerChar({ch,col}:{ch:string,col:string}){
   const prevCh=useRef(ch);
   const [key,setKey]=useState(0);
@@ -1147,6 +1189,132 @@ function DecisionZone({agSt,running,onExecute}:{agSt:{[k:string]:AgentState},run
   );
 }
 
+// ── On-Chain Public Wallet Tab ────────────────────────────────────────────────
+interface HeliusTx{signature:string;timestamp:number;type:string;description:string;fee:number;nativeTransfers?:{fromUserAccount:string;toUserAccount:string;amount:number}[];}
+
+function OnChainTab(){
+  const wallet=process.env.NEXT_PUBLIC_WALLET_ADDRESS||"";
+  const [txs,setTxs]=useState<HeliusTx[]>([]);
+  const [loading,setLoading]=useState(false);
+  const [error,setError]=useState<string|null>(null);
+  const [solBal,setSolBal]=useState<number|null>(null);
+
+  const fetchWalletData=useCallback(async()=>{
+    if(!wallet){setError("demo");return;}
+    setLoading(true);setError(null);
+    try{
+      const [txRes,balRes]=await Promise.all([
+        fetch(`/api/helius?wallet=${wallet}&type=txs`),
+        fetch(`/api/helius?wallet=${wallet}&type=balance`),
+      ]);
+      if(txRes.ok){const d=await txRes.json();if(Array.isArray(d))setTxs(d.slice(0,25));}
+      if(balRes.ok){const d=await balRes.json();setSolBal(typeof d.balance==="number"?d.balance:null);}
+    }catch(e){setError("Failed to fetch wallet data");}
+    finally{setLoading(false);}
+  },[wallet]);
+
+  useEffect(()=>{fetchWalletData();},[fetchWalletData]);
+
+  const shortAddr=(a:string)=>a.length>10?a.slice(0,4)+"…"+a.slice(-4):a;
+  const fSol=(n:number)=>(n/1e9).toFixed(4);
+  const fDate=(ts:number)=>new Date(ts*1000).toLocaleString("en-US",{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"});
+
+  if(error==="demo"||!wallet){
+    return(
+      <div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",padding:32}}>
+        <div style={{maxWidth:440,width:"100%"}}>
+          <div className="panel" style={{padding:28,borderColor:K.c+"30",background:"linear-gradient(135deg,"+K.pan+" 0%,"+K.c+"08 100%)"}}>
+            <div style={{fontSize:11,color:K.c,letterSpacing:".2em",fontWeight:900,marginBottom:12}}>◈ ON-CHAIN WALLET MONITOR</div>
+            <div style={{fontSize:10,color:K.hi,marginBottom:16,lineHeight:1.6}}>
+              Connect a public Solana wallet to monitor on-chain activity in real-time. All transactions are fetched directly from the Solana blockchain via Helius.
+            </div>
+            <div style={{padding:"12px 16px",background:K.bg,border:"1px solid "+K.brd,borderRadius:2,marginBottom:16}}>
+              <div style={{fontSize:9,color:K.dim,marginBottom:6,letterSpacing:".1em"}}>TO ACTIVATE</div>
+              <div style={{fontSize:10,color:K.hi,lineHeight:1.8}}>
+                1. Set <span style={{color:K.c}}>NEXT_PUBLIC_WALLET_ADDRESS</span> in .env.local<br/>
+                2. Set <span style={{color:K.c}}>HELIUS_API_KEY</span> in .env.local<br/>
+                3. Restart the development server
+              </div>
+            </div>
+            <div style={{display:"flex",gap:8}}>
+              <a href="https://solscan.io" target="_blank" rel="noopener noreferrer" style={{flex:1,display:"block",padding:"8px 12px",background:K.c+"15",color:K.c,border:"1px solid "+K.c+"40",borderRadius:2,fontSize:9,textAlign:"center",textDecoration:"none",letterSpacing:".08em"}}>SOLSCAN</a>
+              <a href="https://birdeye.so" target="_blank" rel="noopener noreferrer" style={{flex:1,display:"block",padding:"8px 12px",background:K.gold+"15",color:K.gold,border:"1px solid "+K.gold+"40",borderRadius:2,fontSize:9,textAlign:"center",textDecoration:"none",letterSpacing:".08em"}}>BIRDEYE</a>
+              <a href="https://explorer.solana.com" target="_blank" rel="noopener noreferrer" style={{flex:1,display:"block",padding:"8px 12px",background:K.pu+"15",color:K.pu,border:"1px solid "+K.pu+"40",borderRadius:2,fontSize:9,textAlign:"center",textDecoration:"none",letterSpacing:".08em"}}>EXPLORER</a>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return(
+    <div style={{flex:1,overflow:"hidden",display:"flex",flexDirection:"column",padding:10,gap:10}}>
+      {/* Wallet Header */}
+      <div className="panel" style={{padding:"10px 14px",display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0}}>
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <div style={{width:8,height:8,borderRadius:"50%",background:K.g,boxShadow:"0 0 8px "+K.g,animation:"pu 1.5s infinite"}}/>
+          <div>
+            <div style={{fontSize:9,color:K.dim,letterSpacing:".1em",marginBottom:2}}>PUBLIC WALLET</div>
+            <div style={{fontSize:11,color:K.hi,fontFamily:"monospace",letterSpacing:".05em"}}>{shortAddr(wallet)}</div>
+          </div>
+        </div>
+        <div style={{display:"flex",gap:12,alignItems:"center"}}>
+          {solBal!==null&&(
+            <div style={{textAlign:"right"}}>
+              <div style={{fontSize:9,color:K.dim,letterSpacing:".1em"}}>BALANCE</div>
+              <div style={{fontSize:13,color:K.c,fontWeight:700}}>{solBal.toFixed(4)} SOL</div>
+            </div>
+          )}
+          <div style={{display:"flex",gap:6}}>
+            <a href={`https://solscan.io/account/${wallet}`} target="_blank" rel="noopener noreferrer" style={{padding:"4px 10px",background:K.c+"15",color:K.c,border:"1px solid "+K.c+"40",borderRadius:2,fontSize:8,textDecoration:"none",letterSpacing:".08em"}}>SOLSCAN</a>
+            <a href={`https://birdeye.so/profile/${wallet}`} target="_blank" rel="noopener noreferrer" style={{padding:"4px 10px",background:K.gold+"15",color:K.gold,border:"1px solid "+K.gold+"40",borderRadius:2,fontSize:8,textDecoration:"none",letterSpacing:".08em"}}>BIRDEYE</a>
+            <button className="btn" onClick={fetchWalletData} disabled={loading} style={{padding:"4px 10px",fontSize:8}}>{loading?"⟳":"↻"} REFRESH</button>
+          </div>
+        </div>
+      </div>
+
+      {/* Transaction Feed */}
+      <div className="panel" style={{flex:1,overflow:"hidden",display:"flex",flexDirection:"column"}}>
+        <div style={{padding:"8px 14px",borderBottom:"1px solid "+K.brd,fontSize:9,color:K.dim,letterSpacing:".12em",flexShrink:0}}>
+          RECENT TRANSACTIONS · {txs.length} LOADED
+        </div>
+        <div style={{flex:1,overflowY:"auto"}}>
+          {loading&&txs.length===0?(
+            <div style={{padding:24,textAlign:"center",color:K.dim,fontSize:10}}>⟳ Fetching blockchain data...</div>
+          ):error?(
+            <div style={{padding:24,textAlign:"center",color:K.r,fontSize:10}}>{error}</div>
+          ):txs.length===0?(
+            <div style={{padding:24,textAlign:"center",color:K.dim,fontSize:10}}>No transactions found</div>
+          ):(
+            txs.map((tx,i)=>{
+              const isIn=tx.nativeTransfers?.some(t=>t.toUserAccount===wallet);
+              const amt=tx.nativeTransfers?.reduce((s,t)=>s+(t.toUserAccount===wallet?t.amount:-t.amount),0)||0;
+              const netSol=amt/1e9;
+              return(
+                <div key={tx.signature} className="log-entry" style={{padding:"8px 14px",borderBottom:"1px solid "+K.brd+"50",display:"flex",alignItems:"center",gap:10,animationDelay:i*30+"ms"}}>
+                  <div style={{width:6,height:6,borderRadius:"50%",background:isIn?K.g:K.r,flexShrink:0}}/>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:2}}>
+                      <span style={{fontSize:9,color:K.c,fontWeight:700,letterSpacing:".06em"}}>{tx.type||"TRANSFER"}</span>
+                      <span style={{fontSize:8,color:K.dim}}>{fDate(tx.timestamp)}</span>
+                    </div>
+                    <div style={{fontSize:9,color:K.hi,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{tx.description||shortAddr(tx.signature)}</div>
+                  </div>
+                  <div style={{textAlign:"right",flexShrink:0}}>
+                    {amt!==0&&<div style={{fontSize:10,fontWeight:700,color:netSol>0?K.g:K.r}}>{netSol>0?"+":""}{netSol.toFixed(4)} SOL</div>}
+                    <div style={{fontSize:8,color:K.dim}}>{fSol(tx.fee||0)} fee</div>
+                  </div>
+                  <a href={`https://solscan.io/tx/${tx.signature}`} target="_blank" rel="noopener noreferrer" style={{fontSize:8,color:K.dim,textDecoration:"none",flexShrink:0}}>↗</a>
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TimeScrubber({sessionStart,trades}:{sessionStart:number,trades:Trade[]}){
   const [now,setNow]=useState(Date.now());
   useEffect(()=>{const iv=setInterval(()=>setNow(Date.now()),5000);return()=>clearInterval(iv);},[]);
@@ -1457,6 +1625,7 @@ export default function KYMIA(){
   const completedMissionsRef=useRef<number[]>([]);
   const prevAgStRef=useRef<{[k:string]:AgentState}>({});
   const sessionStartRef=useRef(Date.now());
+  const sessionStartEquityRef=useRef(CAP);
   const logRef=useRef<HTMLDivElement>(null);
   const swarmRef=useRef<HTMLDivElement>(null);
   const entropyRef=useRef(entropy);
@@ -1782,9 +1951,20 @@ export default function KYMIA(){
   },[]);
 
   useEffect(()=>{
-    runRealAgents();
-    const iv=setInterval(runRealAgents,15000);
-    return()=>clearInterval(iv);
+    let active=true;
+    const continuousLoop=async()=>{
+      while(active){
+        try{
+          await runRealAgents();
+          await new Promise(r=>setTimeout(r,15000));
+        }catch(e){
+          console.error("[KYMIA] Agent loop error:",e);
+          await new Promise(r=>setTimeout(r,5000));
+        }
+      }
+    };
+    continuousLoop();
+    return()=>{active=false;};
   },[runRealAgents]);
 
   // ── New token scanner (60s cycle) ─────────────────────────────────────
@@ -2002,10 +2182,14 @@ export default function KYMIA(){
         if(heldSyms.some(h=>corr.includes(h)||((CORRELATED[h]||[]).includes(sym)))){
           log("RISK","⊘ Anti-corr block: "+sym+" — diversify",K.gold);return;
         }
-        // Kelly sizing
+        // Kelly sizing + experienced trader rules
         const cl=tradesRef.current.filter((t:Trade)=>t.pnl!==0);
         const wr=cl.length?cl.filter((t:Trade)=>t.pnl>0).length/cl.length:0.5;
-        const frac=kellySize(sig.conf,wr*100);
+        const rawFrac=kellySize(sig.conf,wr*100);
+        const traderCheck=applyTraderRules(sig.conf,rawFrac,tradesRef.current,sessionStartEquityRef.current,prt.equity||prt.cash);
+        if(!traderCheck.allow){log("RISK","⊘ Trader rules: "+sym+" — "+(traderCheck.reason||"filtered"),K.gold);return;}
+        if(traderCheck.frac<rawFrac)log("RISK","⚡ Size reduced: "+sym+" "+f2(rawFrac*100,0)+"% → "+f2(traderCheck.frac*100,0)+"%",K.gold);
+        const frac=traderCheck.frac;
         const alloc=Math.min(prt.cash*frac,prt.cash*.9);
         const qty=alloc/p.price;
         setPort(prev=>{if(prev.pos[sym])return prev;return{...prev,cash:prev.cash-alloc,pos:{...prev.pos,[sym]:{qty,avg:p.price,peak:p.price,entryMs:Date.now(),trailActive:false,side:"LONG"}}};});
@@ -2031,8 +2215,10 @@ export default function KYMIA(){
         log("EXEC","◀ CLOSE "+sym+" @ "+fPrice(p.price)+" PnL:"+fU(pnl),pnl>=0?K.g:K.r);
         tradeCount++;
       }else if(cs.sig==="SELL"&&!prt.pos[sym]&&prt.cash>500&&Object.keys(prt.pos).length<5){
-        // Open SHORT position
-        const alloc=Math.min(prt.cash*0.08,prt.cash*.9);
+        // Open SHORT position — apply trader rules
+        const shortCheck=applyTraderRules(sig.conf,0.08,tradesRef.current,sessionStartEquityRef.current,prt.equity||prt.cash);
+        if(!shortCheck.allow){log("RISK","⊘ Trader rules (SHORT): "+sym+" — "+(shortCheck.reason||"filtered"),K.gold);return;}
+        const alloc=Math.min(prt.cash*shortCheck.frac,prt.cash*.9);
         const qty=alloc/p.price;
         setPort(prev=>{if(prev.pos[sym])return prev;return{...prev,cash:prev.cash-alloc,pos:{...prev.pos,[sym]:{qty,avg:p.price,peak:p.price,entryMs:Date.now(),trailActive:false,side:"SHORT"}}};});
         setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym,side:"SHORT",qty,price:p.price,pnl:0,conf:Math.round(sig.conf),t:ts(),ms:Date.now()},...t.slice(0,99)]);
@@ -2317,7 +2503,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
       )}
 
       <div style={{background:"#030710",borderBottom:"1px solid #060B14",padding:"0 16px",display:"flex",gap:2}}>
-        {[["terminal","◈ COMMAND"],["trades","◎ HISTORY"],["scanner","⊕ SCANNER"],["crisis","⊞ CRISIS REPLAY"],["dna","🧬 SWARM DNA"]].map(([v,l])=>(
+        {[["terminal","◈ COMMAND"],["trades","◎ HISTORY"],["scanner","⊕ SCANNER"],["crisis","⊞ CRISIS REPLAY"],["dna","🧬 SWARM DNA"],["onchain","⛓ ON-CHAIN"]].map(([v,l])=>(
           <button key={v} className={`tab${tab===v?" on":""}`} onClick={()=>setTab(v)}>{l}</button>
         ))}
         <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:12,fontSize:8,color:"#0A1D2A"}}>
@@ -2817,6 +3003,8 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
           </div>
         </div>
       )}
+
+      {tab==="onchain"&&<OnChainTab/>}
 
       {/* Performance Card Modal */}
       {modal==="share"&&<PerformanceCard trades={trades} totalPnL={totalPnL} onClose={()=>setModal(null)}/>}

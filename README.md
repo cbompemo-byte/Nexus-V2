@@ -1,36 +1,205 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# KYMIA — Autonomous Quant AI Trading Dashboard
+
+> **Multi-agent AI swarm running 24/7 across 180+ crypto markets. Zero human latency. Pure signal.**
+
+---
+
+## Overview
+
+KYMIA is a production-grade autonomous trading dashboard powered by a swarm of 17 specialized AI agents. Each agent monitors a different market dimension — momentum, volatility, sentiment, on-chain flow — and feeds its signal into a consensus engine that executes trades in real time.
+
+Built on Next.js 16 App Router with a fully reactive UI, KYMIA operates in **DEMO mode** (virtual $10,000 portfolio) by default, with a clear upgrade path to live Phantom wallet execution via Jupiter.
+
+---
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                         KYMIA UI                            │
+│  ┌─────────┐  ┌──────────────┐  ┌────────────────────────┐ │
+│  │  Swarm  │  │  DecisionZone│  │  Portfolio / Missions  │ │
+│  │  Graph  │  │  (Consensus) │  │  Health Monitor        │ │
+│  └────┬────┘  └──────┬───────┘  └────────────────────────┘ │
+│       │              │                                       │
+│  ┌────▼──────────────▼───────────────────────────────────┐  │
+│  │              Agent Swarm (17 agents)                  │  │
+│  │  LENS · RADAR · RAZOR · VECTOR · SURGE · LEVIATHAN   │  │
+│  │  ECHO · PHANTOM · VORTEX · SIGMA · ORACLE · TITAN    │  │
+│  │  NEXUS · CIPHER · APEX · GHOST · HYDRA               │  │
+│  └────────────────────────────┬──────────────────────────┘  │
+│                               │                              │
+│  ┌────────────────────────────▼──────────────────────────┐  │
+│  │              Real-Time Data Layer                     │  │
+│  │  Kraken OHLCV · DexScreener · CoinGecko · Deribit    │  │
+│  │  Fear & Greed Index · Helius (on-chain)               │  │
+│  └───────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Agent Roster
+
+| Agent | Specialty | Signal Type |
+|---|---|---|
+| **LENS** | RSI momentum analysis | Oversold/overbought extremes |
+| **RADAR** | EMA crossover detection | Trend direction |
+| **RAZOR** | MACD + RSI confluence | Entry precision |
+| **VECTOR** | ADX trend strength | Trade quality filter |
+| **SURGE** | Volume anomaly detection | Breakout confirmation |
+| **LEVIATHAN** | Order book pressure | Buy/sell imbalance |
+| **ECHO** | Fear & Greed sentiment | Contrarian entries |
+| **PHANTOM** | Volatility regime | Risk sizing |
+| **VORTEX** | Multi-timeframe trend | Directional bias |
+| **SIGMA** | Statistical deviation | Mean reversion |
+| **ORACLE** | Macro event scoring | Risk-off alerts |
+| **TITAN** | Large-cap dominance | Rotation signals |
+| **NEXUS** | Swarm meta-signal | Consensus aggregation |
+| **CIPHER** | Pattern recognition | Chart formations |
+| **APEX** | Peak detection | Reversal alerts |
+| **GHOST** | Low-volume stalking | Accumulation zones |
+| **HYDRA** | Multi-leg correlation | Spread opportunities |
+
+---
+
+## Key Features
+
+### Trading Engine
+- **LONG & SHORT execution** — Kelly Criterion position sizing, anti-correlation filtering, multi-timeframe signal confirmation
+- **Experienced Trader Rules** — Peak-hour confidence thresholds (UTC 07–09, 13–17), consecutive-loss size reduction, daily drawdown circuit breaker
+- **Trailing stop-loss** — Activates at 4% profit, trails 3% below peak
+- **24/7 Continuous Loop** — Async `while(active)` agent loop with 5s error recovery, never sleeps
+
+### Mission System
+Five progressive portfolio milestones that unlock as equity grows:
+
+| Mission | Target | Reward |
+|---|---|---|
+| FIRST BLOOD | +5% | $500 |
+| ALPHA CONFIRMED | +10% | $1,000 |
+| MOMENTUM PREDATOR | +25% | $2,500 |
+| MARKET DOMINATOR | +50% | $5,000 |
+| NEXUS ELITE | +100% | $10,000 |
+
+### UI Panels
+- **Swarm Graph** — Live node visualization with conviction pulse, node flash on signal flip
+- **DecisionZone** — Real-time vote percentage, EXECUTE/REJECT controls at ≥55% consensus
+- **Globe 3D** — Three.js world map with live trade arcs between exchange nodes
+- **TradingView Chart** — Full Advanced Chart widget per trade (Bollinger, RSI, MACD, EMA, Volume)
+- **Agent Analysis Panel** — Per-trade staggered agent card reveal with cinematic TA overlays
+- **Time Scrubber** — Session timeline with green/red trade markers
+- **Portfolio Health** — Live equity, win rate, signal count, mission progress
+- **Agent Activity Monitor** — 12-agent real-time status grid (ACTIVE / SCAN / IDLE)
+- **On-Chain Tab** — Public Solana wallet feed via Helius API
+
+### Crisis Replay
+Replay historical Black Swan events (COVID crash, FTX collapse, Terra/LUNA collapse, 2022 crypto winter) and observe how the swarm would have responded.
+
+### Swarm DNA
+AI-generated performance personality card after 3+ trades — identifies your trading archetype, strengths, and weakness.
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Framework | Next.js 16.2.6 (App Router, Turbopack) |
+| Language | TypeScript (strict) |
+| UI | React 19, Framer Motion, Three.js |
+| Styling | CSS-in-JS (inline), custom keyframe animations |
+| Data | Kraken REST, DexScreener, CoinGecko, Deribit, Helius |
+| Charts | TradingView Advanced Chart widget |
+| Wallet | Phantom (stub, activatable via env var) |
+| Swap | Jupiter v6 API (stub, activatable via env var) |
+| Deployment | Vercel (Fluid Compute) |
+
+---
+
+## Environment Variables
+
+```env
+# Required for On-Chain tab
+NEXT_PUBLIC_WALLET_ADDRESS=<your-public-solana-address>
+HELIUS_API_KEY=<your-helius-api-key>
+
+# Optional: enable live trading (requires wallet-provider.tsx activation)
+NEXT_PUBLIC_TRADING_MODE=DEMO   # or LIVE
+```
+
+---
 
 ## Getting Started
 
-First, run the development server:
-
 ```bash
+# Install dependencies
+npm install
+
+# Start development server (Turbopack)
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+
+# Build for production
+npm run build
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open `http://localhost:3000/nexus` to access the dashboard.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+---
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## DEMO → LIVE Upgrade Path
 
-## Learn More
+KYMIA ships in **DEMO mode** by default — a virtual $10,000 portfolio with no real transactions.
 
-To learn more about Next.js, take a look at the following resources:
+To activate live trading:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+1. Install Solana packages:
+   ```bash
+   npm install @solana/wallet-adapter-react @solana/wallet-adapter-phantom @solana/web3.js
+   ```
+2. Add webpack polyfills to `next.config.ts` (`buffer`, `crypto`, `stream`)
+3. Uncomment the implementation in `app/nexus/wallet-provider.tsx`
+4. Set `NEXT_PUBLIC_TRADING_MODE=LIVE` in your environment
+5. Implement the Jupiter swap in `app/nexus/trade-executor.ts` → `executeTradeJupiter()`
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+---
 
-## Deploy on Vercel
+## Data Sources
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+All data is fetched server-side via Next.js API routes to avoid CORS and geo-restrictions:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+| Route | Source | Used For |
+|---|---|---|
+| `/api/jupiter` | Jupiter Price API v6 | Token prices (180+ pairs) |
+| `/api/market` | Kraken OHLCV + CoinGecko | Historical candles, market cap |
+| `/api/dexscreener` | DexScreener | New token scanner, DEX pairs |
+| `/api/debate` | Claude AI | Agent debate synthesis, DNA |
+| `/api/helius` | Helius | On-chain wallet transactions |
+
+---
+
+## Project Structure
+
+```
+nexus-v2/
+├── app/
+│   ├── nexus/
+│   │   ├── page.tsx              # Route entry point
+│   │   ├── nexus-client.tsx      # Main dashboard (all UI + logic)
+│   │   ├── trade-executor.ts     # DEMO/LIVE trade abstraction
+│   │   └── wallet-provider.tsx   # Phantom wallet stub
+│   └── api/
+│       ├── jupiter/route.ts      # Price feed proxy
+│       ├── market/route.ts       # OHLCV + market data
+│       ├── dexscreener/route.ts  # DEX scanner
+│       ├── debate/route.ts       # AI synthesis
+│       └── helius/route.ts       # On-chain data
+├── public/
+└── README.md
+```
+
+---
+
+## License
+
+Private — all rights reserved. Not open source.
