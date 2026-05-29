@@ -1,8 +1,11 @@
-"use client";
-import dynamic from "next/dynamic";
+import NexusLoader from "./nexus-loader";
 
-const NEXUS = dynamic(() => import("./nexus-client"), { ssr: false });
-
-export default function Page() {
-  return <NEXUS />;
+export default async function Page({
+  searchParams,
+}: {
+  searchParams: Promise<{ mode?: string }>;
+}) {
+  const params = await searchParams;
+  const isLive = params.mode === "live";
+  return <NexusLoader isLive={isLive} />;
 }

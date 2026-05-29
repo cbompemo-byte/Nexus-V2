@@ -1325,7 +1325,7 @@ function DecisionZone({agSt,running,onExecute}:{agSt:{[k:string]:AgentState},run
 interface HeliusTx{signature:string;timestamp:number;type:string;description:string;fee:number;nativeTransfers?:{fromUserAccount:string;toUserAccount:string;amount:number}[];}
 
 function OnChainTab(){
-  const wallet=process.env.NEXT_PUBLIC_WALLET_ADDRESS||"";
+  const wallet=process.env.NEXT_PUBLIC_KYMIA_WALLET||process.env.NEXT_PUBLIC_WALLET_ADDRESS||"";
   const [txs,setTxs]=useState<HeliusTx[]>([]);
   const [loading,setLoading]=useState(false);
   const [error,setError]=useState<string|null>(null);
@@ -1381,28 +1381,25 @@ function OnChainTab(){
 
   return(
     <div style={{flex:1,overflow:"hidden",display:"flex",flexDirection:"column",padding:10,gap:10}}>
-      {/* Wallet Header */}
-      <div className="panel" style={{padding:"10px 14px",display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0}}>
-        <div style={{display:"flex",alignItems:"center",gap:10}}>
-          <div style={{width:8,height:8,borderRadius:"50%",background:K.g,boxShadow:"0 0 8px "+K.g,animation:"pu 1.5s infinite"}}/>
-          <div>
-            <div style={{fontSize:9,color:K.dim,letterSpacing:".1em",marginBottom:2}}>PUBLIC WALLET</div>
-            <div style={{fontSize:11,color:K.hi,fontFamily:"monospace",letterSpacing:".05em"}}>{shortAddr(wallet)}</div>
-          </div>
-        </div>
-        <div style={{display:"flex",gap:12,alignItems:"center"}}>
-          {solBal!==null&&(
-            <div style={{textAlign:"right"}}>
-              <div style={{fontSize:9,color:K.dim,letterSpacing:".1em"}}>BALANCE</div>
-              <div style={{fontSize:13,color:K.c,fontWeight:700}}>{solBal.toFixed(4)} SOL</div>
+      {/* KYMIA Public Trading Wallet Header */}
+      <div className="panel" style={{padding:"12px 16px",flexShrink:0,borderColor:K.c+"30",background:"linear-gradient(135deg,rgba(6,10,18,0.9) 0%,rgba(0,242,254,0.04) 100%)"}}>
+        <div style={{fontSize:9,color:K.c,letterSpacing:".2em",fontWeight:900,marginBottom:8}}>◈ KYMIA PUBLIC TRADING WALLET</div>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8}}>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <div style={{width:8,height:8,borderRadius:"50%",background:K.g,boxShadow:"0 0 8px "+K.g,animation:"pu 1.5s infinite"}}/>
+            <div>
+              <div style={{fontSize:11,color:K.hi,fontFamily:"monospace",letterSpacing:".05em"}}>{wallet}</div>
+              {solBal!==null&&<div style={{fontSize:9,color:K.dim,marginTop:2}}>Balance: <span style={{color:K.c,fontWeight:700}}>{solBal.toFixed(4)} SOL</span></div>}
             </div>
-          )}
-          <div style={{display:"flex",gap:6}}>
+          </div>
+          <div style={{display:"flex",gap:6,alignItems:"center"}}>
             <a href={`https://solscan.io/account/${wallet}`} target="_blank" rel="noopener noreferrer" style={{padding:"4px 10px",background:K.c+"15",color:K.c,border:"1px solid "+K.c+"40",borderRadius:2,fontSize:8,textDecoration:"none",letterSpacing:".08em"}}>SOLSCAN</a>
             <a href={`https://birdeye.so/profile/${wallet}`} target="_blank" rel="noopener noreferrer" style={{padding:"4px 10px",background:K.gold+"15",color:K.gold,border:"1px solid "+K.gold+"40",borderRadius:2,fontSize:8,textDecoration:"none",letterSpacing:".08em"}}>BIRDEYE</a>
+            <a href={`https://explorer.solana.com/address/${wallet}`} target="_blank" rel="noopener noreferrer" style={{padding:"4px 10px",background:K.pu+"15",color:K.pu,border:"1px solid "+K.pu+"40",borderRadius:2,fontSize:8,textDecoration:"none",letterSpacing:".08em"}}>EXPLORER</a>
             <button className="btn" onClick={fetchWalletData} disabled={loading} style={{padding:"4px 10px",fontSize:8}}>{loading?"⟳":"↻"} REFRESH</button>
           </div>
         </div>
+        <div style={{marginTop:8,fontSize:9,color:K.dim,lineHeight:1.6}}>All LIVE trades are recorded here. Verify every transaction on-chain.</div>
       </div>
 
       {/* Transaction Feed */}
@@ -1703,12 +1700,14 @@ function PerformanceCard({trades,totalPnL,onClose}:{trades:Trade[],totalPnL:numb
   );
 }
 
-export default function KYMIA(){
+export default function KYMIA({isLive=false}:{isLive?:boolean}){
   const prices=usePrices();
   const pricesRef=useRef(prices);
   useEffect(()=>{pricesRef.current=prices;},[prices]);
 
   const [booting,setBooting]=useState(true);
+  const [walletConnected,setWalletConnected]=useState(false);
+  const [walletAddress,setWalletAddress]=useState<string|null>(null);
   const [port,setPort]=useState({cash:CAP,pos:{} as {[k:string]:Position},equity:CAP,peak:CAP});
   const portRef=useRef(port);
   useEffect(()=>{portRef.current=port;},[port]);
@@ -2659,6 +2658,29 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
       {/* Vignette overlay */}
       <div style={{position:"fixed",inset:0,zIndex:201,pointerEvents:"none",background:"radial-gradient(ellipse at center, transparent 55%, rgba(2,4,10,0.72) 100%)"}}/>
 
+      {/* ── LIVE MODE — Phantom connection gate ── */}
+      {isLive&&!walletConnected&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(2,4,10,0.97)",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:20,zIndex:500,fontFamily:"'JetBrains Mono','Courier New',monospace"}}>
+          <div style={{fontSize:48,color:K.c,textShadow:"0 0 30px "+K.c}}>◈</div>
+          <div style={{fontSize:20,fontWeight:900,color:K.c,letterSpacing:".2em"}}>KYMIA LIVE MODE</div>
+          <div style={{fontSize:12,color:K.dim,textAlign:"center",lineHeight:2}}>
+            Connect your Phantom wallet to start<br/>autonomous AI trading on Solana
+          </div>
+          <button onClick={async()=>{
+            const ph=(window as unknown as {phantom?:{solana?:{connect:()=>Promise<{publicKey:{toString:()=>string}}>,isPhantom?:boolean}}}).phantom?.solana;
+            if(!ph?.isPhantom){window.open("https://phantom.app/","_blank");return;}
+            try{const r=await ph.connect();setWalletAddress(r.publicKey.toString());setWalletConnected(true);log("SYS","⚡ LIVE MODE — Phantom connected: "+r.publicKey.toString().slice(0,8)+"...",K.g);}
+            catch{log("SYS","Phantom connection rejected",K.r);}
+          }} style={{background:"rgba(0,242,254,0.15)",border:"2px solid rgba(0,242,254,0.5)",color:K.c,fontFamily:"inherit",fontSize:13,borderRadius:6,padding:"12px 36px",cursor:"pointer",letterSpacing:".1em",transition:"all .2s"}}>
+            ⚡ CONNECT PHANTOM
+          </button>
+          <div style={{padding:"10px 24px",maxWidth:380,background:"rgba(255,215,0,0.06)",border:"1px solid rgba(255,215,0,0.2)",borderRadius:4,fontSize:10,color:K.gold,textAlign:"center",lineHeight:1.8}}>
+            ⚠ Real funds will be used for trading.<br/>KYMIA never holds your funds.<br/>Non-custodial · You keep your keys.
+          </div>
+          <a href="/" style={{fontSize:10,color:K.dim,textDecoration:"none",marginTop:4}}>← Back to DEMO mode</a>
+        </div>
+      )}
+
       {booting&&<BootSequence onDone={()=>{setBooting(false);setTimeout(()=>{setRunning(true);log("SYS","▶ AUTO-START — 18 agents online",K.g);},800);}}/>}
 
       {blackSwan&&(
@@ -2683,7 +2705,15 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
             </svg>
             <span style={{fontSize:17,fontWeight:900,color:blackSwan?K.r:K.c,letterSpacing:".25em",textShadow:"0 0 20px "+(blackSwan?K.r:K.c),animation:"glow 2.5s ease-in-out infinite",fontFamily:"'JetBrains Mono','Courier New',monospace"}}>KYMIA</span>
           </div>
-          <span style={{fontSize:9,color:"#102030",letterSpacing:".1em"}}>QUANT AI · SANDBOX · v2.0</span>
+          <span style={{fontSize:9,color:"#102030",letterSpacing:".1em"}}>QUANT AI · v2.0</span>
+          {!isLive?(
+            <div style={{padding:"3px 10px",background:"rgba(0,255,136,0.12)",border:"1px solid rgba(0,255,136,0.3)",borderRadius:3,fontSize:9,color:K.g,letterSpacing:".1em"}}>◈ DEMO · $10K VIRTUAL</div>
+          ):(
+            <div style={{padding:"3px 10px",background:"rgba(255,51,102,0.12)",border:"1px solid rgba(255,51,102,0.4)",borderRadius:3,fontSize:9,color:K.r,letterSpacing:".1em",animation:"pu 1s infinite"}}>⚡ LIVE · REAL FUNDS</div>
+          )}
+          <a href={isLive?"/nexus?mode=demo":"/nexus?mode=live"} style={{padding:"3px 9px",fontSize:9,background:"transparent",color:K.dim,border:"1px solid #0A1D33",borderRadius:2,textDecoration:"none",cursor:"pointer",letterSpacing:".06em"}}>
+            {isLive?"→ DEMO":"→ LIVE"}
+          </a>
           <div style={{display:"flex",alignItems:"center",gap:4,padding:"2px 7px",background:K.c+"10",border:"1px solid "+K.c+"25",borderRadius:2}}>
             <span style={{fontSize:9,fontWeight:700,color:K.c}}>{SYM_COUNT}</span>
             <span style={{fontSize:7,color:K.dim,letterSpacing:".08em"}}>MARKETS</span>
@@ -3428,8 +3458,11 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
       )}
 
       <div style={{background:"#020608",borderTop:"1px solid #050A12",padding:"3px 16px",display:"flex",justifyContent:"space-between",fontSize:8,color:"#081525",letterSpacing:".1em",paddingBottom:31}}>
-        <span>◈ KYMIA v2.0 — PAPER TRADING · $10,000 SANDBOX CAPITAL · NO REAL FUNDS AT RISK</span>
-        <span>Claude Sonnet · 18 Agents · {new Date().toLocaleString("en-US")}</span>
+        {isLive
+          ?<span>◈ KYMIA v2.0 — <span style={{color:K.r+"80"}}>LIVE MODE</span> · REAL FUNDS · NON-CUSTODIAL · YOU KEEP YOUR KEYS</span>
+          :<span>◈ KYMIA v2.0 — PAPER TRADING · $10,000 SANDBOX CAPITAL · NO REAL FUNDS AT RISK</span>
+        }
+        <span>Claude Sonnet · 18 Agents · {walletAddress?walletAddress.slice(0,8)+"...":"DEMO"}</span>
       </div>
 
       <TimeScrubber sessionStart={sessionStartRef.current} trades={trades}/>
