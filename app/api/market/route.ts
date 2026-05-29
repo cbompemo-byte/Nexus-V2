@@ -320,6 +320,25 @@ export async function GET(req: Request) {
       return NextResponse.json({ type: "adx", adx, plusDI, minusDI, sma20, currentPrice, trendDir, trendStrength });
     }
 
+    // TICKER — Kraken live spot prices for BTC/ETH/SOL (for price source badges)
+    if (type === "ticker") {
+      const parseKraken = async (pair: string): Promise<number | null> => {
+        try {
+          const res = await fetch(`https://api.kraken.com/0/public/Ticker?pair=${pair}`, { next: { revalidate: 0 } });
+          const d = await res.json();
+          if (d.error?.length) return null;
+          const val = Object.values(d.result as Record<string, { c: string[] }>)[0];
+          return parseFloat(val.c[0]);
+        } catch { return null; }
+      };
+      const [sol, btc, eth] = await Promise.all([
+        parseKraken("SOLUSD"),
+        parseKraken("XBTUSD"),
+        parseKraken("ETHUSD"),
+      ]);
+      return NextResponse.json({ SOL: sol, BTC: btc, ETH: eth, source: "kraken" });
+    }
+
     return NextResponse.json({ error: "Unknown type" }, { status: 400 });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : "fetch failed";

@@ -101,6 +101,16 @@ function applyTraderRules(
   return{allow:true,frac};
 }
 
+// ── Portfolio exposure helpers (Bug 4) ────────────────────────────────────────
+const getMaxPositions=(equity:number):number=>{
+  if(equity<8000)return 2;
+  if(equity<9000)return 3;
+  if(equity<11000)return 4;
+  return 5;
+};
+const getTotalExposure=(pos:Record<string,Position>,px:{[k:string]:PriceData}):number=>
+  Object.entries(pos).reduce((t,[sym,p])=>t+p.qty*(px[sym]?.price||p.avg),0);
+
 function OdometerChar({ch,col}:{ch:string,col:string}){
   const prevCh=useRef(ch);
   const [key,setKey]=useState(0);
@@ -238,7 +248,7 @@ const TH:{[k:string]:string[]}={
   consensus:["VOTE: BUY SOL 14/18","WIF consensus: 82%","BONK debate: LONG wins","EXECUTE: JUP LONG"],
 };
 
-type PriceData={price:number,prev:number,trend:string,change:number,rsi:number,hist:number[]};
+type PriceData={price:number,prev:number,trend:string,change:number,rsi:number,hist:number[],source?:string};
 type AgentState={on:boolean,conf:number|null,sig:string|null,th:string,real?:boolean};
 type NewToken={address:string,name:string,price:string,change1h:number,volume24h:number,liquidity:number,rugScore:number,buys:number,sells:number};
 type DataStatus={jupiter:"ok"|"err"|"loading",binance:"ok"|"err"|"loading",coingecko:"ok"|"err"|"loading",lastUpdate:number};
@@ -290,7 +300,7 @@ function usePrices(){
             const cur=n[sym];if(!cur)continue;
             const np=jd.price;
             n[sym]={...cur,price:np,prev:cur.price,trend:np>cur.price?"up":"dn",
-              hist:[...cur.hist.slice(1),np]};
+              hist:[...cur.hist.slice(1),np],source:"JUP"};
           }
           return n;
         });
@@ -298,6 +308,30 @@ function usePrices(){
     };
     fetchPrices();
     const iv=setInterval(fetchPrices,5000);
+    return()=>clearInterval(iv);
+  },[]);
+  // Kraken spot prices for BTC/ETH/SOL every 8s (more authoritative, shows KRKN badge)
+  useEffect(()=>{
+    const fetchKraken=async()=>{
+      try{
+        const res=await fetch("/api/market?type=ticker");
+        if(!res.ok)return;
+        const d=await res.json();
+        setPx(p=>{
+          const n={...p};
+          const map:{[k:string]:number|null}={SOL:d.SOL,BTC:d.BTC,ETH:d.ETH};
+          for(const[sym,np] of Object.entries(map)){
+            if(!np||!n[sym])continue;
+            const cur=n[sym];
+            n[sym]={...cur,price:np,prev:cur.price,trend:np>cur.price?"up":"dn",
+              hist:[...cur.hist.slice(1),np],source:"KRKN"};
+          }
+          return n;
+        });
+      }catch{}
+    };
+    fetchKraken();
+    const iv=setInterval(fetchKraken,8000);
     return()=>clearInterval(iv);
   },[]);
   return px;
@@ -2173,7 +2207,15 @@ export default function KYMIA(){
       const sig=confirmSignal(p.hist);
       log("SIGNAL","◈ "+sym+" quality:"+sig.quality+" RSI-conf:"+Math.round(sig.conf)+"%",sig.quality==="HIGH"?K.g:sig.quality==="MED"?K.gold:K.dim);
       const prt=portRef.current;
-      if((cs.sig==="BUY"||sig.isBuy)&&!prt.pos[sym]&&prt.cash>500&&Object.keys(prt.pos).length<5){
+      // Portfolio-based position limits (Bug 4)
+      const maxPos=getMaxPositions(prt.equity||prt.cash);
+      const exposure=getTotalExposure(prt.pos,pricesRef.current);
+      const maxExposure=(prt.equity||prt.cash)*0.80;
+      const canOpen=Object.keys(prt.pos).length<maxPos&&exposure<maxExposure;
+      if(!canOpen&&!prt.pos[sym]){
+        log("AEGIS","[AEGIS] Exposure: "+fU(exposure)+"/"+fU(prt.equity||prt.cash)+" ("+f2(exposure/(prt.equity||prt.cash)*100,0)+"%) — max reached, waiting",K.gold);
+      }
+      if((cs.sig==="BUY"||sig.isBuy)&&!prt.pos[sym]&&prt.cash>500&&canOpen){
         // Momentum filter
         if(!hasMomentum(p.hist)){log("SIGNAL","⊘ No momentum: "+sym+" — skip",K.dim);return;}
         // Anti-correlation check
@@ -2189,8 +2231,9 @@ export default function KYMIA(){
         const traderCheck=applyTraderRules(sig.conf,rawFrac,tradesRef.current,sessionStartEquityRef.current,prt.equity||prt.cash);
         if(!traderCheck.allow){log("RISK","⊘ Trader rules: "+sym+" — "+(traderCheck.reason||"filtered"),K.gold);return;}
         if(traderCheck.frac<rawFrac)log("RISK","⚡ Size reduced: "+sym+" "+f2(rawFrac*100,0)+"% → "+f2(traderCheck.frac*100,0)+"%",K.gold);
-        const frac=traderCheck.frac;
-        const alloc=Math.min(prt.cash*frac,prt.cash*.9);
+        const allocFrac=traderCheck.frac;
+        log("AEGIS","[AEGIS] Opening $"+f2(prt.cash*allocFrac,0)+" position (kelly: "+f2(allocFrac*100,0)+"% @ "+Math.round(sig.conf)+"% conf)",K.co);
+        const alloc=Math.min(prt.cash*allocFrac,prt.cash*.9);
         const qty=alloc/p.price;
         setPort(prev=>{if(prev.pos[sym])return prev;return{...prev,cash:prev.cash-alloc,pos:{...prev.pos,[sym]:{qty,avg:p.price,peak:p.price,entryMs:Date.now(),trailActive:false,side:"LONG"}}};});
         setSignalCount(n=>n+1);
@@ -2204,7 +2247,7 @@ export default function KYMIA(){
         if(ags2["razor"]?.conf&&ags2["razor"]?.sig)agSig2.razor={rsi:calcRSI(p.hist.slice(-15),14),macd:0.002,signal:ags2["razor"].sig};
         if(ags2["vector"]?.conf&&ags2["vector"]?.sig)agSig2.vector={adx:Math.round(ags2["vector"].conf/2),signal:ags2["vector"].sig};
         setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym,side:"BUY",qty,price:p.price,pnl:0,conf:Math.round(sig.conf),t:ts(),ms:Date.now(),agentSignals:agSig2},...t.slice(0,99)]);
-        log("EXEC","▶ LONG "+sym+" @ "+fPrice(p.price)+" kelly:"+f2(frac*100,0)+"% sig:"+sig.quality,K.g);
+        log("EXEC","▶ LONG "+sym+" @ "+fPrice(p.price)+" kelly:"+f2(allocFrac*100,0)+"% sig:"+sig.quality,K.g);
         tradeCount++;
       }else if((cs.sig==="SELL"||sig.isSell)&&prt.pos[sym]&&prt.pos[sym].side!=="SHORT"){
         // Close existing LONG position
@@ -2214,17 +2257,16 @@ export default function KYMIA(){
         addWinCard(sym,pnl,((p.price-pos.avg)/pos.avg)*100,p.price,"CONSENSUS","Signal Exit");
         log("EXEC","◀ CLOSE "+sym+" @ "+fPrice(p.price)+" PnL:"+fU(pnl),pnl>=0?K.g:K.r);
         tradeCount++;
-      }else if(cs.sig==="SELL"&&!prt.pos[sym]&&prt.cash>500&&Object.keys(prt.pos).length<5){
-        // Open SHORT position — apply trader rules
-        const shortCheck=applyTraderRules(sig.conf,0.08,tradesRef.current,sessionStartEquityRef.current,prt.equity||prt.cash);
-        if(!shortCheck.allow){log("RISK","⊘ Trader rules (SHORT): "+sym+" — "+(shortCheck.reason||"filtered"),K.gold);return;}
-        const alloc=Math.min(prt.cash*shortCheck.frac,prt.cash*.9);
-        const qty=alloc/p.price;
-        setPort(prev=>{if(prev.pos[sym])return prev;return{...prev,cash:prev.cash-alloc,pos:{...prev.pos,[sym]:{qty,avg:p.price,peak:p.price,entryMs:Date.now(),trailActive:false,side:"SHORT"}}};});
-        setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym,side:"SHORT",qty,price:p.price,pnl:0,conf:Math.round(sig.conf),t:ts(),ms:Date.now()},...t.slice(0,99)]);
-        log("EXEC","▼ SHORT "+sym+" @ "+fPrice(p.price)+" conf:"+Math.round(sig.conf)+"%",K.r);
-        setSignalCount(n=>n+1);
-        tradeCount++;
+      }
+      // SHORT: separate path — triggers on SELL consensus (≥55%) OR multi-TF SELL signal
+      // Picks most overbought available symbol (not just the random `sym` from above)
+      if((cs.sig==="SELL"&&(cs.conf||0)>=55)||sig.isSell){
+        const shortSym=selectBestShort();
+        if(shortSym&&prt.cash>500&&canOpen){
+          const reason=cs.sig==="SELL"?cs.th||"CONSENSUS SELL":"Multi-TF SELL signal";
+          openShort(shortSym,reason,"CONSENSUS",cs.sig==="SELL"?Math.round(cs.conf||70):Math.round(sig.conf));
+          tradeCount++;
+        }
       }
     },2000);
     return()=>{clearInterval(iv);clearTimeout(forceT);};
@@ -2270,12 +2312,46 @@ export default function KYMIA(){
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[]);
 
+  // Open a SHORT position directly (bypasses trader rules — used by demo + consensus path)
+  const openShort=useCallback((sym:string,reason:string,agent:string,conf=70)=>{
+    const p=pricesRef.current[sym];if(!p)return;
+    const prt=portRef.current;
+    if(prt.pos[sym]||prt.cash<500)return;
+    const alloc=Math.min(prt.cash*0.08,prt.cash*0.9);
+    const qty=alloc/p.price;
+    setPort(prev=>{if(prev.pos[sym])return prev;return{...prev,cash:prev.cash-alloc,pos:{...prev.pos,[sym]:{qty,avg:p.price,peak:p.price,entryMs:Date.now(),trailActive:false,side:"SHORT"}}};});
+    setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym,side:"SHORT",qty,price:p.price,pnl:0,conf,t:ts(),ms:Date.now(),agent,reason},...t.slice(0,99)]);
+    log("EXEC","▼ ["+agent+"] SHORT "+sym+" @ "+fPrice(p.price)+" conf:"+conf+"%",K.r);
+    setSignalCount(n=>n+1);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[]);
+
+  // Pick best SHORT candidate — most overbought, not already held
+  const selectBestShort=useCallback(():string|null=>{
+    const prt=portRef.current;
+    return Object.keys(SYMS)
+      .filter(s=>!STABLE_SYMS.has(s)&&!prt.pos[s])
+      .sort((a,b)=>{
+        const da=pricesRef.current[a],db=pricesRef.current[b];
+        if(!da||!db)return 0;
+        // highest RSI first (most overbought), tiebreak by most negative recent change
+        return(db.rsi-da.rsi)+(db.change-da.change)*0.3;
+      })[0]||null;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[]);
+
   // Cinematic first-60s auto-play sequence
   useEffect(()=>{
     const timers:ReturnType<typeof setTimeout>[]=[];
     timers.push(setTimeout(()=>{setRunning(true);log("SYS","▶ KYMIA systems online",K.c);},3000));
     timers.push(setTimeout(()=>{runAI&&runAI();},8000));
     timers.push(setTimeout(()=>{forceTrade("SOL","BUY","SURGE",76);},15000));
+    // Demo SHORT burst — proves SHORT execution works within 20s of activation
+    timers.push(setTimeout(()=>{
+      const sym=selectBestShort()||"BONK";
+      openShort(sym,"Demo SHORT — momentum reversal detected","RADAR",73);
+      log("RADR","▼ Demo SHORT "+sym+" — bearish divergence confirmed",K.r);
+    },18000));
     timers.push(setTimeout(()=>{
       const ev=EDGE_EVENTS.find(e=>e.type==="WHALE")||EDGE_EVENTS[0];
       setEdgeToasts(p=>[...p.slice(-1),{id:Math.random().toString(36).slice(2),...ev}]);
@@ -2553,21 +2629,25 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
                     display=[...entries].sort((a,b)=>Math.abs(b[1].change)-Math.abs(a[1].change)).slice(0,10);
                   }else if(mktTab==="RADAR"){
                     display=entries.filter(([sym,d])=>!STABLE_SYMS.has(sym)&&Math.abs(d.change)>2&&d.rsi<65).sort((a,b)=>Math.abs(b[1].change)-Math.abs(a[1].change)).slice(0,8);
+                  }else{
+                    // ALL: top 10 by absolute change (compact list)
+                    display=[...entries].filter(([sym])=>!STABLE_SYMS.has(sym)).sort((a,b)=>Math.abs(b[1].change)-Math.abs(a[1].change)).slice(0,10);
                   }
                   return display.map(([sym,d])=>{
-                    const sv=SYMS[sym],up=d.trend==="up",pos=port.pos[sym];
-                    const isOpp=mktTab==="RADAR";
+                    const up=d.trend==="up",pos=port.pos[sym];
                     const rsi=d.rsi;
                     const rsiCol=rsi>70?K.r:rsi<30?K.g:K.gold;
+                    const isShortPos=pos?.side==="SHORT";
                     return(
-                      <div key={sym} className="tr" style={{display:"grid",gridTemplateColumns:"28px 1fr 52px 32px",alignItems:"center",gap:4,padding:"4px 6px",height:36,borderBottom:"1px solid #050810",borderLeft:"2px solid "+(pos?K.c:isOpp?K.gold+"60":"transparent"),cursor:"pointer"}} onClick={()=>{const tr=trades.find(t=>t.sym===sym&&t.side==="BUY");if(pos)setChartTrade({trade:tr||null,position:pos,agentSignals:tr?.agentSignals});}}>
-                        <Spark data={d.hist} color={up?K.g:K.r} w={28} h={18}/>
+                      <div key={sym} className="tr" style={{display:"grid",gridTemplateColumns:"8px 36px 1fr 38px 26px",alignItems:"center",gap:4,padding:"0 8px",height:32,borderBottom:"1px solid #050810",borderLeft:"2px solid "+(pos?(isShortPos?K.r:K.c):mktTab==="RADAR"?K.gold+"60":"transparent"),cursor:"pointer"}} onClick={()=>{const tr=trades.find(t=>t.sym===sym&&t.side==="BUY");if(pos)setChartTrade({trade:tr||null,position:pos,agentSignals:tr?.agentSignals});}}>
+                        <div style={{width:6,height:6,borderRadius:"50%",background:up?K.g:K.r,flexShrink:0,boxShadow:"0 0 4px "+(up?K.g:K.r)}}/>
+                        <div style={{fontSize:9,fontWeight:700,color:K.hi,letterSpacing:".03em",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{sym}</div>
                         <div style={{minWidth:0}}>
-                          <div style={{fontSize:10,fontWeight:700,color:K.hi,lineHeight:1}}>{sym}</div>
-                          <div style={{fontSize:10,color:up?K.g:K.r,lineHeight:1.2}}>{fPrice(d.price)}</div>
+                          <div style={{fontSize:9,color:up?K.g:K.r}}>{fPrice(d.price)}</div>
+                          {d.source&&<div style={{fontSize:6,color:K.dim,letterSpacing:".06em"}}>{d.source}</div>}
                         </div>
-                        <div style={{fontSize:9,color:up?K.g:K.r,textAlign:"right"}}>{up?"+":""}{d.change.toFixed(1)}%</div>
-                        <div style={{fontSize:8,textAlign:"center",padding:"1px 2px",borderRadius:2,background:rsiCol+"18",color:rsiCol,border:"1px solid "+rsiCol+"40"}}>{Math.round(rsi)}</div>
+                        <div style={{fontSize:8,color:up?K.g:K.r,textAlign:"right",whiteSpace:"nowrap"}}>{up?"+":""}{d.change.toFixed(1)}%</div>
+                        <div style={{fontSize:7,textAlign:"center",padding:"1px 3px",borderRadius:2,background:rsiCol+"18",color:rsiCol}}>{Math.round(rsi)}</div>
                       </div>
                     );
                   });
@@ -2770,7 +2850,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
             })()}
             <div className="panel" style={{padding:9}}>
               <div style={{fontSize:8,color:K.dim,marginBottom:5,letterSpacing:".12em"}}>◉ STATUS</div>
-              {([{l:"Execution",v:circuit?"LOCKED":"ACTIVE",c:circuit?K.r:K.g},{l:"SL/TP",v:"Tiered Trail",c:K.tx},{l:"Agents",v:(AGENTS.length-disabled.size)+"/18",c:disabled.size>0?K.gold:K.g},{l:"Positions",v:Object.keys(port.pos).length+"/5",c:K.tx},{l:"Entropy",v:Math.round(entropy)+"/100",c:entropyCol}] as Array<{l:string,v:string,c:string}>).map((r,i)=>(
+              {([{l:"Execution",v:circuit?"LOCKED":"ACTIVE",c:circuit?K.r:K.g},{l:"SL/TP",v:"Tiered Trail",c:K.tx},{l:"Agents",v:(AGENTS.length-disabled.size)+"/18",c:disabled.size>0?K.gold:K.g},{l:"Positions",v:Object.keys(port.pos).length+"/"+getMaxPositions(port.equity||port.cash),c:K.tx},{l:"Entropy",v:Math.round(entropy)+"/100",c:entropyCol}] as Array<{l:string,v:string,c:string}>).map((r,i)=>(
                 <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"2px 0",borderBottom:i<4?"1px solid #040910":"none",fontSize:10}}>
                   <span style={{color:K.dim}}>{r.l}</span><span style={{color:r.c,fontWeight:600,fontSize:13}}>{r.v}</span>
                 </div>
