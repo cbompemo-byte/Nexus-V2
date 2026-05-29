@@ -727,10 +727,32 @@ function ConfirmCloseModal({sym,onCancel,onConfirm}:{sym:string,onCancel:()=>voi
   );
 }
 
-function Globe3D({trades,blackSwan,whaleAlert,totalPnL,tradeCount}:{trades:Trade[],blackSwan:boolean,whaleAlert:boolean,totalPnL:number,tradeCount:number}){
+function Globe3D({trades,blackSwan,whaleAlert,totalPnL,tradeCount,agSt,running}:{trades:Trade[],blackSwan:boolean,whaleAlert:boolean,totalPnL:number,tradeCount:number,agSt:{[k:string]:AgentState},running:boolean}){
   const mountRef=useRef<HTMLDivElement>(null);
   const [moneyLabels,setMoneyLabels]=useState<MoneyLabel[]>([]);
   const [observers]=useState(()=>2800+Math.floor(Math.random()*200));
+  const [activeAgentLabel,setActiveAgentLabel]=useState<{agentId:string,signal:string,conf:number,col:string}|null>(null);
+  const agStGlobeRef=useRef(agSt);
+  useEffect(()=>{agStGlobeRef.current=agSt;},[agSt]);
+  const showAgentOnGlobe=useCallback((agentId:string,signal:string,conf:number)=>{
+    const col=signal==="BUY"?K.g:signal==="SELL"?K.r:K.c;
+    setActiveAgentLabel({agentId,signal,conf,col});
+    setTimeout(()=>setActiveAgentLabel(null),3000);
+  },[]);
+  useEffect(()=>{
+    if(!running)return;
+    let i=0;
+    const iv=setInterval(()=>{
+      const cur=agStGlobeRef.current;
+      const activeAgs=AGENTS.filter(a=>cur[a.id]?.on&&cur[a.id]?.sig&&cur[a.id]?.sig!=="HOLD");
+      if(activeAgs.length===0)return;
+      const ag=activeAgs[i%activeAgs.length];
+      const state=cur[ag.id];
+      if(state?.sig&&state.sig!=="HOLD")showAgentOnGlobe(ag.id,state.sig,state.conf||70);
+      i++;
+    },3500);
+    return()=>clearInterval(iv);
+  },[running,showAgentOnGlobe]);
   const W=280,H=248;
   const prevLen=useRef(0);
   const arcsRef=useRef<THREE.Line[]>([]);
@@ -837,6 +859,21 @@ function Globe3D({trades,blackSwan,whaleAlert,totalPnL,tradeCount}:{trades:Trade
     scene.add(rim);
     scene.add(new THREE.AmbientLight(0x111122,.5));
 
+    // City ping rings — permanent pulsing radar waves per city
+    const PING_COLORS=[K.g,K.c,K.gold,K.c,K.pu,K.c];
+    const pingRings:{mesh:THREE.Mesh,mat:THREE.MeshBasicMaterial}[]=[];
+    CITIES.forEach(([lat,lon],i)=>{
+      const v=latLonToVec3(lat,lon,1.03);
+      const ringGeo=new THREE.RingGeometry(0.001,0.04,24);
+      const ringMat=new THREE.MeshBasicMaterial({color:new THREE.Color(PING_COLORS[i]||K.c),transparent:true,opacity:0,side:THREE.DoubleSide,depthWrite:false});
+      const ring=new THREE.Mesh(ringGeo,ringMat);
+      ring.position.copy(v);
+      ring.lookAt(new THREE.Vector3(0,0,0));
+      ring.rotateX(Math.PI/2);
+      globeGroup.add(ring);
+      pingRings.push({mesh:ring,mat:ringMat});
+    });
+
     // Trade arc spawner — fires every 2s between random city pairs
     const addArc=()=>{
       const a=CITIES[Math.floor(Math.random()*CITIES.length)];
@@ -863,6 +900,15 @@ function Globe3D({trades,blackSwan,whaleAlert,totalPnL,tradeCount}:{trades:Trade
       af=requestAnimationFrame(tick);
       angle+=.003;
       globeGroup.rotation.y=angle;
+      // Animate city ping rings
+      const now=performance.now();
+      pingRings.forEach(({mesh,mat},idx)=>{
+        const period=3000;
+        const offset=idx*(period/CITIES.length);
+        const t=((now+offset)%period)/period;
+        mesh.scale.setScalar(t*18+0.01);
+        mat.opacity=Math.max(0,0.7*(1-t*1.4));
+      });
       renderer.render(scene,camera);
     };
     tick();
@@ -874,6 +920,7 @@ function Globe3D({trades,blackSwan,whaleAlert,totalPnL,tradeCount}:{trades:Trade
       earthGeo.dispose();earthMat.dispose();cityGeo.dispose();cityMat.dispose();
       atmoGeo.dispose();atmoMat.dispose();atmoGeo2.dispose();atmoMat2.dispose();
       starGeo.dispose();starMat.dispose();
+      pingRings.forEach(({mat})=>mat.dispose());
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[blackSwan]);
@@ -912,6 +959,19 @@ function Globe3D({trades,blackSwan,whaleAlert,totalPnL,tradeCount}:{trades:Trade
           {m.val>=0?"+$":"-$"}{f2(Math.abs(m.val))}
         </div>
       ))}
+
+      {/* Agent activity label — floats above globe */}
+      {activeAgentLabel&&(
+        <div key={activeAgentLabel.agentId+activeAgentLabel.signal} style={{position:"absolute",top:"20%",left:"50%",transform:"translateX(-50%)",pointerEvents:"none",animation:"agentGlobeAppear 3s ease-out forwards",zIndex:10}}>
+          <div style={{textAlign:"center",fontFamily:"monospace",fontSize:11,fontWeight:900,color:activeAgentLabel.col,textShadow:`0 0 12px ${activeAgentLabel.col}`,letterSpacing:".15em",marginBottom:4}}>
+            {AGENTS.find(a=>a.id===activeAgentLabel.agentId)?.s||activeAgentLabel.agentId.toUpperCase()}
+          </div>
+          <div style={{padding:"3px 10px",background:activeAgentLabel.col+"20",border:`1px solid ${activeAgentLabel.col}60`,borderRadius:3,fontSize:10,color:activeAgentLabel.col,fontWeight:700,fontFamily:"monospace",textAlign:"center"}}>
+            {activeAgentLabel.signal} {activeAgentLabel.conf}%
+          </div>
+          <div style={{width:1,height:24,background:`linear-gradient(${activeAgentLabel.col},transparent)`,margin:"4px auto 0"}}/>
+        </div>
+      )}
 
       {/* Bottom P&L readout */}
       <div style={{position:"absolute",bottom:0,left:0,right:0,textAlign:"center",pointerEvents:"none"}}>
@@ -1127,13 +1187,47 @@ function SwarmGraph({st,debate,disabled,swarmRef,flashingAgent,highConviction,co
           <filter id="arcglow"><feGaussianBlur stdDeviation="2" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
           <filter id="faceglow"><feGaussianBlur stdDeviation="3" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
         </defs>
-        {CONNS.map(([a,b])=>{
-          const pa=nm[a]?.pos,pb=nm[b]?.pos;if(!pa||!pb)return null;
-          const deb=debate.includes(a)&&debate.includes(b);
-          const dis=disabled.has(a)||disabled.has(b);
-          if(dis)return<line key={a+b} x1={pa.x} y1={pa.y} x2={pb.x} y2={pb.y} stroke="#050810" strokeWidth=".5" opacity=".07"/>;
-          return<ElectricArc key={a+b} x1={pa.x} y1={pa.y} x2={pb.x} y2={pb.y} col={deb?K.c:K.dim} active={deb}/>;
-        })}
+        {(()=>{
+          const getArcPath=(p1:{x:number,y:number},p2:{x:number,y:number})=>{
+            const mx=(p1.x+p2.x)/2,my=(p1.y+p2.y)/2;
+            const dx=p2.x-p1.x,dy=p2.y-p1.y;
+            const len=Math.sqrt(dx*dx+dy*dy)||1;
+            const offset=Math.max(8,len*0.25);
+            return `M${p1.x},${p1.y} Q${mx-(dy/len)*offset},${my+(dx/len)*offset} ${p2.x},${p2.y}`;
+          };
+          return CONNS.map(([a,b])=>{
+            const pa=nm[a]?.pos,pb=nm[b]?.pos;if(!pa||!pb)return null;
+            const isDebating=debate.includes(a)&&debate.includes(b);
+            const dis2=disabled.has(a)||disabled.has(b);
+            if(dis2)return<line key={a+b} x1={pa.x} y1={pa.y} x2={pb.x} y2={pb.y} stroke="#050810" strokeWidth=".5" opacity=".07"/>;
+            const aActive=st[a]?.on&&!disabled.has(a);
+            const bActive=st[b]?.on&&!disabled.has(b);
+            const isActive=aActive||bActive;
+            const col=isDebating?K.c:aActive&&st[a]?.sig==="BUY"?K.g:aActive&&st[a]?.sig==="SELL"?K.r:K.co;
+            const arcPath=getArcPath(pa,pb);
+            const arcId=`arc-${a}-${b}`;
+            return(
+              <g key={a+b}>
+                <path id={arcId} d={arcPath} fill="none" stroke={col}
+                  strokeWidth={isDebating?2.5:isActive?1.2:0.4}
+                  opacity={isDebating?0.95:isActive?0.35:0.08}
+                  strokeDasharray={isDebating?"none":isActive?"none":"3 5"}
+                  className={isDebating?"arc-debate":undefined}/>
+                {isActive&&<path d={arcPath} fill="none" stroke={col}
+                  strokeWidth={isDebating?6:3}
+                  opacity={isDebating?0.15:0.06}
+                  filter="url(#arcglow)"/>}
+                {isDebating&&(
+                  <circle r="2.5" fill="white" opacity="0.9" filter="url(#arcglow)">
+                    <animateMotion dur="0.8s" repeatCount="indefinite">
+                      <mpath href={`#${arcId}`}/>
+                    </animateMotion>
+                  </circle>
+                )}
+              </g>
+            );
+          });
+        })()}
         {AGENTS.map(({id,s,lv})=>{
           const n=nm[id],ag=st[id]||{on:false,conf:null,sig:null,th:""};
           const dis=disabled.has(id),isAegis=id==="aegis";
@@ -2478,6 +2572,9 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
         @keyframes convPulse{0%,100%{box-shadow:0 0 0 rgba(0,242,254,0);border-color:rgba(0,242,254,.15)}50%{box-shadow:0 0 28px rgba(0,242,254,.25),inset 0 0 18px rgba(0,242,254,.07);border-color:rgba(0,242,254,.55)}}
         @keyframes convBuyPulse{0%,100%{box-shadow:0 0 0 rgba(0,255,136,0);border-color:rgba(0,255,136,.15)}50%{box-shadow:0 0 28px rgba(0,255,136,.25),inset 0 0 18px rgba(0,255,136,.07);border-color:rgba(0,255,136,.55)}}
         @keyframes nodeFlash{0%{filter:brightness(1)}25%{filter:brightness(3) saturate(2)}75%{filter:brightness(2)}100%{filter:brightness(1)}}
+        @keyframes arcFlicker{0%,100%{opacity:0.95}50%{opacity:0.55}}
+        .arc-debate{animation:arcFlicker 0.12s infinite}
+        @keyframes agentGlobeAppear{0%{opacity:0;transform:translateX(-50%) translateY(-8px)}15%{opacity:1;transform:translateX(-50%) translateY(0)}75%{opacity:1}100%{opacity:0;transform:translateX(-50%) translateY(-12px)}}
         .tab{background:none;border:none;cursor:pointer;font-family:inherit;font-size:12px;letter-spacing:.1em;padding:7px 14px;color:#1E3A55;transition:all .2s;text-transform:uppercase;border-bottom:2px solid transparent}
         .tab:hover{color:${K.c}}.tab.on{color:${K.c};border-bottom-color:${K.c}}
         .tr:hover{background:#060B14}
@@ -2609,7 +2706,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
           <div style={{gridRow:"1/3",display:"flex",flexDirection:"column",gap:6,overflow:"hidden"}}>
             <div className="panel" style={{display:"flex",flexDirection:"column",alignItems:"center",padding:"8px 4px 6px"}}>
               <div style={{fontSize:8,color:K.dim,letterSpacing:".12em",marginBottom:4,alignSelf:"flex-start",paddingLeft:6}}>◉ GLOBAL MACRO SPHERE</div>
-              <Globe3D trades={trades} blackSwan={blackSwan} whaleAlert={whaleAlert} totalPnL={totalPnL} tradeCount={trades.length}/>
+              <Globe3D trades={trades} blackSwan={blackSwan} whaleAlert={whaleAlert} totalPnL={totalPnL} tradeCount={trades.length} agSt={agSt} running={running}/>
             </div>
             <div className="panel" style={{flex:1,overflow:"hidden",display:"flex",flexDirection:"column"}}>
               <div style={{padding:"4px 8px 0",borderBottom:"1px solid #060A14",display:"flex",alignItems:"center",gap:8}}>
@@ -2742,7 +2839,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
               <div style={{flex:1,display:"flex",justifyContent:"center",alignItems:"center",padding:4,position:"relative",zIndex:1,boxShadow:"inset 0 0 60px rgba(0,0,0,0.55)"}}>
                 <SwarmGraph st={agSt} debate={debate} disabled={disabled} swarmRef={swarmRef} flashingAgent={flashingAgent} highConviction={highConviction} convCol={convCol}/>
                 {/* Focus mode: Globe overlay in top-left */}
-                {focusMode&&<div style={{position:"absolute",top:8,left:8,zIndex:10,opacity:.85,borderRadius:4,overflow:"hidden",border:"1px solid "+K.c+"30"}}><Globe3D trades={trades} blackSwan={blackSwan} whaleAlert={whaleAlert} totalPnL={totalPnL} tradeCount={trades.length}/></div>}
+                {focusMode&&<div style={{position:"absolute",top:8,left:8,zIndex:10,opacity:.85,borderRadius:4,overflow:"hidden",border:"1px solid "+K.c+"30"}}><Globe3D trades={trades} blackSwan={blackSwan} whaleAlert={whaleAlert} totalPnL={totalPnL} tradeCount={trades.length} agSt={agSt} running={running}/></div>}
               </div>
             </div>
           </div>
