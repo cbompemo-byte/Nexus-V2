@@ -61,44 +61,48 @@ const MISSIONS=[
 
 // ── Experienced Trader Rules ──────────────────────────────────────────────────
 const TRADER_RULES={
-  // Peak hours UTC: London open (07-09) + NY open (13-17) + overlap (13-15)
   peakHoursUTC:[[7,9],[13,17]] as [number,number][],
-  // Minimum confidence required off-peak
   offPeakMinConf:72,
-  // Minimum confidence during peak hours
   peakMinConf:55,
-  // Max consecutive losses before reducing position size
-  maxConsecLosses:3,
-  // Size reduction multiplier after max consecutive losses
-  consecLossSizeMultiplier:0.6,
-  // Daily max drawdown from session start before pausing
+  peakConfBoost:15,           // +15% confidence during peak hours
+  loss2SizeMultiplier:0.60,   // 2 losses → -40% size
+  loss3SizeMultiplier:0.40,   // 3 losses → -60% size + 5min pause
+  loss3PauseMs:5*60*1000,     // 5 minute pause after 3 losses
   maxDailyDrawdownPct:0.08,
+  macroBtcThreshold:4,        // BTC ±4% triggers macro filter
+  scaleInInitialFrac:0.07,    // 7% first entry (replaces Kelly)
+  scaleInAddFrac:0.04,        // +4% when price confirms +1%
+  scaleInTriggerPct:1.0,      // add at +1% gain
 };
+
+function isPeakHour():boolean{
+  const h=new Date().getUTCHours();
+  return TRADER_RULES.peakHoursUTC.some(([s,e])=>h>=s&&h<e);
+}
 
 function applyTraderRules(
   conf:number,
   kellyFrac:number,
   trades:{pnl:number}[],
   sessionEquity:number,
-  currentEquity:number
-):{allow:boolean;frac:number;reason?:string}{
-  const hour=new Date().getUTCHours();
-  const isPeak=TRADER_RULES.peakHoursUTC.some(([s,e])=>hour>=s&&hour<e);
-  const minConf=isPeak?TRADER_RULES.peakMinConf:TRADER_RULES.offPeakMinConf;
-  if(conf<minConf)return{allow:false,frac:0,reason:`Conf ${Math.round(conf)}% < ${minConf}% min (${isPeak?"peak":"off-peak"})`};
-  // Count consecutive losses
+  currentEquity:number,
+):{allow:boolean;frac:number;reason?:string;isPeak:boolean;consecLosses:number;triggerPause:boolean;triggerCircuit:boolean}{
+  const peak=isPeakHour();
+  const boostedConf=peak?Math.min(conf+TRADER_RULES.peakConfBoost,100):conf;
+  const minConf=peak?TRADER_RULES.peakMinConf:TRADER_RULES.offPeakMinConf;
+  if(boostedConf<minConf)return{allow:false,frac:0,reason:`Conf ${Math.round(conf)}% < ${minConf}% min (${peak?"peak":"off-peak"})`,isPeak:peak,consecLosses:0,triggerPause:false,triggerCircuit:false};
   let consecLosses=0;
-  for(let i=0;i<trades.length;i++){
-    if(trades[i].pnl<0)consecLosses++;else break;
-  }
-  let frac=kellyFrac;
-  if(consecLosses>=TRADER_RULES.maxConsecLosses){
-    frac*=TRADER_RULES.consecLossSizeMultiplier;
-  }
-  // Daily drawdown guard
+  for(let i=0;i<trades.length;i++){if(trades[i].pnl<0)consecLosses++;else break;}
+  if(consecLosses>=5)return{allow:false,frac:0,reason:`5 consecutive losses — CIRCUIT BREAKER`,isPeak:peak,consecLosses,triggerPause:false,triggerCircuit:true};
+  let frac=TRADER_RULES.scaleInInitialFrac;
+  let triggerPause=false;
+  if(consecLosses>=3){frac*=TRADER_RULES.loss3SizeMultiplier;triggerPause=true;}
+  else if(consecLosses>=2){frac*=TRADER_RULES.loss2SizeMultiplier;}
+  // Suppress unused kellyFrac param lint warning — Kelly is overridden by scale-in
+  void kellyFrac;
   const drawdown=(sessionEquity-currentEquity)/sessionEquity;
-  if(drawdown>TRADER_RULES.maxDailyDrawdownPct)return{allow:false,frac:0,reason:`Daily drawdown ${f2(drawdown*100,1)}% exceeds limit`};
-  return{allow:true,frac};
+  if(drawdown>TRADER_RULES.maxDailyDrawdownPct)return{allow:false,frac:0,reason:`Daily drawdown ${f2(drawdown*100,1)}% exceeds limit`,isPeak:peak,consecLosses,triggerPause:false,triggerCircuit:false};
+  return{allow:true,frac,isPeak:peak,consecLosses,triggerPause,triggerCircuit:false};
 }
 
 // ── Portfolio exposure helpers (Bug 4) ────────────────────────────────────────
@@ -252,7 +256,7 @@ type PriceData={price:number,prev:number,trend:string,change:number,rsi:number,h
 type AgentState={on:boolean,conf:number|null,sig:string|null,th:string,real?:boolean};
 type NewToken={address:string,name:string,price:string,change1h:number,volume24h:number,liquidity:number,rugScore:number,buys:number,sells:number};
 type DataStatus={jupiter:"ok"|"err"|"loading",binance:"ok"|"err"|"loading",coingecko:"ok"|"err"|"loading",lastUpdate:number};
-type Position={qty:number,avg:number,peak?:number,entryMs?:number,trailActive?:boolean,side?:"LONG"|"SHORT"};
+type Position={qty:number,avg:number,peak?:number,entryMs?:number,trailActive?:boolean,side?:"LONG"|"SHORT",scaledIn?:boolean};
 type AgentSignals={lens?:{rsi:number,signal:string},radar?:{ema9:number,ema21:number,signal:string},razor?:{rsi:number,macd:number,signal:string},vector?:{adx:number,signal:string},surge?:{volumeChange:number,signal:string},leviathan?:{buyPressure:number,signal:string},echo?:{fg:number,signal:string}};
 type Trade={id:string,sym:string,side:string,qty:number,price:number,pnl:number,conf:number,t:string,ms:number,agent?:string,reason?:string,agentSignals?:AgentSignals};
 type LogEntry={t:string,ag:string,msg:string,col:string};
@@ -1749,6 +1753,10 @@ export default function KYMIA(){
   const [completedMissions,setCompletedMissions]=useState<number[]>([]);
   const [missionCelebration,setMissionCelebration]=useState<typeof MISSIONS[0]|null>(null);
   const [signalCount,setSignalCount]=useState(0);
+  const [traderConsecLosses,setTraderConsecLosses]=useState(0);
+  const [traderIsPaused,setTraderIsPaused]=useState(false);
+  const [traderScaleMode,setTraderScaleMode]=useState(false);
+  const traderPauseTimerRef=useRef<ReturnType<typeof setTimeout>|null>(null);
   const agentLastActiveRef=useRef<{[id:string]:number}>({});
   const completedMissionsRef=useRef<number[]>([]);
   const prevAgStRef=useRef<{[k:string]:AgentState}>({});
@@ -2188,7 +2196,20 @@ export default function KYMIA(){
         continue;
       }
 
-      // LONG path (unchanged)
+      // LONG path
+      // ── Scale-in: add 4% when position confirms +1% gain ────────────────
+      if(pos.side!=="SHORT"&&!pos.scaledIn&&pct>=TRADER_RULES.scaleInTriggerPct){
+        const addFrac=TRADER_RULES.scaleInAddFrac;
+        const prt2=portRef.current;
+        if(prt2.cash>200){
+          const addAlloc=Math.min(prt2.cash*addFrac,prt2.cash*0.9);
+          const addQty=addAlloc/cur;
+          const newAvg=(pos.avg*pos.qty+cur*addQty)/(pos.qty+addQty);
+          setPort(prev=>{if(!prev.pos[sym])return prev;const p2=prev.pos[sym];return{...prev,cash:prev.cash-addAlloc,pos:{...prev.pos,[sym]:{...p2,qty:p2.qty+addQty,avg:newAvg,scaledIn:true}}};});
+          log("AEGIS","[AEGIS] Scale-in: adding "+f2(addFrac*100,0)+"% to "+sym+" pos @ "+fPrice(cur)+" (+"+f2(pct,1)+"%)",K.co);
+          setTraderScaleMode(true);
+        }
+      }
       if(!pos.peak||cur>pos.peak){
         const trailJustActivated=!pos.trailActive&&pct>=1.5;
         setPort(prev=>{if(!prev.pos[sym])return prev;return{...prev,pos:{...prev.pos,[sym]:{...prev.pos[sym],peak:cur,trailActive:prev.pos[sym].trailActive||pct>=1.5}}};});
@@ -2309,7 +2330,18 @@ export default function KYMIA(){
       if(!canOpen&&!prt.pos[sym]){
         log("AEGIS","[AEGIS] Exposure: "+fU(exposure)+"/"+fU(prt.equity||prt.cash)+" ("+f2(exposure/(prt.equity||prt.cash)*100,0)+"%) — max reached, waiting",K.gold);
       }
+      // ── MACRO TREND FILTER (BTC ±4% blocks directional trades) ────────
+      const btcChange=pricesRef.current["BTC"]?.change??0;
+      const btcBearish=btcChange<=-TRADER_RULES.macroBtcThreshold;
+      const btcBullish=btcChange>=TRADER_RULES.macroBtcThreshold;
       if((cs.sig==="BUY"||sig.isBuy)&&!prt.pos[sym]&&prt.cash>500&&canOpen){
+        // Macro LONG block: BTC down >4%, unless RSI <25 (extreme oversold exception)
+        if(btcBearish&&p.rsi>=25){
+          log("ATLAS","[ATLAS] ⚠ BTC macro bearish ("+fP(btcChange)+") — LONG "+sym+" blocked",K.gold);return;
+        }
+        if(btcBearish&&p.rsi<25)log("ATLAS","[ATLAS] RSI<25 exception — LONG despite BTC bearish",K.gold);
+        if(isPeakHour())log("WATCH","[WATCH] NY/EU session open — elevated confidence window",K.c);
+        else log("WATCH","[WATCH] Off-peak hours — applying strict 72% conf threshold",K.dim);
         // Momentum filter
         if(!hasMomentum(p.hist)){log("SIGNAL","⊘ No momentum: "+sym+" — skip",K.dim);return;}
         // Anti-correlation check
@@ -2318,18 +2350,30 @@ export default function KYMIA(){
         if(heldSyms.some(h=>corr.includes(h)||((CORRELATED[h]||[]).includes(sym)))){
           log("RISK","⊘ Anti-corr block: "+sym+" — diversify",K.gold);return;
         }
-        // Kelly sizing + experienced trader rules
+        // Scale-in sizing + experienced trader rules
         const cl=tradesRef.current.filter((t:Trade)=>t.pnl!==0);
         const wr=cl.length?cl.filter((t:Trade)=>t.pnl>0).length/cl.length:0.5;
         const rawFrac=kellySize(sig.conf,wr*100);
         const traderCheck=applyTraderRules(sig.conf,rawFrac,tradesRef.current,sessionStartEquityRef.current,prt.equity||prt.cash);
-        if(!traderCheck.allow){log("RISK","⊘ Trader rules: "+sym+" — "+(traderCheck.reason||"filtered"),K.gold);return;}
-        if(traderCheck.frac<rawFrac)log("RISK","⚡ Size reduced: "+sym+" "+f2(rawFrac*100,0)+"% → "+f2(traderCheck.frac*100,0)+"%",K.gold);
+        if(!traderCheck.allow){
+          if(traderCheck.triggerCircuit){setCircuit(true);log("AEGIS","[AEGIS] ⛔ 5 LOSS STREAK — CIRCUIT BREAKER TRIGGERED",K.r);}
+          log("RISK","⊘ Trader rules: "+sym+" — "+(traderCheck.reason||"filtered"),K.gold);return;
+        }
+        if(traderCheck.triggerPause&&!traderIsPaused){
+          setTraderIsPaused(true);
+          log("AEGIS","[AEGIS] 3 consecutive losses — 5min trading pause activated",K.r);
+          if(traderPauseTimerRef.current)clearTimeout(traderPauseTimerRef.current);
+          traderPauseTimerRef.current=setTimeout(()=>{setTraderIsPaused(false);log("AEGIS","[AEGIS] Pause lifted — resuming trading",K.g);},TRADER_RULES.loss3PauseMs);
+        }
+        if(traderIsPaused){log("AEGIS","[AEGIS] In pause window — skipping "+sym,K.gold);return;}
+        if(traderCheck.consecLosses>=2)log("AEGIS","[AEGIS] "+traderCheck.consecLosses+" recent losses — size reduced to "+f2(traderCheck.frac*100,0)+"%",K.gold);
+        setTraderConsecLosses(traderCheck.consecLosses);
+        setTraderScaleMode(true);
         const allocFrac=traderCheck.frac;
-        log("AEGIS","[AEGIS] Opening $"+f2(prt.cash*allocFrac,0)+" position (kelly: "+f2(allocFrac*100,0)+"% @ "+Math.round(sig.conf)+"% conf)",K.co);
+        log("AEGIS","[AEGIS] Scale-in entry: $"+f2(prt.cash*allocFrac,0)+" ("+f2(allocFrac*100,0)+"% init @ "+Math.round(sig.conf)+"% conf)",K.co);
         const alloc=Math.min(prt.cash*allocFrac,prt.cash*.9);
         const qty=alloc/p.price;
-        setPort(prev=>{if(prev.pos[sym])return prev;return{...prev,cash:prev.cash-alloc,pos:{...prev.pos,[sym]:{qty,avg:p.price,peak:p.price,entryMs:Date.now(),trailActive:false,side:"LONG"}}};});
+        setPort(prev=>{if(prev.pos[sym])return prev;return{...prev,cash:prev.cash-alloc,pos:{...prev.pos,[sym]:{qty,avg:p.price,peak:p.price,entryMs:Date.now(),trailActive:false,side:"LONG",scaledIn:false}}};});
         setSignalCount(n=>n+1);
         const ags2=agStRef.current;
         const agSig2:AgentSignals={};
@@ -2341,7 +2385,7 @@ export default function KYMIA(){
         if(ags2["razor"]?.conf&&ags2["razor"]?.sig)agSig2.razor={rsi:calcRSI(p.hist.slice(-15),14),macd:0.002,signal:ags2["razor"].sig};
         if(ags2["vector"]?.conf&&ags2["vector"]?.sig)agSig2.vector={adx:Math.round(ags2["vector"].conf/2),signal:ags2["vector"].sig};
         setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym,side:"BUY",qty,price:p.price,pnl:0,conf:Math.round(sig.conf),t:ts(),ms:Date.now(),agentSignals:agSig2},...t.slice(0,99)]);
-        log("EXEC","▶ LONG "+sym+" @ "+fPrice(p.price)+" kelly:"+f2(allocFrac*100,0)+"% sig:"+sig.quality,K.g);
+        log("EXEC","▶ LONG "+sym+" @ "+fPrice(p.price)+" init:"+f2(allocFrac*100,0)+"% sig:"+sig.quality,K.g);
         tradeCount++;
       }else if((cs.sig==="SELL"||sig.isSell)&&prt.pos[sym]&&prt.pos[sym].side!=="SHORT"){
         // Close existing LONG position
@@ -2353,19 +2397,47 @@ export default function KYMIA(){
         tradeCount++;
       }
       // SHORT: separate path — triggers on SELL consensus (≥55%) OR multi-TF SELL signal
-      // Picks most overbought available symbol (not just the random `sym` from above)
+      // Macro SHORT block: BTC up >4% blocks shorts
       if((cs.sig==="SELL"&&(cs.conf||0)>=55)||sig.isSell){
-        const shortSym=selectBestShort();
-        if(shortSym&&prt.cash>500&&canOpen){
-          const reason=cs.sig==="SELL"?cs.th||"CONSENSUS SELL":"Multi-TF SELL signal";
-          openShort(shortSym,reason,"CONSENSUS",cs.sig==="SELL"?Math.round(cs.conf||70):Math.round(sig.conf));
-          tradeCount++;
+        if(btcBullish){log("ATLAS","[ATLAS] ⚠ BTC macro bullish ("+fP(btcChange)+") — SHORT blocked",K.gold);}
+        else{
+          const shortSym=selectBestShort();
+          if(shortSym&&prt.cash>500&&canOpen&&!traderIsPaused){
+            const reason=cs.sig==="SELL"?cs.th||"CONSENSUS SELL":"Multi-TF SELL signal";
+            openShort(shortSym,reason,"CONSENSUS",cs.sig==="SELL"?Math.round(cs.conf||70):Math.round(sig.conf));
+            tradeCount++;
+          }
         }
       }
     },2000);
     return()=>{clearInterval(iv);clearTimeout(forceT);};
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[running,circuit,log]);
+  },[running,circuit,traderIsPaused,log]);
+
+  // ── Session summary every 30 minutes ─────────────────────────────────────────
+  useEffect(()=>{
+    if(!running)return;
+    const iv=setInterval(()=>{
+      const cl=tradesRef.current.filter((t:Trade)=>t.pnl!==0);
+      const wins=cl.filter((t:Trade)=>t.pnl>0);
+      const losses=cl.filter((t:Trade)=>t.pnl<0);
+      const totalPnL=cl.reduce((s:number,t:Trade)=>s+t.pnl,0);
+      const wr=cl.length?Math.round(wins.length/cl.length*100):0;
+      const best=wins.length?Math.max(...wins.map((t:Trade)=>t.pnl)):0;
+      const worst=losses.length?Math.min(...losses.map((t:Trade)=>t.pnl)):0;
+      const prt=portRef.current;
+      const nextM=MISSIONS.find(m=>(prt.equity-CAP)/CAP<m.target);
+      log("SYS","── 30m SESSION SUMMARY ──────────────────────",K.dim);
+      log("STAT","Trades: "+cl.length+" | Wins: "+wins.length+" | Losses: "+losses.length,K.tx);
+      log("STAT","P&L: "+fU(totalPnL)+" | Win rate: "+wr+"%",totalPnL>=0?K.g:K.r);
+      if(best>0)log("STAT","Best: +$"+f2(best)+" | Worst: "+fU(worst),K.tx);
+      if(nextM)log("STAT","Next mission: "+nextM.name+" ("+f2((nextM.target*CAP+CAP-prt.equity),0)+" to go)",K.gold);
+      else log("STAT","All missions complete — NEXUS ELITE achieved",K.gold);
+      log("SYS","─────────────────────────────────────────────",K.dim);
+    },30*60*1000);
+    return()=>clearInterval(iv);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[running,log]);
 
   // Edge events
   useEffect(()=>{
@@ -2947,11 +3019,33 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
             })()}
             <div className="panel" style={{padding:9}}>
               <div style={{fontSize:8,color:K.dim,marginBottom:5,letterSpacing:".12em"}}>◉ STATUS</div>
-              {([{l:"Execution",v:circuit?"LOCKED":"ACTIVE",c:circuit?K.r:K.g},{l:"SL/TP",v:"Tiered Trail",c:K.tx},{l:"Agents",v:(AGENTS.length-disabled.size)+"/18",c:disabled.size>0?K.gold:K.g},{l:"Positions",v:Object.keys(port.pos).length+"/"+getMaxPositions(port.equity||port.cash),c:K.tx},{l:"Entropy",v:Math.round(entropy)+"/100",c:entropyCol}] as Array<{l:string,v:string,c:string}>).map((r,i)=>(
-                <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"2px 0",borderBottom:i<4?"1px solid #040910":"none",fontSize:10}}>
-                  <span style={{color:K.dim}}>{r.l}</span><span style={{color:r.c,fontWeight:600,fontSize:13}}>{r.v}</span>
-                </div>
-              ))}
+              {(()=>{
+                const btcChg=prices["BTC"]?.change??0;
+                const macroStr=btcChg<=-TRADER_RULES.macroBtcThreshold?"BEARISH":btcChg>=TRADER_RULES.macroBtcThreshold?"BULLISH":"NEUTRAL";
+                const macroCol=btcChg<=-TRADER_RULES.macroBtcThreshold?K.r:btcChg>=TRADER_RULES.macroBtcThreshold?K.g:K.tx;
+                const peakStr=isPeakHour()?"NY/EU OPEN":"OFF-PEAK";
+                const peakCol=isPeakHour()?K.g:K.dim;
+                const lossStreakStr=traderConsecLosses===0?"CLEAN":traderConsecLosses+"x STREAK";
+                const lossStreakCol=traderConsecLosses>=3?K.r:traderConsecLosses>=2?K.gold:K.g;
+                const scaleModeStr=traderScaleMode?"ACTIVE":"INIT 7%";
+                const scaleModeCol=traderScaleMode?K.c:K.tx;
+                return([
+                  {l:"Execution",v:circuit?"LOCKED":traderIsPaused?"PAUSED":"ACTIVE",c:circuit?K.r:traderIsPaused?K.gold:K.g},
+                  {l:"SL/TP",v:"Tiered Trail",c:K.tx},
+                  {l:"Agents",v:(AGENTS.length-disabled.size)+"/18",c:disabled.size>0?K.gold:K.g},
+                  {l:"Positions",v:Object.keys(port.pos).length+"/"+getMaxPositions(port.equity||port.cash),c:K.tx},
+                  {l:"Entropy",v:Math.round(entropy)+"/100",c:entropyCol},
+                  {l:"PEAK HOURS",v:peakStr,c:peakCol},
+                  {l:"MACRO TREND",v:"BTC "+macroStr,c:macroCol},
+                  {l:"LOSS STREAK",v:lossStreakStr,c:lossStreakCol},
+                  {l:"SCALE MODE",v:scaleModeStr,c:scaleModeCol},
+                ] as Array<{l:string,v:string,c:string}>).map((r,i)=>(
+                  <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"2px 0",borderBottom:i<8?"1px solid #040910":"none",fontSize:10}}>
+                    <span style={{color:i>=5?K.dim+"CC":K.dim,fontSize:i>=5?8:10}}>{r.l}</span>
+                    <span style={{color:r.c,fontWeight:600,fontSize:i>=5?9:13}}>{r.v}</span>
+                  </div>
+                ));
+              })()}
             </div>
           </div>
 
