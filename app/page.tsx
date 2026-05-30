@@ -46,6 +46,300 @@ const DATA_SOURCES = [
   { name:"FEAR & GREED",sig:"Sentiment index",               desc:"Market psychology layer" },
 ];
 
+// ── Agent Network constants ───────────────────────────────────────────────────
+const AN_W = 600, AN_H = 500, AN_CX = AN_W / 2, AN_CY = AN_H / 2;
+
+const LANDING_AGENTS: Record<string, { x:number; y:number; name:string; short:string; specialty:string; source:string }> = {
+  leviathan: { x:AN_CX-220, y:AN_CY-80,  name:"LEVIATHAN", short:"LVT", specialty:"Whale Flow",   source:"Dexscreener on-chain" },
+  lens:      { x:AN_CX-160, y:AN_CY-180, name:"LENS",      short:"LNS", specialty:"RSI Analysis", source:"Kraken 1m candles" },
+  surge:     { x:AN_CX-20,  y:AN_CY-210, name:"SURGE",     short:"SRG", specialty:"Volume",       source:"Coingecko 15m" },
+  atlas:     { x:AN_CX+140, y:AN_CY-180, name:"ATLAS",     short:"ATL", specialty:"Macro",        source:"BTC Dominance API" },
+  echo:      { x:AN_CX+200, y:AN_CY-70,  name:"ECHO",      short:"ECH", specialty:"Sentiment",    source:"Fear & Greed Index" },
+  phantom:   { x:AN_CX+210, y:AN_CY+70,  name:"PHANTOM",   short:"PHT", specialty:"Futures",      source:"Deribit funding rate" },
+  titan:     { x:AN_CX+140, y:AN_CY+180, name:"TITAN",     short:"TTN", specialty:"Regime",       source:"Multi-timeframe EMA" },
+  hydra:     { x:AN_CX-20,  y:AN_CY+210, name:"HYDRA",     short:"HYD", specialty:"Liquidations", source:"Coinglass data" },
+  razor:     { x:AN_CX-160, y:AN_CY+175, name:"RAZOR",     short:"RZR", specialty:"MACD",         source:"Kraken 5m candles" },
+  vector:    { x:AN_CX-220, y:AN_CY+70,  name:"VECTOR",    short:"VCT", specialty:"ADX",          source:"Kraken 1h candles" },
+  radar:     { x:AN_CX-240, y:AN_CY-5,   name:"RADAR",     short:"RDR", specialty:"EMA",          source:"Multi-pair Kraken" },
+  shield:    { x:AN_CX+240, y:AN_CY-5,   name:"SHIELD",    short:"SHD", specialty:"Order Book",   source:"Kraken level-2 data" },
+};
+
+// ── Agent Network ─────────────────────────────────────────────────────────────
+function AgentNetwork() {
+  const [activeBeams, setActiveBeams]     = useState<string[]>([]);
+  const [packets,     setPackets]         = useState<{id:string;agentId:string;progress:number}[]>([]);
+  const [agentSignals,setAgentSignals]    = useState<Record<string,string>>({});
+  const [hoveredAgent,setHoveredAgent]    = useState<string|null>(null);
+  const [time,        setTime]            = useState("");
+
+  // Main signal loop
+  useEffect(() => {
+    const tick = () => {
+      const allAgents = Object.keys(LANDING_AGENTS);
+      const active    = allAgents.filter(() => Math.random() > 0.4);
+      setActiveBeams(active);
+
+      const signals: Record<string,string> = {};
+      allAgents.forEach(id => {
+        signals[id] = Math.random() > 0.6 ? "BUY" : Math.random() > 0.5 ? "SELL" : "HOLD";
+      });
+      setAgentSignals(signals);
+
+      setPackets(p => {
+        const next = [...p.slice(-20)];
+        active.forEach(id => {
+          next.push({ id: Math.random().toString(36).slice(2,7), agentId: id, progress: 0 });
+        });
+        return next;
+      });
+
+      setTime(new Date().toLocaleTimeString("en-US", { hour12:false }));
+    };
+    tick();
+    const iv = setInterval(tick, 1800);
+    return () => clearInterval(iv);
+  }, []);
+
+  // RAF packet animation
+  useEffect(() => {
+    if (packets.length === 0) return;
+    const raf = requestAnimationFrame(() => {
+      setPackets(p => p.map(pk => ({ ...pk, progress: pk.progress + 0.022 })).filter(pk => pk.progress <= 1));
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [packets]);
+
+  const getCol = (id: string) => {
+    const s = agentSignals[id];
+    return s === "BUY" ? K.g : s === "SELL" ? K.r : K.c;
+  };
+
+  const getBeamPath = (ax: number, ay: number) => {
+    const mx = (ax + AN_CX) / 2, my = (ay + AN_CY) / 2;
+    const dx = AN_CX - ax, dy = AN_CY - ay;
+    const len = Math.sqrt(dx*dx + dy*dy);
+    const cx2 = mx + (-dy / len) * 20, cy2 = my + (dx / len) * 20;
+    return `M${ax},${ay} Q${cx2},${cy2} ${AN_CX},${AN_CY}`;
+  };
+
+  const getPacketPos = (ax: number, ay: number, t: number) => {
+    const mx = (ax + AN_CX) / 2, my = (ay + AN_CY) / 2;
+    const dx = AN_CX - ax, dy = AN_CY - ay;
+    const len = Math.sqrt(dx*dx + dy*dy);
+    const cx2 = mx + (-dy / len) * 20, cy2 = my + (dx / len) * 20;
+    return {
+      x: (1-t)*(1-t)*ax + 2*(1-t)*t*cx2 + t*t*AN_CX,
+      y: (1-t)*(1-t)*ay + 2*(1-t)*t*cy2 + t*t*AN_CY,
+    };
+  };
+
+  const hovAg = hoveredAgent ? LANDING_AGENTS[hoveredAgent] : null;
+  const hovCol = hoveredAgent ? getCol(hoveredAgent) : K.c;
+  const hovSig = hoveredAgent ? (agentSignals[hoveredAgent] || "HOLD") : "HOLD";
+  const hovConf = useMemo(() => Math.floor(Math.random() * 25 + 70), []); // stable
+
+  return (
+    <div style={{ position:"relative", width:AN_W, height:AN_H, maxWidth:"100%" }}>
+      <svg
+        width={AN_W} height={AN_H}
+        viewBox={`0 0 ${AN_W} ${AN_H}`}
+        style={{ overflow:"visible", width:"100%", height:"auto" }}
+      >
+        <defs>
+          <filter id="glow-lp" x="-50%" y="-50%" width="200%" height="200%">
+            <feGaussianBlur stdDeviation="3" result="blur"/>
+            <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+          </filter>
+          <filter id="glow-strong" x="-80%" y="-80%" width="260%" height="260%">
+            <feGaussianBlur stdDeviation="6" result="blur"/>
+            <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+          </filter>
+          <radialGradient id="center-glow" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stopColor={K.c} stopOpacity="0.28"/>
+            <stop offset="100%" stopColor={K.c} stopOpacity="0"/>
+          </radialGradient>
+          <clipPath id="skull-clip">
+            <circle cx={AN_CX} cy={AN_CY} r={38}/>
+          </clipPath>
+        </defs>
+
+        {/* Center ambient glow */}
+        <circle cx={AN_CX} cy={AN_CY} r={90} fill="url(#center-glow)"/>
+
+        {/* Orbital ring */}
+        <circle cx={AN_CX} cy={AN_CY} r={228} fill="none"
+          stroke={K.c} strokeWidth="0.3" opacity="0.10" strokeDasharray="4 8"/>
+
+        {/* ── BEAMS ── */}
+        {Object.entries(LANDING_AGENTS).map(([id, ag]) => {
+          const isActive = activeBeams.includes(id);
+          const col = getCol(id);
+          const path = getBeamPath(ag.x, ag.y);
+          return (
+            <g key={`beam-${id}`}>
+              <path d={path} fill="none" stroke={K.c} strokeWidth="0.4" opacity="0.07" strokeDasharray="4 6"/>
+              {isActive && (<>
+                <path d={path} fill="none" stroke={col} strokeWidth="7"   opacity="0.07" filter="url(#glow-lp)"/>
+                <path d={path} fill="none" stroke={col} strokeWidth="2"   opacity="0.30"/>
+                <path d={path} fill="none" stroke={col} strokeWidth="0.9" opacity="0.92"/>
+                <path d={path} fill="none" stroke="#FFFFFF" strokeWidth="0.3" opacity="0.55"/>
+              </>)}
+            </g>
+          );
+        })}
+
+        {/* ── DATA PACKETS ── */}
+        {packets.map(pk => {
+          const ag = LANDING_AGENTS[pk.agentId];
+          if (!ag) return null;
+          const col = getCol(pk.agentId);
+          const pos = getPacketPos(ag.x, ag.y, pk.progress);
+          return (
+            <g key={pk.id} filter="url(#glow-lp)">
+              <circle cx={pos.x} cy={pos.y} r={8}  fill={col} opacity={0.18}/>
+              <circle cx={pos.x} cy={pos.y} r={4}  fill={col} opacity={0.90}/>
+              <circle cx={pos.x} cy={pos.y} r={1.8} fill="#FFF" opacity={0.80}/>
+            </g>
+          );
+        })}
+
+        {/* ── CENTER CONSENSUS SKULL ── */}
+        <g filter="url(#glow-strong)">
+          <circle cx={AN_CX} cy={AN_CY} r={56} fill="none" stroke={K.c} strokeWidth="0.5" opacity="0.18" strokeDasharray="3 6"/>
+          <circle cx={AN_CX} cy={AN_CY} r={47} fill="none" stroke={K.c} strokeWidth="1"   opacity="0.28"/>
+          <circle cx={AN_CX} cy={AN_CY} r={40} fill="#050A10" stroke={K.c} strokeWidth="1.6"/>
+          <g transform={`translate(${AN_CX-22},${AN_CY-26})`}>
+            <ellipse cx="22" cy="20" rx="18" ry="20" fill="#060D18" stroke={K.c} strokeWidth="1.2"/>
+            <line x1="8"  y1="10" x2="22" y2="4" stroke={K.c} strokeWidth="0.7" opacity="0.6"/>
+            <line x1="36" y1="10" x2="22" y2="4" stroke={K.c} strokeWidth="0.7" opacity="0.6"/>
+            <line x1="10" y1="7"  x2="34" y2="7" stroke={K.c} strokeWidth="0.5" opacity="0.4"/>
+            <polygon points="10,18 14,13 20,18 14,23" fill={`${K.c}20`} stroke={K.c} strokeWidth="1"/>
+            <polygon points="24,18 28,13 34,18 28,23" fill={`${K.c}20`} stroke={K.c} strokeWidth="1"/>
+            <circle cx="14" cy="18" r="2" fill={K.c} opacity="0.85"/>
+            <circle cx="28" cy="18" r="2" fill={K.c} opacity="0.85"/>
+            <polygon points="22,26 19,32 25,32" fill="none" stroke={K.c} strokeWidth="0.8" opacity="0.6"/>
+            <line x1="8"  y1="34" x2="22" y2="40" stroke={K.c} strokeWidth="0.8" opacity="0.6"/>
+            <line x1="36" y1="34" x2="22" y2="40" stroke={K.c} strokeWidth="0.8" opacity="0.6"/>
+            {[14,17,20,23,26,29].map(x => (
+              <line key={x} x1={x} y1="36" x2={x} y2="40" stroke={K.c} strokeWidth="0.8" opacity="0.5"/>
+            ))}
+          </g>
+          {/* Scan line */}
+          <line x1={AN_CX-38} y1={AN_CY} x2={AN_CX+38} y2={AN_CY}
+            stroke={K.c} strokeWidth="1" opacity="0.4" clipPath="url(#skull-clip)">
+            <animateTransform attributeName="transform" type="translate"
+              values="0,-38;0,38;0,-38" dur="2s" repeatCount="indefinite"/>
+          </line>
+        </g>
+
+        <text x={AN_CX} y={AN_CY+57} textAnchor="middle"
+          fontSize="9" fill={K.c} fontFamily="monospace" fontWeight="700" letterSpacing="0.15em">CONSENSUS</text>
+        <text x={AN_CX} y={AN_CY+69} textAnchor="middle"
+          fontSize="8" fill={K.dim} fontFamily="monospace">18 AGENTS</text>
+
+        {/* ── AGENT NODES ── */}
+        {Object.entries(LANDING_AGENTS).map(([id, ag]) => {
+          const isActive = activeBeams.includes(id);
+          const col  = getCol(id);
+          const sig  = agentSignals[id] || "HOLD";
+          const isHov = hoveredAgent === id;
+
+          const dx  = ag.x - AN_CX, dy = ag.y - AN_CY;
+          const len = Math.sqrt(dx*dx + dy*dy);
+          const lx  = ag.x + (dx / len) * 38;
+          const ly  = ag.y + (dy / len) * 38;
+          const anchor = ag.x < AN_CX - 10 ? "end" : ag.x > AN_CX + 10 ? "start" : "middle";
+          const scale = isHov ? 1.15 : 1;
+
+          return (
+            <g key={id}
+              style={{ cursor:"pointer", transformOrigin:`${ag.x}px ${ag.y}px`, transform:`scale(${scale})`, transition:"transform .2s" }}
+              filter={isActive || isHov ? "url(#glow-lp)" : undefined}
+              onMouseEnter={() => setHoveredAgent(id)}
+              onMouseLeave={() => setHoveredAgent(null)}
+            >
+              {(isActive || isHov) && (
+                <circle cx={ag.x} cy={ag.y} r={36} fill="none" stroke={col} strokeWidth="0.6" opacity="0.2"/>
+              )}
+              <circle cx={ag.x} cy={ag.y} r={28}
+                fill="#050A10" stroke={col}
+                strokeWidth={isActive || isHov ? 1.8 : 0.6}
+                opacity={isActive || isHov ? 1 : 0.45}/>
+
+              {/* Skull face */}
+              <g transform={`translate(${ag.x-14},${ag.y-17})`} opacity={isActive || isHov ? 1 : 0.45}>
+                <ellipse cx="14" cy="13" rx="11" ry="12" fill="#060D18" stroke={col} strokeWidth="0.8"/>
+                <polygon points="6,11 9,8 12,11 9,14"  fill={`${col}20`} stroke={col} strokeWidth="0.7"/>
+                <polygon points="16,11 19,8 22,11 19,14" fill={`${col}20`} stroke={col} strokeWidth="0.7"/>
+                <circle cx="9"  cy="11" r="1.5" fill={col} opacity="0.9"/>
+                <circle cx="19" cy="11" r="1.5" fill={col} opacity="0.9"/>
+                <line x1="5"  y1="20" x2="14" y2="25" stroke={col} strokeWidth="0.6" opacity="0.6"/>
+                <line x1="23" y1="20" x2="14" y2="25" stroke={col} strokeWidth="0.6" opacity="0.6"/>
+                {isActive && (
+                  <>
+                    <clipPath id={`ac-${id}`}><rect x="0" y="0" width="28" height="26"/></clipPath>
+                    <line x1="3" y1="0" x2="25" y2="0" stroke={col} strokeWidth="0.8" opacity="0.5" clipPath={`url(#ac-${id})`}>
+                      <animateTransform attributeName="transform" type="translate"
+                        values="0,0;0,25;0,0" dur="1.2s" repeatCount="indefinite"/>
+                    </line>
+                  </>
+                )}
+              </g>
+
+              {/* Signal badge */}
+              {(isActive || isHov) && (
+                <g>
+                  <rect x={ag.x-15} y={ag.y-38} width={30} height={13} rx="2" fill={`${col}25`} stroke={col} strokeWidth="0.6"/>
+                  <text x={ag.x} y={ag.y-29} textAnchor="middle" fontSize="7" fill={col} fontFamily="monospace" fontWeight="700">{sig}</text>
+                </g>
+              )}
+
+              {/* Labels */}
+              <text x={lx} y={ly-5} textAnchor={anchor}
+                fontSize="9" fill={isActive || isHov ? col : "#1A3050"}
+                fontFamily="monospace" fontWeight="700" className="agent-label">{ag.short}</text>
+              <text x={lx} y={ly+6} textAnchor={anchor}
+                fontSize="7" fill="#1A3050" fontFamily="monospace" className="agent-specialty">{ag.specialty}</text>
+            </g>
+          );
+        })}
+      </svg>
+
+      {/* ── HOVER TOOLTIP ── */}
+      {hovAg && hoveredAgent && (
+        <div style={{
+          position:"absolute",
+          left: hovAg.x > AN_CX ? hovAg.x - 160 : hovAg.x + 36,
+          top:  Math.max(0, hovAg.y - 70),
+          background:"rgba(4,6,13,0.96)",
+          border:`1px solid ${hovCol}`,
+          borderRadius:6,
+          padding:"10px 14px",
+          fontFamily:F,
+          fontSize:10,
+          zIndex:100,
+          pointerEvents:"none",
+          minWidth:160,
+          boxShadow:`0 0 20px ${hovCol}30`,
+        }}>
+          <div style={{ color:hovCol, fontWeight:700, letterSpacing:".1em", marginBottom:6 }}>{LANDING_AGENTS[hoveredAgent].name}</div>
+          <div style={{ color:K.dim, marginBottom:3 }}>Specialty: <span style={{ color:K.hi }}>{LANDING_AGENTS[hoveredAgent].specialty}</span></div>
+          <div style={{ color:K.dim, marginBottom:3 }}>Signal: <span style={{ color:hovCol, fontWeight:700 }}>{hovSig} {hovConf}%</span></div>
+          <div style={{ color:K.dim }}>Source: <span style={{ color:K.hi }}>{LANDING_AGENTS[hoveredAgent].source}</span></div>
+        </div>
+      )}
+
+      {/* Bottom label */}
+      <div style={{
+        position:"absolute", bottom:-22, left:0, right:0,
+        textAlign:"center", fontSize:9, color:K.dim, fontFamily:F,
+      }}>
+        ◉ LIVE · {activeBeams.length}/12 AGENTS SIGNALING · {time}
+      </div>
+    </div>
+  );
+}
+
 // ── Boot ─────────────────────────────────────────────────────────────────────
 function Boot({ onDone }:{ onDone:()=>void }) {
   const [lines, setLines] = useState(0);
@@ -66,65 +360,6 @@ function Boot({ onDone }:{ onDone:()=>void }) {
           </div>
         ))}
         {lines>0&&<span style={{color:K.c,fontSize:11,animation:"blink 1s infinite"}}>█</span>}
-      </div>
-    </div>
-  );
-}
-
-// ── Globe SVG ────────────────────────────────────────────────────────────────
-function Globe({ size=380 }:{ size?:number }) {
-  const cx=size/2, cy=size/2, r=size*0.44;
-  const cities=[
-    {x:cx-r*0.28,y:cy-r*0.18},
-    {x:cx+r*0.12,y:cy-r*0.32},
-    {x:cx+r*0.48,y:cy-r*0.08},
-    {x:cx-r*0.48,y:cy+r*0.12},
-    {x:cx+r*0.28,y:cy+r*0.28},
-  ];
-  return (
-    <div style={{position:"relative",width:size,height:size}}>
-      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{position:"absolute",inset:0}}>
-        <defs>
-          <radialGradient id="gg" cx="40%" cy="40%">
-            <stop offset="0%" stopColor={K.c} stopOpacity="0.07"/>
-            <stop offset="100%" stopColor="transparent" stopOpacity="0"/>
-          </radialGradient>
-        </defs>
-        <circle cx={cx} cy={cy} r={r+4} fill="none" stroke={K.c} strokeWidth="0.5" opacity="0.18"/>
-        <circle cx={cx} cy={cy} r={r} fill="url(#gg)"/>
-        {[-0.68,-0.4,0,0.4,0.68].map((f,i)=>{
-          const ry=Math.sqrt(1-f*f)*r;
-          return <ellipse key={i} cx={cx} cy={cy+f*r} rx={ry} ry={ry*0.25} fill="none" stroke={K.c} strokeWidth="0.5" opacity="0.16"/>;
-        })}
-        <g style={{animation:"gspin 22s linear infinite",transformOrigin:`${cx}px ${cy}px`}}>
-          {[0,30,60,90,120,150].map((a,i)=>
-            <ellipse key={i} cx={cx} cy={cy} rx={r*Math.abs(Math.cos(a*Math.PI/180))} ry={r} fill="none" stroke={K.c} strokeWidth="0.5" opacity="0.12" transform={`rotate(${a} ${cx} ${cy})`}/>
-          )}
-        </g>
-        {cities.map((pt,i)=>(
-          <g key={i}>
-            <circle cx={pt.x} cy={pt.y} r={3} fill={K.g} opacity="0.9"/>
-            <circle cx={pt.x} cy={pt.y} r={3} fill="none" stroke={K.g} strokeWidth="0.8" style={{animation:`ping ${2+i*0.3}s ${i*0.5}s ease-out infinite`,transformOrigin:`${pt.x}px ${pt.y}px`}}/>
-          </g>
-        ))}
-        <path d={`M${cities[0].x},${cities[0].y} Q${cx},${cy-r*0.55} ${cities[1].x},${cities[1].y}`} fill="none" stroke={K.g} strokeWidth="1" opacity="0.4" strokeDasharray="4 4" style={{animation:"dashflow 3s linear infinite"}}/>
-        <path d={`M${cities[1].x},${cities[1].y} Q${cx+r*0.3},${cy-r*0.22} ${cities[2].x},${cities[2].y}`} fill="none" stroke={K.c} strokeWidth="1" opacity="0.4" strokeDasharray="4 4" style={{animation:"dashflow 4s linear infinite"}}/>
-      </svg>
-      {[
-        {top:"22%",left:"28%",col:K.g,txt:"+$247"},
-        {top:"58%",right:"16%",col:K.r,txt:"-$12"},
-        {top:"36%",right:"14%",col:K.g,txt:"+$89"},
-      ].map((l,i)=>(
-        <div key={i} style={{position:"absolute",top:l.top,left:l.left,right:l.right,fontSize:10,color:l.col,fontFamily:F,animation:`float ${3+i*0.5}s ease-in-out infinite ${i*0.8}s`,background:`${l.col}18`,border:`1px solid ${l.col}40`,borderRadius:3,padding:"2px 7px",width:"fit-content"}}>
-          {l.txt}
-        </div>
-      ))}
-      <div style={{position:"absolute",top:"50%",left:"50%",transform:"translate(-50%,-50%)",textAlign:"center",pointerEvents:"none"}}>
-        <div style={{fontSize:9,color:K.c,letterSpacing:".2em",animation:"pu 2s infinite",fontFamily:F}}>AI OBSERVER</div>
-      </div>
-      <div style={{position:"absolute",bottom:-36,left:"50%",transform:"translateX(-50%)",textAlign:"center",whiteSpace:"nowrap"}}>
-        <div style={{fontSize:13,fontWeight:900,color:K.g,fontFamily:F,textShadow:`0 0 12px ${K.g}`}}>+$247.83 SESSION</div>
-        <div style={{fontSize:9,color:K.dim,fontFamily:F,letterSpacing:".1em",marginTop:2}}>24/7 AUTONOMOUS</div>
       </div>
     </div>
   );
@@ -217,11 +452,15 @@ function LivePrices() {
   },[]);
   return (
     <div style={{display:"flex",gap:10,flexWrap:"wrap",justifyContent:"center"}}>
-      {([["SOL",px.SOL,2.1],["BTC",px.BTC,0.8],["ETH",px.ETH,1.2]] as [string,number,number][]).map(([sym,p,ch])=>(
-        <div key={sym} style={{padding:"5px 14px",background:"rgba(6,10,18,0.8)",border:"1px solid rgba(0,242,254,0.15)",borderRadius:4,fontFamily:F,fontSize:10,display:"flex",gap:8,alignItems:"center"}}>
+      {([
+        ["◎ SOL", px.SOL,  2],
+        ["₿ BTC", px.BTC,  0],
+        ["Ξ ETH", px.ETH,  2],
+      ] as [string,number,number][]).map(([sym,p,dec])=>(
+        <div key={sym} style={{padding:"6px 16px",background:"rgba(6,10,18,0.85)",border:"1px solid rgba(0,242,254,0.18)",borderRadius:4,fontFamily:F,fontSize:10,display:"flex",gap:8,alignItems:"center"}}>
           <span style={{color:K.hi,fontWeight:700}}>{sym}</span>
-          <span style={{color:K.c}}>${p>=1000?p.toLocaleString("en-US",{maximumFractionDigits:0}):p.toFixed(2)}</span>
-          <span style={{color:K.g}}>▲+{ch}%</span>
+          <span style={{color:K.c}}>${p>=1000?p.toLocaleString("en-US",{maximumFractionDigits:0}):p.toFixed(dec)}</span>
+          <span style={{color:K.g,fontSize:9}}>▲</span>
         </div>
       ))}
     </div>
@@ -276,8 +515,8 @@ export default function LandingPage() {
       <div style={{position:"fixed",inset:0,pointerEvents:"none",zIndex:1,background:"radial-gradient(ellipse at center,transparent 60%,rgba(2,4,10,0.65) 100%)"}}/>
 
       {/* ── HERO ─────────────────────────────────────────────────────────── */}
-      <section style={{minHeight:"100vh",display:"flex",alignItems:"center",position:"relative",padding:"80px 48px 60px",maxWidth:1280,margin:"0 auto",gap:40}}>
-        <motion.div initial={{opacity:0,x:-28}} animate={{opacity:1,x:0}} transition={{duration:.8,delay:.1}} style={{flex:"0 0 55%"}}>
+      <section style={{minHeight:"100vh",display:"flex",alignItems:"center",position:"relative",padding:"80px 48px 80px",maxWidth:1280,margin:"0 auto",gap:40,flexWrap:"wrap"}}>
+        <motion.div initial={{opacity:0,x:-28}} animate={{opacity:1,x:0}} transition={{duration:.8,delay:.1}} style={{flex:"1 1 440px",minWidth:0}}>
           <div style={{marginBottom:18}}>
             <div style={{fontSize:72,fontWeight:900,color:K.c,letterSpacing:".18em",lineHeight:1,textShadow:`0 0 40px ${K.c},0 0 80px ${K.c}40`}}>◈ KYMIA</div>
             <div style={{fontSize:10,color:K.dim,letterSpacing:".4em",marginTop:8}}>AUTONOMOUS QUANT INTELLIGENCE</div>
@@ -326,9 +565,13 @@ export default function LandingPage() {
           </div>
         </motion.div>
 
-        <motion.div initial={{opacity:0,x:28}} animate={{opacity:1,x:0}} transition={{duration:.8,delay:.3}} style={{flex:"0 0 45%",display:"flex",flexDirection:"column",alignItems:"center",paddingTop:32}}>
-          <Globe size={360}/>
-          <div style={{marginTop:56}}><LivePrices/></div>
+        {/* RIGHT COLUMN — Agent Network */}
+        <motion.div initial={{opacity:0,x:28}} animate={{opacity:1,x:0}} transition={{duration:.8,delay:.3}}
+          style={{flex:"1 1 500px",minWidth:0,display:"flex",flexDirection:"column",alignItems:"center",gap:32,paddingTop:16}}>
+          <div className="agent-network-wrap">
+            <AgentNetwork/>
+          </div>
+          <LivePrices/>
         </motion.div>
       </section>
 
@@ -602,6 +845,11 @@ export default function LandingPage() {
         @keyframes ticker{from{transform:translateX(0)}to{transform:translateX(-50%)}}
         *{box-sizing:border-box}
         html{scroll-behavior:smooth}
+        .agent-network-wrap{width:100%;max-width:600px}
+        @media(max-width:767px){
+          .agent-network-wrap{width:90vw}
+          .agent-specialty{display:none}
+        }
       `}</style>
     </div>
   );
