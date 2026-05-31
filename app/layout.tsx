@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -14,7 +14,31 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "KYMIA — Autonomous Quant Intelligence",
-  description: "A living AI swarm analyzing markets in real time",
+  description: "18 AI agents analyzing Solana markets 24/7. Real data. Real signals. Free sandbox.",
+  icons: {
+    icon: [
+      { url: "/favicon.svg", type: "image/svg+xml" },
+      { url: "/favicon.ico", sizes: "32x32" },
+    ],
+    apple: "/favicon.svg",
+    shortcut: "/favicon.svg",
+  },
+  openGraph: {
+    title: "KYMIA — Autonomous Quant Intelligence",
+    description: "18 AI agents analyzing Solana markets in real time. Free sandbox. No signup.",
+    url: "https://nexus-v2-seven.vercel.app",
+    siteName: "KYMIA",
+    type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "KYMIA — AI Swarm Trading",
+    description: "18 AI agents. Real Solana prices. Free sandbox.",
+  },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#00F2FE",
 };
 
 export default function RootLayout({

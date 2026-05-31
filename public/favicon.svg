@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- Dark background -->
+  <rect width="32" height="32" rx="6" fill="#04060D"/>
+
+  <!-- Hexagon outline -->
+  <polygon points="16,2 26,8 26,20 16,26 6,20 6,8"
+    fill="none" stroke="#00F2FE" stroke-width="1.2" opacity="0.8"/>
+
+  <!-- Inner hex -->
+  <polygon points="16,5 23,9 23,19 16,23 9,19 9,9"
+    fill="none" stroke="#00F2FE" stroke-width="0.6" opacity="0.4"/>
+
+  <!-- Mesh lines -->
+  <line x1="6" y1="8" x2="26" y2="20" stroke="#00F2FE" stroke-width="0.4" opacity="0.25"/>
+  <line x1="26" y1="8" x2="6" y2="20" stroke="#00F2FE" stroke-width="0.4" opacity="0.25"/>
+
+  <!-- AI Eye center -->
+  <circle cx="16" cy="14" r="5" fill="#050A14"/>
+  <circle cx="16" cy="14" r="4"
+    fill="none" stroke="#00F2FE" stroke-width="0.6" opacity="0.5"/>
+  <!-- Iris gradient simulation -->
+  <circle cx="16" cy="14" r="2.5" fill="#00F2FE" opacity="0.7"/>
+  <circle cx="16" cy="14" r="1.2" fill="#0051FF" opacity="0.9"/>
+  <circle cx="14.8" cy="12.8" r="0.8" fill="white" opacity="0.6"/>
+
+  <!-- ◈ symbol hint at bottom -->
+  <text x="16" y="30"
+    text-anchor="middle"
+    font-size="5"
+    fill="#00F2FE"
+    opacity="0.7"
+    font-family="monospace">◈</text>
+</svg>
