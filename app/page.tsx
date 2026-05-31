@@ -365,6 +365,72 @@ function Boot({ onDone }:{ onDone:()=>void }) {
   );
 }
 
+// ── Demo Video ───────────────────────────────────────────────────────────────
+function DemoVideoSection() {
+  return (
+    <div style={{ maxWidth:900, margin:"0 auto 80px", padding:"0 20px", position:"relative" }}>
+      <div style={{ textAlign:"center", marginBottom:32 }}>
+        <div style={{ fontSize:10, color:K.c, letterSpacing:".4em", marginBottom:12 }}>◈ WATCH KYMIA IN ACTION</div>
+        <div style={{ fontSize:28, fontWeight:900, color:"white" }}>18 agents. Real markets. Live trading.</div>
+      </div>
+
+      <div style={{
+        position:"relative", borderRadius:12, overflow:"hidden",
+        border:"1px solid rgba(0,242,254,0.25)",
+        boxShadow:"0 0 80px rgba(0,242,254,0.08), 0 24px 60px rgba(0,0,0,0.6), inset 0 0 0 1px rgba(255,255,255,0.03)",
+      }}>
+        {/* Terminal bar */}
+        <div style={{ background:"rgba(6,10,18,0.95)", borderBottom:"1px solid rgba(0,242,254,0.1)", padding:"10px 16px", display:"flex", alignItems:"center", gap:8 }}>
+          {["#FF3366","#FFD700","#00FF88"].map((c,i) => (
+            <div key={i} style={{ width:10, height:10, borderRadius:"50%", background:c, opacity:0.8 }}/>
+          ))}
+          <span style={{ flex:1, textAlign:"center", fontSize:10, color:K.dim, fontFamily:"monospace", letterSpacing:".15em" }}>
+            KYMIA — AUTONOMOUS QUANT INTELLIGENCE — LIVE DEMO
+          </span>
+          <div style={{ display:"flex", alignItems:"center", gap:4, padding:"2px 8px", background:"rgba(0,255,136,0.12)", border:"1px solid rgba(0,255,136,0.3)", borderRadius:10 }}>
+            <div style={{ width:5, height:5, borderRadius:"50%", background:K.g, animation:"pu 1s infinite" }}/>
+            <span style={{ fontSize:8, color:K.g }}>LIVE</span>
+          </div>
+        </div>
+
+        {/* Video */}
+        <video autoPlay loop muted playsInline
+          style={{ width:"100%", display:"block", aspectRatio:"16/9", objectFit:"cover" }}
+          poster="/kymia-poster.jpg">
+          <source src="/kymia-demo.mp4" type="video/mp4"/>
+          <source src="/kymia-demo.webm" type="video/webm"/>
+        </video>
+
+        {/* Bottom gradient */}
+        <div style={{ position:"absolute", bottom:0, left:0, right:0, height:80, background:"linear-gradient(transparent, rgba(4,6,13,0.8))", pointerEvents:"none" }}/>
+        {/* Scanlines */}
+        <div style={{ position:"absolute", inset:0, pointerEvents:"none", background:"repeating-linear-gradient(0deg, transparent, transparent 3px, rgba(0,242,254,0.012) 3px, rgba(0,242,254,0.012) 4px)" }}/>
+      </div>
+
+      {/* Stats */}
+      <div style={{ display:"flex", justifyContent:"center", gap:48, marginTop:24, flexWrap:"wrap" }}>
+        {[{v:"18",l:"AI AGENTS"},{v:"15s",l:"CYCLE TIME"},{v:"50+",l:"MARKETS"},{v:"24/7",l:"AUTONOMOUS"}].map((s,i) => (
+          <div key={i} style={{ textAlign:"center" }}>
+            <div style={{ fontSize:20, fontWeight:900, color:K.c, textShadow:`0 0 12px ${K.c}`, fontFamily:"monospace" }}>{s.v}</div>
+            <div style={{ fontSize:8, color:K.dim, letterSpacing:".2em", marginTop:2 }}>{s.l}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* CTA */}
+      <div style={{ textAlign:"center", marginTop:28 }}>
+        <a href="/nexus?mode=demo" style={{
+          display:"inline-block", padding:"12px 32px",
+          background:"rgba(0,255,136,0.12)", border:"1.5px solid rgba(0,255,136,0.4)",
+          color:K.g, borderRadius:6, fontFamily:"monospace", fontSize:12,
+          fontWeight:700, textDecoration:"none", letterSpacing:".1em",
+          boxShadow:"0 0 24px rgba(0,255,136,0.12)", transition:"all .3s",
+        }}>▶ TRY FREE DEMO — NO SIGNUP</a>
+      </div>
+    </div>
+  );
+}
+
 // ── Mini Swarm ────────────────────────────────────────────────────────────────
 function MiniSwarm() {
   const nodes = useMemo(()=>Array.from({length:18},(_,i)=>{
@@ -574,6 +640,9 @@ export default function LandingPage() {
           <LivePrices/>
         </motion.div>
       </section>
+
+      {/* ── DEMO VIDEO ───────────────────────────────────────────────────── */}
+      <DemoVideoSection/>
 
       {/* ── BENTO GRID ───────────────────────────────────────────────────── */}
       <section style={{padding:"80px 48px",maxWidth:1280,margin:"0 auto"}}>
