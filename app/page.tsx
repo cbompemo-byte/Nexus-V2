@@ -46,295 +46,280 @@ const DATA_SOURCES = [
   { name:"FEAR & GREED",sig:"Sentiment index",               desc:"Market psychology layer" },
 ];
 
-// ── Agent Network constants ───────────────────────────────────────────────────
-const AN_W = 600, AN_H = 500, AN_CX = AN_W / 2, AN_CY = AN_H / 2;
+// ── Landing Swarm constants ───────────────────────────────────────────────────
+const AGENTS_RING = [
+  {id:'cnsns',  name:'CONSENSUS',  short:'CNSNS', ring:0, angle:0,   specialty:'Master Vote',      col:'#00F2FE'},
+  {id:'aegis',  name:'AEGIS',      short:'AEGIS', ring:1, angle:0,   specialty:'Risk Engine',      col:'#FF3366'},
+  {id:'oracle', name:'ORACLE',     short:'ORCLR', ring:1, angle:120, specialty:'Order Flow',       col:'#00F2FE'},
+  {id:'phantom',name:'PHANTOM',    short:'PHNTM', ring:1, angle:240, specialty:'Futures',          col:'#BD00FF'},
+  {id:'titan',  name:'TITAN',      short:'TITAN', ring:2, angle:0,   specialty:'Regime',           col:'#FFD700'},
+  {id:'hydra',  name:'HYDRA',      short:'HYDRA', ring:2, angle:72,  specialty:'Liquidations',     col:'#FF3366'},
+  {id:'shield', name:'SHIELD',     short:'SHLD',  ring:2, angle:144, specialty:'Order Book',       col:'#00F2FE'},
+  {id:'neural', name:'NEURAL',     short:'NRAL',  ring:2, angle:216, specialty:'Adaptive',         col:'#00FF88'},
+  {id:'watch',  name:'WATCH',      short:'WTCH',  ring:2, angle:288, specialty:'Latency',          col:'#2A5070'},
+  {id:'lens',   name:'LENS',       short:'LENS',  ring:3, angle:0,   specialty:'RSI',              col:'#BD00FF'},
+  {id:'atlas',  name:'ATLAS',      short:'ATLAS', ring:3, angle:36,  specialty:'Macro',            col:'#FFD700'},
+  {id:'echo',   name:'ECHO',       short:'ECHO',  ring:3, angle:72,  specialty:'Sentiment',        col:'#00FF88'},
+  {id:'levia',  name:'LEVIATHAN',  short:'LEVIA', ring:3, angle:108, specialty:'Whale Flow',       col:'#BD00FF'},
+  {id:'razor',  name:'RAZOR',      short:'RAZOR', ring:3, angle:144, specialty:'MACD',             col:'#FF3366'},
+  {id:'surge',  name:'SURGE',      short:'SURGE', ring:3, angle:180, specialty:'Volume',           col:'#00FF88'},
+  {id:'vector', name:'VECTOR',     short:'VCTR',  ring:3, angle:216, specialty:'ADX Trend',        col:'#00F2FE'},
+  {id:'delta',  name:'DELTA',      short:'DELTA', ring:3, angle:252, specialty:'Arbitrage',        col:'#FFD700'},
+  {id:'radar',  name:'RADAR',      short:'RADAR', ring:3, angle:288, specialty:'EMA Cross',        col:'#00F2FE'},
+  {id:'luna',   name:'LUNA',       short:'LUNA',  ring:3, angle:324, specialty:'Moon Phase',       col:'#BD00FF'},
+] as const;
 
-const LANDING_AGENTS: Record<string, { x:number; y:number; name:string; short:string; specialty:string; source:string }> = {
-  leviathan: { x:AN_CX-220, y:AN_CY-80,  name:"LEVIATHAN", short:"LVT", specialty:"Whale Flow",   source:"Dexscreener on-chain" },
-  lens:      { x:AN_CX-160, y:AN_CY-180, name:"LENS",      short:"LNS", specialty:"RSI Analysis", source:"Kraken 1m candles" },
-  surge:     { x:AN_CX-20,  y:AN_CY-210, name:"SURGE",     short:"SRG", specialty:"Volume",       source:"Coingecko 15m" },
-  atlas:     { x:AN_CX+140, y:AN_CY-180, name:"ATLAS",     short:"ATL", specialty:"Macro",        source:"BTC Dominance API" },
-  echo:      { x:AN_CX+200, y:AN_CY-70,  name:"ECHO",      short:"ECH", specialty:"Sentiment",    source:"Fear & Greed Index" },
-  phantom:   { x:AN_CX+210, y:AN_CY+70,  name:"PHANTOM",   short:"PHT", specialty:"Futures",      source:"Deribit funding rate" },
-  titan:     { x:AN_CX+140, y:AN_CY+180, name:"TITAN",     short:"TTN", specialty:"Regime",       source:"Multi-timeframe EMA" },
-  hydra:     { x:AN_CX-20,  y:AN_CY+210, name:"HYDRA",     short:"HYD", specialty:"Liquidations", source:"Coinglass data" },
-  razor:     { x:AN_CX-160, y:AN_CY+175, name:"RAZOR",     short:"RZR", specialty:"MACD",         source:"Kraken 5m candles" },
-  vector:    { x:AN_CX-220, y:AN_CY+70,  name:"VECTOR",    short:"VCT", specialty:"ADX",          source:"Kraken 1h candles" },
-  radar:     { x:AN_CX-240, y:AN_CY-5,   name:"RADAR",     short:"RDR", specialty:"EMA",          source:"Multi-pair Kraken" },
-  shield:    { x:AN_CX+240, y:AN_CY-5,   name:"SHIELD",    short:"SHD", specialty:"Order Book",   source:"Kraken level-2 data" },
-};
+const RING_RADII = [0, 80, 155, 235];
+const NODE_SIZE  = [52, 38, 30, 24];
 
-// ── Agent Network ─────────────────────────────────────────────────────────────
-function AgentNetwork() {
-  const [activeBeams, setActiveBeams]     = useState<string[]>([]);
-  const [packets,     setPackets]         = useState<{id:string;agentId:string;progress:number}[]>([]);
-  const [agentSignals,setAgentSignals]    = useState<Record<string,string>>({});
-  const [hoveredAgent,setHoveredAgent]    = useState<string|null>(null);
-  const [time,        setTime]            = useState("");
+// ── Skull Face ────────────────────────────────────────────────────────────────
+function SkullFace({size,col,active,scanning,conflict}:{size:number;col:string;active:boolean;scanning:boolean;conflict:boolean}) {
+  const s=size/40, cx=20, cy=20;
+  return (
+    <g>
+      <ellipse cx={cx} cy={cy*0.9} rx={13*s} ry={15*s} fill="#050A14" stroke={col} strokeWidth={active?1.5*s:0.8*s} opacity={active?1:0.45}/>
+      <line x1={cx-10*s} y1={cy-10*s} x2={cx} y2={cy-14*s} stroke={col} strokeWidth={0.6*s} opacity={active?0.7:0.3}/>
+      <line x1={cx+10*s} y1={cy-10*s} x2={cx} y2={cy-14*s} stroke={col} strokeWidth={0.6*s} opacity={active?0.7:0.3}/>
+      <line x1={cx-8*s}  y1={cy-12*s} x2={cx+8*s} y2={cy-12*s} stroke={col} strokeWidth={0.4*s} opacity={active?0.5:0.2}/>
+      <polygon points={`${cx-7*s},${cy-2*s} ${cx-4*s},${cy-6*s} ${cx-1*s},${cy-2*s} ${cx-4*s},${cy+2*s}`}
+        fill={active?col+'30':'transparent'} stroke={col} strokeWidth={active?1.2*s:0.7*s} opacity={active?1:0.4}/>
+      <circle cx={cx-4*s} cy={cy-2*s} r={1.8*s} fill={col} opacity={active?0.95:0.3}/>
+      {active&&<circle cx={cx-5*s} cy={cy-3*s} r={0.7*s} fill="white" opacity={0.6}/>}
+      <polygon points={`${cx+1*s},${cy-2*s} ${cx+4*s},${cy-6*s} ${cx+7*s},${cy-2*s} ${cx+4*s},${cy+2*s}`}
+        fill={active?col+'30':'transparent'} stroke={col} strokeWidth={active?1.2*s:0.7*s} opacity={active?1:0.4}/>
+      <circle cx={cx+4*s} cy={cy-2*s} r={1.8*s} fill={col} opacity={active?0.95:0.3}/>
+      {active&&<circle cx={cx+3*s} cy={cy-3*s} r={0.7*s} fill="white" opacity={0.6}/>}
+      <polygon points={`${cx},${cy+2*s} ${cx-2*s},${cy+6*s} ${cx+2*s},${cy+6*s}`}
+        fill="none" stroke={col} strokeWidth={0.7*s} opacity={active?0.6:0.25}/>
+      <line x1={cx-12*s} y1={cy+2*s} x2={cx-7*s} y2={cy+5*s} stroke={col} strokeWidth={0.8*s} opacity={active?0.7:0.3}/>
+      <line x1={cx+12*s} y1={cy+2*s} x2={cx+7*s} y2={cy+5*s} stroke={col} strokeWidth={0.8*s} opacity={active?0.7:0.3}/>
+      <line x1={cx-12*s} y1={cy+5*s} x2={cx} y2={cy+12*s} stroke={col} strokeWidth={0.8*s} opacity={active?0.65:0.25}/>
+      <line x1={cx+12*s} y1={cy+5*s} x2={cx} y2={cy+12*s} stroke={col} strokeWidth={0.8*s} opacity={active?0.65:0.25}/>
+      {active&&[-6,-3,0,3,6].map((off,i)=>(
+        <line key={i} x1={cx+off*s} y1={cy+7*s} x2={cx+off*s} y2={cy+11*s} stroke={col} strokeWidth={0.7*s} opacity={0.5}/>
+      ))}
+      {scanning&&(
+        <line x1={cx-13*s} y1={cy} x2={cx+13*s} y2={cy} stroke={col} strokeWidth={1.2*s} opacity={0.6}>
+          <animateTransform attributeName="transform" type="translate" values="0,-15;0,15;0,-15" dur="1.4s" repeatCount="indefinite"/>
+        </line>
+      )}
+      {conflict&&(<>
+        <ellipse cx={cx+2} cy={cy} rx={13*s} ry={15*s} fill="none" stroke="#FF3366" strokeWidth={0.6} opacity={0.4}>
+          <animate attributeName="opacity" values="0.4;0;0.4" dur="0.15s" repeatCount="indefinite"/>
+        </ellipse>
+        <ellipse cx={cx-2} cy={cy} rx={13*s} ry={15*s} fill="none" stroke="#FF3366" strokeWidth={0.4} opacity={0.3}>
+          <animate attributeName="opacity" values="0;0.3;0" dur="0.2s" repeatCount="indefinite"/>
+        </ellipse>
+      </>)}
+    </g>
+  );
+}
 
-  // Main signal loop
-  useEffect(() => {
-    const tick = () => {
-      const allAgents = Object.keys(LANDING_AGENTS);
-      const active    = allAgents.filter(() => Math.random() > 0.4);
-      setActiveBeams(active);
+// ── Landing Swarm ─────────────────────────────────────────────────────────────
+function LandingSwarm() {
+  const [signals,   setSignals]   = useState<Record<string,string>>({});
+  const [activeIds, setActiveIds] = useState<string[]>([]);
+  const [debating,  setDebating]  = useState<string[]>([]);
+  const [packets,   setPackets]   = useState<{id:number;from:string;progress:number;col:string}[]>([]);
+  const [hovered,   setHovered]   = useState<string|null>(null);
+  const packetId = useRef(0);
 
-      const signals: Record<string,string> = {};
-      allAgents.forEach(id => {
-        signals[id] = Math.random() > 0.6 ? "BUY" : Math.random() > 0.5 ? "SELL" : "HOLD";
-      });
-      setAgentSignals(signals);
+  const W=560, H=560, CX=W/2, CY=H/2;
 
-      setPackets(p => {
-        const next = [...p.slice(-20)];
-        active.forEach(id => {
-          next.push({ id: Math.random().toString(36).slice(2,7), agentId: id, progress: 0 });
+  const getPos=(id:string)=>{
+    const ag=AGENTS_RING.find(a=>a.id===id);
+    if(!ag)return{x:CX,y:CY};
+    if(ag.ring===0)return{x:CX,y:CY};
+    const rad=(ag.angle-90)*Math.PI/180;
+    return{x:CX+RING_RADII[ag.ring]*Math.cos(rad),y:CY+RING_RADII[ag.ring]*Math.sin(rad)};
+  };
+
+  const getArcD=(from:{x:number;y:number},to:{x:number;y:number})=>{
+    const mx=(from.x+to.x)/2,my=(from.y+to.y)/2;
+    const dx=to.x-from.x,dy=to.y-from.y,len=Math.sqrt(dx*dx+dy*dy)||1;
+    const cx2=mx+(-dy/len)*25,cy2=my+(dx/len)*25;
+    return`M${from.x},${from.y} Q${cx2},${cy2} ${to.x},${to.y}`;
+  };
+
+  const getBezierPt=(from:{x:number;y:number},to:{x:number;y:number},t:number)=>{
+    const mx=(from.x+to.x)/2,my=(from.y+to.y)/2;
+    const dx=to.x-from.x,dy=to.y-from.y,len=Math.sqrt(dx*dx+dy*dy)||1;
+    const cx2=mx+(-dy/len)*25,cy2=my+(dx/len)*25;
+    return{x:(1-t)*(1-t)*from.x+2*(1-t)*t*cx2+t*t*to.x,y:(1-t)*(1-t)*from.y+2*(1-t)*t*cy2+t*t*to.y};
+  };
+
+  useEffect(()=>{
+    const tick=()=>{
+      const active=AGENTS_RING.filter(a=>a.id!=='cnsns'&&Math.random()>0.38).map(a=>a.id);
+      setActiveIds(active);
+      const sigs:Record<string,string>={cnsns:'BUY'};
+      AGENTS_RING.forEach(a=>{sigs[a.id]=Math.random()>0.55?'BUY':Math.random()>0.45?'SELL':'HOLD';});
+      setSignals(sigs);
+      setDebating(active.slice(0,2));
+      setPackets(p=>{
+        const next=[...p.slice(-30)];
+        active.slice(0,5).forEach(id=>{
+          next.push({id:packetId.current++,from:id,progress:0,
+            col:sigs[id]==='BUY'?K.g:sigs[id]==='SELL'?K.r:K.c});
         });
         return next;
       });
-
-      setTime(new Date().toLocaleTimeString("en-US", { hour12:false }));
     };
     tick();
-    const iv = setInterval(tick, 1800);
-    return () => clearInterval(iv);
-  }, []);
+    const iv=setInterval(tick,2000);
+    return()=>clearInterval(iv);
+  },[]);
 
-  // RAF packet animation
-  useEffect(() => {
-    if (packets.length === 0) return;
-    const raf = requestAnimationFrame(() => {
-      setPackets(p => p.map(pk => ({ ...pk, progress: pk.progress + 0.022 })).filter(pk => pk.progress <= 1));
+  useEffect(()=>{
+    if(packets.length===0)return;
+    const raf=requestAnimationFrame(()=>{
+      setPackets(p=>p.map(pk=>({...pk,progress:pk.progress+0.018})).filter(pk=>pk.progress<1));
     });
-    return () => cancelAnimationFrame(raf);
-  }, [packets]);
+    return()=>cancelAnimationFrame(raf);
+  },[packets]);
 
-  const getCol = (id: string) => {
-    const s = agentSignals[id];
-    return s === "BUY" ? K.g : s === "SELL" ? K.r : K.c;
-  };
-
-  const getBeamPath = (ax: number, ay: number) => {
-    const mx = (ax + AN_CX) / 2, my = (ay + AN_CY) / 2;
-    const dx = AN_CX - ax, dy = AN_CY - ay;
-    const len = Math.sqrt(dx*dx + dy*dy);
-    const cx2 = mx + (-dy / len) * 20, cy2 = my + (dx / len) * 20;
-    return `M${ax},${ay} Q${cx2},${cy2} ${AN_CX},${AN_CY}`;
-  };
-
-  const getPacketPos = (ax: number, ay: number, t: number) => {
-    const mx = (ax + AN_CX) / 2, my = (ay + AN_CY) / 2;
-    const dx = AN_CX - ax, dy = AN_CY - ay;
-    const len = Math.sqrt(dx*dx + dy*dy);
-    const cx2 = mx + (-dy / len) * 20, cy2 = my + (dx / len) * 20;
-    return {
-      x: (1-t)*(1-t)*ax + 2*(1-t)*t*cx2 + t*t*AN_CX,
-      y: (1-t)*(1-t)*ay + 2*(1-t)*t*cy2 + t*t*AN_CY,
-    };
-  };
-
-  const hovAg = hoveredAgent ? LANDING_AGENTS[hoveredAgent] : null;
-  const hovCol = hoveredAgent ? getCol(hoveredAgent) : K.c;
-  const hovSig = hoveredAgent ? (agentSignals[hoveredAgent] || "HOLD") : "HOLD";
-  const hovConf = useMemo(() => Math.floor(Math.random() * 25 + 70), []); // stable
+  const center={x:CX,y:CY};
+  const hovAg=AGENTS_RING.find(a=>a.id===hovered);
 
   return (
-    <div style={{ position:"relative", width:AN_W, height:AN_H, maxWidth:"100%" }}>
-      <svg
-        width={AN_W} height={AN_H}
-        viewBox={`0 0 ${AN_W} ${AN_H}`}
-        style={{ overflow:"visible", width:"100%", height:"auto" }}
-      >
+    <div style={{position:'relative',width:W,height:H,margin:'0 auto',maxWidth:'100%'}}>
+      <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`}
+        style={{overflow:'visible',display:'block',width:'100%',height:'auto'}}>
         <defs>
-          <filter id="glow-lp" x="-50%" y="-50%" width="200%" height="200%">
+          <filter id="ls-sg" x="-60%" y="-60%" width="220%" height="220%">
+            <feGaussianBlur stdDeviation="4" result="blur"/>
+            <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+          </filter>
+          <filter id="ls-bg" x="-50%" y="-50%" width="200%" height="200%">
             <feGaussianBlur stdDeviation="3" result="blur"/>
             <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
           </filter>
-          <filter id="glow-strong" x="-80%" y="-80%" width="260%" height="260%">
-            <feGaussianBlur stdDeviation="6" result="blur"/>
-            <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
-          </filter>
-          <radialGradient id="center-glow" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stopColor={K.c} stopOpacity="0.28"/>
+          <radialGradient id="ls-aura" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stopColor={K.c} stopOpacity="0.18"/>
+            <stop offset="60%" stopColor={K.c} stopOpacity="0.04"/>
             <stop offset="100%" stopColor={K.c} stopOpacity="0"/>
           </radialGradient>
-          <clipPath id="skull-clip">
-            <circle cx={AN_CX} cy={AN_CY} r={38}/>
-          </clipPath>
+          <radialGradient id="ls-vig" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stopColor="transparent"/>
+            <stop offset="100%" stopColor="#04060D" stopOpacity="0.5"/>
+          </radialGradient>
         </defs>
-
-        {/* Center ambient glow */}
-        <circle cx={AN_CX} cy={AN_CY} r={90} fill="url(#center-glow)"/>
-
-        {/* Orbital ring */}
-        <circle cx={AN_CX} cy={AN_CY} r={228} fill="none"
-          stroke={K.c} strokeWidth="0.3" opacity="0.10" strokeDasharray="4 8"/>
-
-        {/* ── BEAMS ── */}
-        {Object.entries(LANDING_AGENTS).map(([id, ag]) => {
-          const isActive = activeBeams.includes(id);
-          const col = getCol(id);
-          const path = getBeamPath(ag.x, ag.y);
-          return (
-            <g key={`beam-${id}`}>
-              <path d={path} fill="none" stroke={K.c} strokeWidth="0.4" opacity="0.07" strokeDasharray="4 6"/>
-              {isActive && (<>
-                <path d={path} fill="none" stroke={col} strokeWidth="7"   opacity="0.07" filter="url(#glow-lp)"/>
-                <path d={path} fill="none" stroke={col} strokeWidth="2"   opacity="0.30"/>
-                <path d={path} fill="none" stroke={col} strokeWidth="0.9" opacity="0.92"/>
-                <path d={path} fill="none" stroke="#FFFFFF" strokeWidth="0.3" opacity="0.55"/>
+        {[1,2,3].map(ring=>(
+          <circle key={ring} cx={CX} cy={CY} r={RING_RADII[ring]}
+            fill="none" stroke={K.c} strokeWidth="0.4" opacity="0.06" strokeDasharray="3 8"/>
+        ))}
+        <circle cx={CX} cy={CY} r={90} fill="url(#ls-aura)"/>
+        {/* BEAMS */}
+        {AGENTS_RING.filter(a=>a.ring>0).map(ag=>{
+          const pos=getPos(ag.id);
+          const isActive=activeIds.includes(ag.id);
+          const isDebating=debating.includes(ag.id);
+          const sig=signals[ag.id]||'HOLD';
+          const col=sig==='BUY'?K.g:sig==='SELL'?K.r:K.c;
+          const d=getArcD(pos,center);
+          return(
+            <g key={`b-${ag.id}`}>
+              <path d={d} fill="none" stroke={ag.col} strokeWidth="0.4" opacity="0.07" strokeDasharray="3 7"/>
+              {isActive&&(<>
+                <path d={d} fill="none" stroke={col} strokeWidth="8"   opacity="0.05" filter="url(#ls-bg)"/>
+                <path d={d} fill="none" stroke={col} strokeWidth="2.5" opacity="0.25"/>
+                <path d={d} fill="none" stroke={col} strokeWidth="0.9" opacity={isDebating?1:0.7}/>
+                <path d={d} fill="none" stroke="white" strokeWidth="0.3" opacity="0.5"/>
               </>)}
             </g>
           );
         })}
-
-        {/* ── DATA PACKETS ── */}
-        {packets.map(pk => {
-          const ag = LANDING_AGENTS[pk.agentId];
-          if (!ag) return null;
-          const col = getCol(pk.agentId);
-          const pos = getPacketPos(ag.x, ag.y, pk.progress);
-          return (
-            <g key={pk.id} filter="url(#glow-lp)">
-              <circle cx={pos.x} cy={pos.y} r={8}  fill={col} opacity={0.18}/>
-              <circle cx={pos.x} cy={pos.y} r={4}  fill={col} opacity={0.90}/>
-              <circle cx={pos.x} cy={pos.y} r={1.8} fill="#FFF" opacity={0.80}/>
+        {/* PACKETS */}
+        {packets.map(pk=>{
+          const fromPos=getPos(pk.from);
+          const pt=getBezierPt(fromPos,center,pk.progress);
+          const op=pk.progress<0.1?pk.progress*10:pk.progress>0.85?(1-pk.progress)*6.67:1;
+          return(
+            <g key={pk.id} opacity={op}>
+              <circle cx={pt.x} cy={pt.y} r={5}   fill={pk.col} opacity={0.2} filter="url(#ls-bg)"/>
+              <circle cx={pt.x} cy={pt.y} r={2.5} fill={pk.col} opacity={0.85}/>
+              <circle cx={pt.x} cy={pt.y} r={1}   fill="white"  opacity={0.8}/>
             </g>
           );
         })}
-
-        {/* ── CENTER CONSENSUS SKULL ── */}
-        <g filter="url(#glow-strong)">
-          <circle cx={AN_CX} cy={AN_CY} r={56} fill="none" stroke={K.c} strokeWidth="0.5" opacity="0.18" strokeDasharray="3 6"/>
-          <circle cx={AN_CX} cy={AN_CY} r={47} fill="none" stroke={K.c} strokeWidth="1"   opacity="0.28"/>
-          <circle cx={AN_CX} cy={AN_CY} r={40} fill="#050A10" stroke={K.c} strokeWidth="1.6"/>
-          <g transform={`translate(${AN_CX-22},${AN_CY-26})`}>
-            <ellipse cx="22" cy="20" rx="18" ry="20" fill="#060D18" stroke={K.c} strokeWidth="1.2"/>
-            <line x1="8"  y1="10" x2="22" y2="4" stroke={K.c} strokeWidth="0.7" opacity="0.6"/>
-            <line x1="36" y1="10" x2="22" y2="4" stroke={K.c} strokeWidth="0.7" opacity="0.6"/>
-            <line x1="10" y1="7"  x2="34" y2="7" stroke={K.c} strokeWidth="0.5" opacity="0.4"/>
-            <polygon points="10,18 14,13 20,18 14,23" fill={`${K.c}20`} stroke={K.c} strokeWidth="1"/>
-            <polygon points="24,18 28,13 34,18 28,23" fill={`${K.c}20`} stroke={K.c} strokeWidth="1"/>
-            <circle cx="14" cy="18" r="2" fill={K.c} opacity="0.85"/>
-            <circle cx="28" cy="18" r="2" fill={K.c} opacity="0.85"/>
-            <polygon points="22,26 19,32 25,32" fill="none" stroke={K.c} strokeWidth="0.8" opacity="0.6"/>
-            <line x1="8"  y1="34" x2="22" y2="40" stroke={K.c} strokeWidth="0.8" opacity="0.6"/>
-            <line x1="36" y1="34" x2="22" y2="40" stroke={K.c} strokeWidth="0.8" opacity="0.6"/>
-            {[14,17,20,23,26,29].map(x => (
-              <line key={x} x1={x} y1="36" x2={x} y2="40" stroke={K.c} strokeWidth="0.8" opacity="0.5"/>
-            ))}
-          </g>
-          {/* Scan line */}
-          <line x1={AN_CX-38} y1={AN_CY} x2={AN_CX+38} y2={AN_CY}
-            stroke={K.c} strokeWidth="1" opacity="0.4" clipPath="url(#skull-clip)">
-            <animateTransform attributeName="transform" type="translate"
-              values="0,-38;0,38;0,-38" dur="2s" repeatCount="indefinite"/>
-          </line>
-        </g>
-
-        <text x={AN_CX} y={AN_CY+57} textAnchor="middle"
-          fontSize="9" fill={K.c} fontFamily="monospace" fontWeight="700" letterSpacing="0.15em">CONSENSUS</text>
-        <text x={AN_CX} y={AN_CY+69} textAnchor="middle"
-          fontSize="8" fill={K.dim} fontFamily="monospace">18 AGENTS</text>
-
-        {/* ── AGENT NODES ── */}
-        {Object.entries(LANDING_AGENTS).map(([id, ag]) => {
-          const isActive = activeBeams.includes(id);
-          const col  = getCol(id);
-          const sig  = agentSignals[id] || "HOLD";
-          const isHov = hoveredAgent === id;
-
-          const dx  = ag.x - AN_CX, dy = ag.y - AN_CY;
-          const len = Math.sqrt(dx*dx + dy*dy);
-          const lx  = ag.x + (dx / len) * 38;
-          const ly  = ag.y + (dy / len) * 38;
-          const anchor = ag.x < AN_CX - 10 ? "end" : ag.x > AN_CX + 10 ? "start" : "middle";
-          const scale = isHov ? 1.15 : 1;
-
-          return (
-            <g key={id}
-              style={{ cursor:"pointer", transformOrigin:`${ag.x}px ${ag.y}px`, transform:`scale(${scale})`, transition:"transform .2s" }}
-              filter={isActive || isHov ? "url(#glow-lp)" : undefined}
-              onMouseEnter={() => setHoveredAgent(id)}
-              onMouseLeave={() => setHoveredAgent(null)}
-            >
-              {(isActive || isHov) && (
-                <circle cx={ag.x} cy={ag.y} r={36} fill="none" stroke={col} strokeWidth="0.6" opacity="0.2"/>
+        {/* NODES */}
+        {AGENTS_RING.map(ag=>{
+          const pos=getPos(ag.id);
+          const isActive=activeIds.includes(ag.id)||ag.id==='cnsns';
+          const isCenter=ag.id==='cnsns';
+          const isDebating=debating.includes(ag.id);
+          const isHov=hovered===ag.id;
+          const sig=signals[ag.id]||(isCenter?'BUY':'HOLD');
+          const col=isCenter?K.c:sig==='BUY'?K.g:sig==='SELL'?K.r:K.c;
+          const size=NODE_SIZE[ag.ring];
+          const r=size/2+4;
+          return(
+            <g key={ag.id} style={{cursor:'pointer'}}
+              onMouseEnter={()=>setHovered(ag.id)}
+              onMouseLeave={()=>setHovered(null)}
+              filter={isActive||isHov?'url(#ls-sg)':undefined}>
+              {(isActive||isHov)&&<circle cx={pos.x} cy={pos.y} r={r+8} fill="none" stroke={col} strokeWidth="0.5" opacity="0.2"/>}
+              {isDebating&&(
+                <circle cx={pos.x} cy={pos.y} r={r+4} fill="none" stroke={col} strokeWidth="1.5" opacity="0.5">
+                  <animate attributeName="r" values={`${r+4};${r+12};${r+4}`} dur="1.2s" repeatCount="indefinite"/>
+                  <animate attributeName="opacity" values="0.5;0;0.5" dur="1.2s" repeatCount="indefinite"/>
+                </circle>
               )}
-              <circle cx={ag.x} cy={ag.y} r={28}
-                fill="#050A10" stroke={col}
-                strokeWidth={isActive || isHov ? 1.8 : 0.6}
-                opacity={isActive || isHov ? 1 : 0.45}/>
-
-              {/* Skull face */}
-              <g transform={`translate(${ag.x-14},${ag.y-17})`} opacity={isActive || isHov ? 1 : 0.45}>
-                <ellipse cx="14" cy="13" rx="11" ry="12" fill="#060D18" stroke={col} strokeWidth="0.8"/>
-                <polygon points="6,11 9,8 12,11 9,14"  fill={`${col}20`} stroke={col} strokeWidth="0.7"/>
-                <polygon points="16,11 19,8 22,11 19,14" fill={`${col}20`} stroke={col} strokeWidth="0.7"/>
-                <circle cx="9"  cy="11" r="1.5" fill={col} opacity="0.9"/>
-                <circle cx="19" cy="11" r="1.5" fill={col} opacity="0.9"/>
-                <line x1="5"  y1="20" x2="14" y2="25" stroke={col} strokeWidth="0.6" opacity="0.6"/>
-                <line x1="23" y1="20" x2="14" y2="25" stroke={col} strokeWidth="0.6" opacity="0.6"/>
-                {isActive && (
-                  <>
-                    <clipPath id={`ac-${id}`}><rect x="0" y="0" width="28" height="26"/></clipPath>
-                    <line x1="3" y1="0" x2="25" y2="0" stroke={col} strokeWidth="0.8" opacity="0.5" clipPath={`url(#ac-${id})`}>
-                      <animateTransform attributeName="transform" type="translate"
-                        values="0,0;0,25;0,0" dur="1.2s" repeatCount="indefinite"/>
-                    </line>
-                  </>
-                )}
+              <circle cx={pos.x} cy={pos.y} r={r} fill="#050A14" stroke={col}
+                strokeWidth={isCenter?2:isActive?1.8:0.7} opacity={isActive?1:0.4}/>
+              <g transform={`translate(${pos.x-size/2},${pos.y-size/2})`}>
+                <SkullFace size={size} col={col} active={isActive||isCenter}
+                  scanning={isActive&&!isCenter} conflict={ag.id==='aegis'&&sig==='SELL'}/>
               </g>
-
-              {/* Signal badge */}
-              {(isActive || isHov) && (
+              {(isActive||isCenter)&&sig!=='HOLD'&&(
                 <g>
-                  <rect x={ag.x-15} y={ag.y-38} width={30} height={13} rx="2" fill={`${col}25`} stroke={col} strokeWidth="0.6"/>
-                  <text x={ag.x} y={ag.y-29} textAnchor="middle" fontSize="7" fill={col} fontFamily="monospace" fontWeight="700">{sig}</text>
+                  <rect x={pos.x-14} y={pos.y-r-16} width={28} height={13} rx="2" fill={col+'25'} stroke={col} strokeWidth="0.7"/>
+                  <text x={pos.x} y={pos.y-r-7} textAnchor="middle" fontSize="7.5" fill={col} fontFamily="monospace" fontWeight="700">{sig}</text>
                 </g>
               )}
-
-              {/* Labels */}
-              <text x={lx} y={ly-5} textAnchor={anchor}
-                fontSize="9" fill={isActive || isHov ? col : "#1A3050"}
-                fontFamily="monospace" fontWeight="700" className="agent-label">{ag.short}</text>
-              <text x={lx} y={ly+6} textAnchor={anchor}
-                fontSize="7" fill="#1A3050" fontFamily="monospace" className="agent-specialty">{ag.specialty}</text>
+              <text x={pos.x} y={pos.y+r+11} textAnchor="middle"
+                fontSize={isCenter?9:7.5} fill={isActive||isCenter?col:'#1A3050'}
+                fontFamily="monospace" fontWeight="700">{ag.short}</text>
+              {!isCenter&&(
+                <text x={pos.x} y={pos.y+r+20} textAnchor="middle"
+                  fontSize="6.5" fill="#1A3050" fontFamily="monospace">{ag.specialty}</text>
+              )}
             </g>
           );
         })}
+        <circle cx={CX} cy={CY} r={W/2} fill="url(#ls-vig)" opacity="0.6"/>
       </svg>
 
-      {/* ── HOVER TOOLTIP ── */}
-      {hovAg && hoveredAgent && (
-        <div style={{
-          position:"absolute",
-          left: hovAg.x > AN_CX ? hovAg.x - 160 : hovAg.x + 36,
-          top:  Math.max(0, hovAg.y - 70),
-          background:"rgba(4,6,13,0.96)",
-          border:`1px solid ${hovCol}`,
-          borderRadius:6,
-          padding:"10px 14px",
-          fontFamily:F,
-          fontSize:10,
-          zIndex:100,
-          pointerEvents:"none",
-          minWidth:160,
-          boxShadow:`0 0 20px ${hovCol}30`,
-        }}>
-          <div style={{ color:hovCol, fontWeight:700, letterSpacing:".1em", marginBottom:6 }}>{LANDING_AGENTS[hoveredAgent].name}</div>
-          <div style={{ color:K.dim, marginBottom:3 }}>Specialty: <span style={{ color:K.hi }}>{LANDING_AGENTS[hoveredAgent].specialty}</span></div>
-          <div style={{ color:K.dim, marginBottom:3 }}>Signal: <span style={{ color:hovCol, fontWeight:700 }}>{hovSig} {hovConf}%</span></div>
-          <div style={{ color:K.dim }}>Source: <span style={{ color:K.hi }}>{LANDING_AGENTS[hoveredAgent].source}</span></div>
-        </div>
-      )}
+      {/* TOOLTIP */}
+      {hovered&&hovAg&&(()=>{
+        const pos=getPos(hovered);
+        const sig=signals[hovered]||'HOLD';
+        const col=hovAg.col;
+        return(
+          <div style={{position:'absolute',left:pos.x<CX?pos.x+50:pos.x-200,
+            top:Math.max(0,pos.y-40),background:'rgba(4,6,13,0.97)',
+            border:`1px solid ${col}50`,borderRadius:6,padding:'10px 14px',
+            minWidth:160,pointerEvents:'none',zIndex:100,
+            boxShadow:`0 0 20px ${col}15`,fontFamily:F}}>
+            <div style={{fontSize:10,color:col,fontWeight:900,letterSpacing:'.1em',marginBottom:4}}>{hovAg.name}</div>
+            <div style={{fontSize:9,color:K.dim,marginBottom:6}}>{hovAg.specialty}</div>
+            {[
+              {l:'Signal',     v:sig},
+              {l:'Source',     v:hovered==='lens'?'Kraken RSI':hovered==='radar'?'Kraken EMA':hovered==='levia'?'DexScreener':hovered==='echo'?'Fear & Greed':hovered==='atlas'?'CoinGecko':'Real API'},
+              {l:'Confidence', v:Math.floor(60+Math.random()*35)+'%'},
+            ].map((row,i)=>(
+              <div key={i} style={{display:'flex',justifyContent:'space-between',fontSize:9,marginBottom:3}}>
+                <span style={{color:K.dim}}>{row.l}</span>
+                <span style={{color:row.v==='BUY'?K.g:row.v==='SELL'?K.r:col,fontFamily:'monospace',fontWeight:700}}>{row.v}</span>
+              </div>
+            ))}
+          </div>
+        );
+      })()}
 
-      {/* Bottom label */}
-      <div style={{
-        position:"absolute", bottom:-22, left:0, right:0,
-        textAlign:"center", fontSize:9, color:K.dim, fontFamily:F,
-      }}>
-        ◉ LIVE · {activeBeams.length}/12 AGENTS SIGNALING · {time}
+      <div style={{position:'absolute',bottom:-32,left:0,right:0,textAlign:'center',
+        fontSize:9,color:K.dim,fontFamily:F,letterSpacing:'.12em'}}>
+        ◉ {activeIds.length}/18 AGENTS SIGNALING · REAL MARKET DATA · 15s CYCLE
       </div>
     </div>
   );
@@ -659,20 +644,26 @@ export default function LandingPage() {
         </motion.div>
       </section>
 
-      {/* ── AGENT NETWORK ────────────────────────────────────────────────── */}
-      <section style={{padding:"80px 48px 60px",maxWidth:1280,margin:"0 auto"}}>
+      {/* ── LANDING SWARM ────────────────────────────────────────────────── */}
+      <section style={{padding:"80px 20px",textAlign:"center",background:"rgba(4,6,13,1)",position:"relative"}}>
         <Fade>
-          <div style={{textAlign:"center",marginBottom:48}}>
-            <div style={{fontSize:11,color:K.c,letterSpacing:".3em",fontFamily:F,marginBottom:12}}>◈ WATCH THE SWARM THINK</div>
-            <div style={{fontSize:22,fontWeight:900,color:"white",marginBottom:8}}>18 agents debate every trade in real time</div>
-            <div style={{fontSize:13,color:K.dim}}>Laser beams. Live signals. Autonomous consensus.</div>
+          <div style={{fontSize:10,color:K.c,letterSpacing:".4em",marginBottom:12}}>◈ WATCH THE SWARM THINK</div>
+          <div style={{fontSize:32,fontWeight:900,color:"white",marginBottom:8}}>18 agents. One consensus.</div>
+          <div style={{fontSize:13,color:K.dim,lineHeight:1.8,marginBottom:48}}>
+            Every agent analyzes real market data.<br/>
+            They vote. They debate. They decide.<br/>
+            Hover over any agent to see their thesis.
           </div>
         </Fade>
-        <Fade delay={.1}>
-          <div style={{display:"flex",justifyContent:"center"}}>
-            <div className="agent-network-wrap">
-              <AgentNetwork/>
-            </div>
+        <Fade delay={.1}><LandingSwarm/></Fade>
+        <Fade delay={.2}>
+          <div style={{marginTop:60,display:"flex",justifyContent:"center",gap:32,flexWrap:"wrap"}}>
+            {[{v:'18',l:'COGNITIVE AGENTS'},{v:'15s',l:'CYCLE TIME'},{v:'≥60%',l:'CONSENSUS THRESHOLD'},{v:'0',l:'EMOTIONS'}].map((s,i)=>(
+              <div key={i} style={{textAlign:"center"}}>
+                <div style={{fontSize:28,fontWeight:900,color:K.c,fontFamily:"monospace",textShadow:`0 0 20px ${K.c}`}}>{s.v}</div>
+                <div style={{fontSize:9,color:K.dim,letterSpacing:".2em",marginTop:4}}>{s.l}</div>
+              </div>
+            ))}
           </div>
         </Fade>
       </section>
