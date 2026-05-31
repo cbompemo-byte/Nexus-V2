@@ -631,24 +631,57 @@ export default function LandingPage() {
           </div>
         </motion.div>
 
-        {/* RIGHT COLUMN — Agent Network */}
+        {/* RIGHT COLUMN — Demo Video */}
         <motion.div initial={{opacity:0,x:28}} animate={{opacity:1,x:0}} transition={{duration:.8,delay:.3}}
-          style={{flex:"1 1 500px",minWidth:0,display:"flex",flexDirection:"column",alignItems:"center",gap:32,paddingTop:16}}>
-          <div className="agent-network-wrap">
-            <AgentNetwork/>
+          style={{flex:"1 1 460px",minWidth:0,display:"flex",flexDirection:"column",gap:20,paddingTop:16}}>
+          <div style={{position:"relative",borderRadius:12,overflow:"hidden",border:"1px solid rgba(0,242,254,0.25)",boxShadow:"0 0 60px rgba(0,242,254,0.08)"}}>
+            {/* Terminal bar */}
+            <div style={{background:"rgba(6,10,18,0.95)",borderBottom:"1px solid rgba(0,242,254,0.1)",padding:"8px 14px",display:"flex",alignItems:"center",gap:6}}>
+              {["#FF3366","#FFD700","#00FF88"].map((c,i)=>(
+                <div key={i} style={{width:9,height:9,borderRadius:"50%",background:c}}/>
+              ))}
+              <span style={{flex:1,textAlign:"center",fontSize:9,color:K.dim,fontFamily:"monospace",letterSpacing:".12em"}}>KYMIA — LIVE DEMO</span>
+              <div style={{display:"flex",alignItems:"center",gap:4,padding:"2px 7px",background:"rgba(0,255,136,0.12)",border:"1px solid rgba(0,255,136,0.3)",borderRadius:10}}>
+                <div style={{width:4,height:4,borderRadius:"50%",background:K.g,animation:"pu 1s infinite"}}/>
+                <span style={{fontSize:7,color:K.g}}>LIVE</span>
+              </div>
+            </div>
+            {/* Video */}
+            <video autoPlay loop muted playsInline
+              style={{width:"100%",display:"block",aspectRatio:"16/9",objectFit:"cover"}}
+              poster="/kymia-poster.jpg">
+              <source src="/kymia-demo.mp4" type="video/mp4"/>
+            </video>
+            {/* Scanlines */}
+            <div style={{position:"absolute",inset:0,pointerEvents:"none",background:"repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,242,254,0.012) 3px,rgba(0,242,254,0.012) 4px)"}}/>
           </div>
           <LivePrices/>
         </motion.div>
       </section>
 
-      {/* ── DEMO VIDEO ───────────────────────────────────────────────────── */}
-      <DemoVideoSection/>
+      {/* ── AGENT NETWORK ────────────────────────────────────────────────── */}
+      <section style={{padding:"80px 48px 60px",maxWidth:1280,margin:"0 auto"}}>
+        <Fade>
+          <div style={{textAlign:"center",marginBottom:48}}>
+            <div style={{fontSize:11,color:K.c,letterSpacing:".3em",fontFamily:F,marginBottom:12}}>◈ WATCH THE SWARM THINK</div>
+            <div style={{fontSize:22,fontWeight:900,color:"white",marginBottom:8}}>18 agents debate every trade in real time</div>
+            <div style={{fontSize:13,color:K.dim}}>Laser beams. Live signals. Autonomous consensus.</div>
+          </div>
+        </Fade>
+        <Fade delay={.1}>
+          <div style={{display:"flex",justifyContent:"center"}}>
+            <div className="agent-network-wrap">
+              <AgentNetwork/>
+            </div>
+          </div>
+        </Fade>
+      </section>
 
       {/* ── BENTO GRID ───────────────────────────────────────────────────── */}
       <section style={{padding:"80px 48px",maxWidth:1280,margin:"0 auto"}}>
         <Fade>
           <div style={{textAlign:"center",marginBottom:48}}>
-            <div style={{fontSize:11,color:K.c,letterSpacing:".3em",fontFamily:F,marginBottom:12}}>◈ WATCH THE SWARM THINK</div>
+            <div style={{fontSize:11,color:K.c,letterSpacing:".3em",fontFamily:F,marginBottom:12}}>◈ INSIDE THE SWARM</div>
             <div style={{fontSize:13,color:K.dim,lineHeight:1.8}}>18 specialized agents. Real market data. Autonomous decisions.</div>
           </div>
         </Fade>
