@@ -2509,7 +2509,7 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   useEffect(()=>{
     const timers:ReturnType<typeof setTimeout>[]=[];
     timers.push(setTimeout(()=>{setRunning(true);log("SYS","▶ KYMIA systems online",K.c);},3000));
-    timers.push(setTimeout(()=>{runAI&&runAI();},8000));
+    // debate only on manual click
     timers.push(setTimeout(()=>{forceTrade("SOL","BUY","SURGE",76);},15000));
     // Demo SHORT burst — proves SHORT execution works within 20s of activation
     timers.push(setTimeout(()=>{
@@ -2584,7 +2584,6 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
     setModal("dna");
   },[dnaLoading,trades,port]);
 
-  useEffect(()=>{if(!running)return;const iv=setInterval(runAI,45000);return()=>clearInterval(iv);},[running,runAI]);
 
   const totalPnL=port.equity-CAP,pct=(totalPnL/CAP)*100;
   const dd=((port.peak-port.equity)/port.peak)*100;
