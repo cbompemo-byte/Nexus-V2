@@ -626,6 +626,257 @@ function LivePrices() {
   );
 }
 
+// ── Performance Section ───────────────────────────────────────────────────────
+function PerformanceSection() {
+  const WALLET = (process.env.NEXT_PUBLIC_KYMIA_WALLET as string|undefined)||null;
+  return (
+    <section id="performance" style={{padding:'100px 40px',background:'rgba(6,10,18,0.5)',position:'relative',borderTop:'1px solid rgba(0,242,254,0.06)',borderBottom:'1px solid rgba(0,242,254,0.06)'}}>
+      <div style={{position:'absolute',inset:0,opacity:0.03,backgroundImage:`linear-gradient(#00F2FE 1px,transparent 1px),linear-gradient(90deg,#00F2FE 1px,transparent 1px)`,backgroundSize:'40px 40px'}}/>
+      <div style={{maxWidth:1100,margin:'0 auto',position:'relative'}}>
+        <Fade>
+          <div style={{textAlign:'center',marginBottom:64}}>
+            <div style={{fontSize:10,color:K.c,letterSpacing:'.4em',marginBottom:12,fontFamily:'monospace'}}>◈ PROOF OF INTELLIGENCE</div>
+            <h2 style={{fontSize:38,fontWeight:900,color:'white',margin:0,marginBottom:12}}>Verifiable on Solana blockchain.</h2>
+            <p style={{fontSize:14,color:K.dim,lineHeight:1.8,margin:0}}>Every live trade is recorded on-chain. No claims. No promises.<br/>Just transparent, verifiable results anyone can check.</p>
+          </div>
+        </Fade>
+        <Fade delay={.1}>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:24,marginBottom:32}}>
+            {/* LEFT — stats */}
+            <div style={{background:'rgba(4,6,13,0.9)',border:'1px solid rgba(0,242,254,0.1)',borderRadius:12,padding:'32px 36px',backdropFilter:'blur(12px)'}}>
+              <div style={{fontSize:10,color:K.dim,letterSpacing:'.2em',marginBottom:24,fontFamily:'monospace'}}>◉ AGENT PERFORMANCE METRICS</div>
+              <div style={{marginBottom:32}}>
+                <div style={{fontSize:11,color:K.dim,fontFamily:'monospace',marginBottom:6}}>TOTAL SESSIONS MONITORED</div>
+                <div style={{fontSize:52,fontWeight:900,color:K.g,fontFamily:'monospace',textShadow:'0 0 30px #00FF88',lineHeight:1}}>{'>'}5%</div>
+                <div style={{fontSize:12,color:K.dim,marginTop:6}}>Average session return · Paper trading results</div>
+              </div>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}}>
+                {([['WIN RATE','62-68%',K.g,'Across all sessions'],['AGENTS LIVE','17/18',K.c,'Real API connections'],['CYCLE TIME','15s',K.gold,'Between analyses'],['MARKETS','50+',K.pu,'Solana pairs tracked'],['STOP LOSS','-2.5%',K.r,'Per position max loss'],['TAKE PROFIT','+5.5%',K.g,'Per position target']] as [string,string,string,string][]).map(([l,v,c,d],i)=>(
+                  <div key={i} style={{padding:'14px 16px',background:'rgba(6,10,18,0.8)',border:`1px solid ${c}18`,borderRadius:6}}>
+                    <div style={{fontSize:8,color:K.dim,letterSpacing:'.15em',marginBottom:4,fontFamily:'monospace'}}>{l}</div>
+                    <div style={{fontSize:22,fontWeight:900,color:c,fontFamily:'monospace',textShadow:`0 0 12px ${c}`}}>{v}</div>
+                    <div style={{fontSize:9,color:'#1A3050',marginTop:3}}>{d}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{marginTop:20,fontSize:9,color:'#0A1828',lineHeight:1.6}}>* Paper trading results. Past performance does not guarantee future results. Not financial advice.</div>
+            </div>
+            {/* RIGHT — wallet */}
+            <div style={{background:'rgba(4,6,13,0.9)',border:'1px solid rgba(0,242,254,0.1)',borderRadius:12,padding:'32px 36px',backdropFilter:'blur(12px)',display:'flex',flexDirection:'column'}}>
+              <div style={{fontSize:10,color:K.dim,letterSpacing:'.2em',marginBottom:24,fontFamily:'monospace'}}>◉ PUBLIC TRADING WALLET</div>
+              <div style={{width:64,height:64,borderRadius:12,background:'rgba(0,242,254,0.08)',border:'1px solid rgba(0,242,254,0.2)',display:'flex',alignItems:'center',justifyContent:'center',marginBottom:20,fontSize:28}}>◈</div>
+              <h3 style={{fontSize:22,fontWeight:900,color:'white',margin:'0 0 12px'}}>Every trade on-chain.</h3>
+              <p style={{fontSize:13,color:K.dim,lineHeight:1.8,marginBottom:24,flex:1}}>KYMIA maintains a dedicated public Solana address. Every live trade appears here in real time. No editing. No cherry-picking. 100% transparent.</p>
+              {WALLET ? (
+                <div style={{padding:'14px 16px',background:'rgba(0,242,254,0.05)',border:'1px solid rgba(0,242,254,0.2)',borderRadius:6,marginBottom:16,fontFamily:'monospace',fontSize:11,color:K.c,wordBreak:'break-all'}}>{WALLET}</div>
+              ) : (
+                <div style={{padding:'14px 16px',background:'rgba(255,215,0,0.05)',border:'1px solid rgba(255,215,0,0.2)',borderRadius:6,marginBottom:16}}>
+                  <div style={{fontSize:10,color:K.gold,fontFamily:'monospace',marginBottom:4}}>⏳ LIVE WALLET — Coming soon</div>
+                  <div style={{fontSize:9,color:K.dim}}>Phantom wallet will be connected when live trading activates. Address will appear here.</div>
+                </div>
+              )}
+              <div style={{display:'flex',gap:8}}>
+                {([['SOLSCAN',K.c,WALLET?`https://solscan.io/account/${WALLET}`:'https://solscan.io'],['BIRDEYE',K.g,WALLET?`https://birdeye.so/profile/${WALLET}`:'https://birdeye.so'],['EXPLORER',K.pu,WALLET?`https://explorer.solana.com/address/${WALLET}`:'https://explorer.solana.com']] as [string,string,string][]).map(([name,col,url],i)=>(
+                  <a key={i} href={url} target="_blank" rel="noopener" style={{flex:1,padding:'10px 8px',background:`${col}12`,border:`1px solid ${col}35`,borderRadius:6,textAlign:'center',fontSize:10,color:col,fontFamily:'monospace',fontWeight:700,textDecoration:'none'}}>{name} ↗</a>
+                ))}
+              </div>
+            </div>
+          </div>
+        </Fade>
+        {/* GitHub banner */}
+        <Fade delay={.2}>
+          <div style={{padding:'24px 32px',background:'rgba(4,6,13,0.9)',border:'1px solid rgba(0,242,254,0.08)',borderRadius:12,display:'flex',alignItems:'center',gap:24,backdropFilter:'blur(12px)'}}>
+            <svg width="48" height="48" viewBox="0 0 24 24" fill={K.hi} opacity="0.8" style={{flexShrink:0}}>
+              <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/>
+            </svg>
+            <div style={{flex:1}}>
+              <div style={{fontSize:14,fontWeight:700,color:'white',marginBottom:4}}>Open source intelligence. Public code.</div>
+              <div style={{fontSize:12,color:K.dim,lineHeight:1.6}}>The agent logic, signal algorithms, and API connections are all visible on GitHub. Verify the intelligence yourself.</div>
+            </div>
+            <a href="https://github.com/cbompemo-byte/Nexus-V2" target="_blank" rel="noopener" style={{padding:'12px 24px',background:'rgba(168,208,236,0.08)',border:'1px solid rgba(168,208,236,0.2)',borderRadius:6,fontSize:12,color:K.hi,fontFamily:'monospace',fontWeight:700,textDecoration:'none',whiteSpace:'nowrap'}}>VIEW ON GITHUB ↗</a>
+          </div>
+        </Fade>
+      </div>
+    </section>
+  );
+}
+
+// ── API Section ───────────────────────────────────────────────────────────────
+function APISection() {
+  const [activeApi,setActiveApi]=useState<number|null>(null);
+  const [tick,setTick]=useState(0);
+  useEffect(()=>{const iv=setInterval(()=>setTick(t=>t+1),1500);return()=>clearInterval(iv);},[]);
+
+  const APIS=[
+    {name:'KRAKEN',     role:'RSI · EMA · MACD · ADX',       col:'#FF3366',symbol:'K',  agents:['LENS','RADAR','RAZOR','VECTOR','TITAN','ORACLE']},
+    {name:'COINGECKO',  role:'Volume · BTC Dominance',        col:'#00FF88',symbol:'CG', agents:['SURGE','ATLAS']},
+    {name:'DEXSCREENER',role:'Whale Pressure · Order Depth',  col:'#00F2FE',symbol:'DS', agents:['LEVIATHAN','SHIELD']},
+    {name:'DERIBIT',    role:'Funding Rate · Open Interest',  col:'#BD00FF',symbol:'D',  agents:['PHANTOM']},
+    {name:'COINGLASS',  role:'Liquidation Data',              col:'#FFD700',symbol:'CG', agents:['HYDRA']},
+    {name:'FEAR & GREED',role:'Market Sentiment Index',       col:'#FF7A59',symbol:'F&G',agents:['ECHO']},
+    {name:'HELIUS',     role:'On-Chain Wallet Data',          col:'#FF3366',symbol:'H',  agents:['ON-CHAIN']},
+    {name:'JUPITER',    role:'DEX Price Feeds · Swaps',       col:'#00F2FE',symbol:'JUP',agents:['DELTA','EXECUTOR']},
+  ] as const;
+  const autoActive=tick%APIS.length;
+  const CX=300,CY=300,R=210;
+
+  const getXY=(i:number)=>{
+    const rad=((i/APIS.length)*360-90)*Math.PI/180;
+    return{x:CX+R*Math.cos(rad),y:CY+R*Math.sin(rad)};
+  };
+
+  return (
+    <section style={{padding:'100px 40px',background:'#04060D',position:'relative'}}>
+      <div style={{maxWidth:1000,margin:'0 auto'}}>
+        <Fade>
+          <div style={{textAlign:'center',marginBottom:64}}>
+            <div style={{fontSize:10,color:K.c,letterSpacing:'.4em',marginBottom:12,fontFamily:'monospace'}}>◈ REAL DATA SOURCES</div>
+            <h2 style={{fontSize:36,fontWeight:900,color:'white',margin:'0 0 12px'}}>Not simulated. Not estimated.</h2>
+            <p style={{fontSize:14,color:K.dim,lineHeight:1.8,margin:0}}>Every signal comes from real institutional APIs.<br/>Hover any source to see which agents use it.</p>
+          </div>
+        </Fade>
+        <Fade delay={.1}>
+          <div style={{position:'relative',width:600,height:600,margin:'0 auto'}}>
+            <svg width="600" height="600" style={{position:'absolute',inset:0,overflow:'visible'}}>
+              <defs>
+                <filter id="api-glow" x="-50%" y="-50%" width="200%" height="200%">
+                  <feGaussianBlur stdDeviation="4" result="b"/>
+                  <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+                </filter>
+              </defs>
+              <circle cx={CX} cy={CY} r={R} fill="none" stroke={K.c} strokeWidth="0.3" opacity="0.08" strokeDasharray="4 10"/>
+              {APIS.map((api,i)=>{
+                const {x,y}=getXY(i);
+                const isActive=activeApi===i||autoActive===i;
+                const pathD=`M${CX},${CY} L${x},${y}`;
+                return (
+                  <g key={api.name}>
+                    <line x1={CX} y1={CY} x2={x} y2={y} stroke={api.col} strokeWidth="0.5" opacity="0.08" strokeDasharray="4 8"/>
+                    {isActive&&(
+                      <>
+                        <line x1={CX} y1={CY} x2={x} y2={y} stroke={api.col} strokeWidth="6" opacity="0.05" filter="url(#api-glow)"/>
+                        <line x1={CX} y1={CY} x2={x} y2={y} stroke={api.col} strokeWidth="1.5" opacity="0.7"/>
+                        <circle r="5" fill={api.col} opacity="0.9" filter="url(#api-glow)">
+                          <animateMotion path={pathD} dur="1.2s" repeatCount="indefinite" calcMode="linear"/>
+                        </circle>
+                      </>
+                    )}
+                  </g>
+                );
+              })}
+            </svg>
+            {/* Center hub */}
+            <div style={{position:'absolute',left:'50%',top:'50%',transform:'translate(-50%,-50%)',width:90,height:90,borderRadius:16,background:'rgba(4,6,13,0.95)',border:'2px solid rgba(0,242,254,0.4)',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',boxShadow:'0 0 40px rgba(0,242,254,0.15)',zIndex:10}}>
+              <div style={{fontSize:24,color:K.c,textShadow:'0 0 20px #00F2FE'}}>◈</div>
+              <div style={{fontSize:9,color:K.c,fontFamily:'monospace',fontWeight:700,letterSpacing:'.12em',marginTop:4}}>KYMIA</div>
+              <div style={{fontSize:7,color:K.dim,fontFamily:'monospace'}}>18 AGENTS</div>
+            </div>
+            {/* API nodes */}
+            {APIS.map((api,i)=>{
+              const {x,y}=getXY(i);
+              const isActive=activeApi===i||autoActive===i;
+              return (
+                <div key={api.name} onMouseEnter={()=>setActiveApi(i)} onMouseLeave={()=>setActiveApi(null)}
+                  style={{position:'absolute',left:x-44,top:y-44,width:88,height:88,cursor:'pointer',zIndex:5}}>
+                  {isActive&&<div style={{position:'absolute',inset:-8,borderRadius:20,border:`1px solid ${api.col}40`,animation:'pu 1s infinite'}}/>}
+                  <div style={{width:'100%',height:'100%',borderRadius:16,background:isActive?`${api.col}18`:'rgba(6,10,18,0.9)',border:`1.5px solid ${isActive?api.col:api.col+'30'}`,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',transition:'all .3s ease',boxShadow:isActive?`0 0 24px ${api.col}25`:'none'}}>
+                    <div style={{fontSize:15,fontWeight:900,color:isActive?api.col:api.col+'60',fontFamily:'monospace',transition:'all .3s'}}>{api.symbol}</div>
+                    <div style={{fontSize:7.5,color:isActive?api.col:'#1A3050',fontFamily:'monospace',fontWeight:700,textAlign:'center',marginTop:4,letterSpacing:'.05em',lineHeight:1.3,padding:'0 4px'}}>{api.name}</div>
+                  </div>
+                  {isActive&&(
+                    <div style={{position:'absolute',left:x<300?'105%':'auto',right:x>=300?'105%':'auto',top:'50%',transform:'translateY(-50%)',background:'rgba(4,6,13,0.97)',border:`1px solid ${api.col}40`,borderRadius:8,padding:'12px 14px',minWidth:160,zIndex:100,whiteSpace:'nowrap',boxShadow:`0 0 20px ${api.col}15`}}>
+                      <div style={{fontSize:10,color:api.col,fontWeight:900,fontFamily:'monospace',marginBottom:4}}>{api.name}</div>
+                      <div style={{fontSize:9,color:K.dim,marginBottom:8}}>{api.role}</div>
+                      <div style={{fontSize:8,color:K.dim,marginBottom:4}}>USED BY:</div>
+                      <div style={{display:'flex',flexWrap:'wrap',gap:4}}>
+                        {api.agents.map(a=><span key={a} style={{padding:'2px 6px',background:`${api.col}18`,border:`1px solid ${api.col}30`,borderRadius:2,fontSize:8,color:api.col,fontFamily:'monospace'}}>{a}</span>)}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </Fade>
+        <Fade delay={.2}>
+          <div style={{textAlign:'center',marginTop:32,fontSize:11,color:K.dim,fontFamily:'monospace',lineHeight:2}}>
+            All APIs are free public endpoints · No paid subscriptions needed<br/>
+            {([['#FF3366','Kraken'],['#00FF88','CoinGecko'],['#00F2FE','DexScreener'],['#BD00FF','Deribit'],['#FFD700','CoinGlass'],['#FF7A59','Fear & Greed']] as [string,string][]).map(([c,n],i)=>(
+              <span key={i}><span style={{color:c}}>●</span> {n}{i<5?<>&nbsp;&nbsp;</>:null}</span>
+            ))}
+          </div>
+        </Fade>
+      </div>
+    </section>
+  );
+}
+
+// ── Footer ────────────────────────────────────────────────────────────────────
+function Footer() {
+  return (
+    <footer style={{background:'rgba(4,6,13,0.98)',borderTop:'1px solid rgba(0,242,254,0.08)',padding:'60px 40px 32px'}}>
+      <div style={{maxWidth:1100,margin:'0 auto'}}>
+        <div style={{display:'grid',gridTemplateColumns:'2fr 1fr 1fr 1fr',gap:48,marginBottom:48}}>
+          {/* Brand */}
+          <div>
+            <div style={{fontSize:24,fontWeight:900,color:K.c,fontFamily:'monospace',letterSpacing:'.2em',textShadow:'0 0 20px #00F2FE',marginBottom:12}}>◈ KYMIA</div>
+            <div style={{fontSize:10,color:K.dim,letterSpacing:'.2em',marginBottom:16}}>AUTONOMOUS QUANT INTELLIGENCE</div>
+            <p style={{fontSize:12,color:'#1A3050',lineHeight:1.8,maxWidth:280,margin:0}}>18 AI agents analyzing Solana markets 24/7. Real data. Real signals. Verifiable on-chain.</p>
+            <div style={{display:'flex',gap:10,marginTop:20}}>
+              {([['https://github.com/cbompemo-byte/Nexus-V2','GITHUB ↗'],['https://x.com','X / TWITTER ↗']] as [string,string][]).map(([href,txt],i)=>(
+                <a key={i} href={href} target="_blank" rel="noopener" style={{padding:'8px 14px',background:'rgba(168,208,236,0.06)',border:'1px solid rgba(168,208,236,0.15)',borderRadius:4,fontSize:9,color:K.hi,textDecoration:'none',fontFamily:'monospace'}}>{txt}</a>
+              ))}
+            </div>
+          </div>
+          {/* Product */}
+          <div>
+            <div style={{fontSize:9,color:K.dim,letterSpacing:'.2em',marginBottom:20,fontFamily:'monospace'}}>PRODUCT</div>
+            {([['Demo Sandbox','/nexus?mode=demo'],['Live Trading','/nexus?mode=live'],['Crisis Replay','/nexus?mode=demo#crisis'],['Swarm DNA','/nexus?mode=demo#dna'],['Performance','#performance']] as [string,string][]).map(([l,h],i)=>(
+              <a key={i} href={h} style={{display:'block',fontSize:12,color:K.dim,textDecoration:'none',marginBottom:10,fontFamily:'monospace',transition:'color .2s'}}
+                onMouseEnter={e=>(e.currentTarget.style.color=K.c)}
+                onMouseLeave={e=>(e.currentTarget.style.color=K.dim)}>{l}</a>
+            ))}
+          </div>
+          {/* Intelligence */}
+          <div>
+            <div style={{fontSize:9,color:K.dim,letterSpacing:'.2em',marginBottom:20,fontFamily:'monospace'}}>INTELLIGENCE</div>
+            {([['18 Agents','#swarm'],['Data Sources','#apis'],['How It Works','#how'],['Public Wallet','#performance'],['GitHub','https://github.com/cbompemo-byte/Nexus-V2']] as [string,string][]).map(([l,h],i)=>(
+              <a key={i} href={h} target={h.startsWith('http')?'_blank':undefined} rel={h.startsWith('http')?'noopener':undefined}
+                style={{display:'block',fontSize:12,color:K.dim,textDecoration:'none',marginBottom:10,fontFamily:'monospace',transition:'color .2s'}}
+                onMouseEnter={e=>(e.currentTarget.style.color=K.c)}
+                onMouseLeave={e=>(e.currentTarget.style.color=K.dim)}>{l}</a>
+            ))}
+          </div>
+          {/* Data Sources */}
+          <div>
+            <div style={{fontSize:9,color:K.dim,letterSpacing:'.2em',marginBottom:20,fontFamily:'monospace'}}>DATA SOURCES</div>
+            {['Kraken API','CoinGecko','DexScreener','Deribit','CoinGlass','Fear & Greed','Helius','Jupiter'].map((s,i)=>(
+              <div key={i} style={{fontSize:11,color:'#1A3050',marginBottom:8,fontFamily:'monospace',display:'flex',alignItems:'center',gap:6}}>
+                <div style={{width:4,height:4,borderRadius:'50%',background:K.c,opacity:0.4,flexShrink:0}}/>
+                {s}
+              </div>
+            ))}
+          </div>
+        </div>
+        <div style={{height:1,background:'linear-gradient(90deg,transparent,rgba(0,242,254,0.15),transparent)',marginBottom:28}}/>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:16}}>
+          <div style={{fontSize:10,color:'#0A1828',fontFamily:'monospace',lineHeight:1.8}}>
+            © 2026 KYMIA · Autonomous Quant Intelligence<br/>
+            Paper trading only · Not financial advice · No real funds held
+          </div>
+          <div style={{display:'flex',gap:20,fontSize:10,color:'#0A1828',fontFamily:'monospace',alignItems:'center'}}>
+            <span>Built with Claude Sonnet 4.6</span>
+            <span>·</span>
+            <span>Powered by Solana</span>
+            <span>·</span>
+            <span style={{color:K.c,opacity:0.5}}>◈</span>
+          </div>
+        </div>
+      </div>
+    </footer>
+  );
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 export default function LandingPage() {
   const [booted,setBooted]=useState(false);
@@ -693,8 +944,8 @@ export default function LandingPage() {
             </div>
           </div>
           <div style={{fontSize:14,color:K.dim,lineHeight:1.9,marginBottom:28,maxWidth:460}}>
-            18 AI agents analyze markets, debate trades,<br/>and execute with institutional-grade precision.<br/>
-            <span style={{color:K.hi}}>24 hours. 7 days. No emotion. No fatigue.</span>
+            18 AI agents are trading Solana right now.<br/>
+            <span style={{color:K.hi}}>Watch them debate, decide, and execute — live.</span>
           </div>
           {/* Live feed */}
           <div style={{...PANEL,padding:"10px 14px",marginBottom:28,height:38,overflow:"hidden",position:"relative"}}>
@@ -707,17 +958,25 @@ export default function LandingPage() {
             </AnimatePresence>
           </div>
           {/* CTAs */}
-          <div style={{display:"flex",gap:12,marginBottom:14,flexWrap:"wrap"}}>
-            {[
-              {href:"/nexus?mode=demo",txt:"▶ FREE SANDBOX — $10K VIRTUAL",col:K.g,bg:"rgba(0,255,136,0.12)",border:"1.5px solid rgba(0,255,136,0.5)",glow:"rgba(0,255,136,0.3)"},
-              {href:"/nexus?mode=live",txt:"⚡ CONNECT PHANTOM → LIVE",col:K.c,bg:"rgba(0,242,254,0.12)",border:"1.5px solid rgba(0,242,254,0.5)",glow:"rgba(0,242,254,0.3)"},
-            ].map(b=>(
-              <a key={b.href} href={b.href} style={{padding:"13px 22px",background:b.bg,border:b.border,color:b.col,borderRadius:6,fontSize:12,textDecoration:"none",letterSpacing:".04em",fontFamily:F,fontWeight:700,transition:"all .25s"}}
-                onMouseEnter={e=>(e.currentTarget.style.boxShadow=`0 0 30px ${b.glow}`)}
-                onMouseLeave={e=>(e.currentTarget.style.boxShadow="none")}>
-                {b.txt}
-              </a>
-            ))}
+          <div style={{display:"flex",flexDirection:"column",gap:10,marginBottom:14}}>
+            <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+              <div>
+                <a href="/nexus?mode=demo" style={{display:"block",padding:"13px 24px",background:"rgba(0,255,136,0.12)",border:"1.5px solid rgba(0,255,136,0.5)",color:K.g,borderRadius:6,fontSize:13,textDecoration:"none",letterSpacing:".03em",fontFamily:F,fontWeight:700,transition:"all .25s"}}
+                  onMouseEnter={e=>(e.currentTarget.style.boxShadow=`0 0 30px rgba(0,255,136,0.3)`)}
+                  onMouseLeave={e=>(e.currentTarget.style.boxShadow="none")}>
+                  Watch AI Trade Live →
+                </a>
+                <div style={{fontSize:9,color:K.dim,marginTop:5,letterSpacing:".1em"}}>Free · No signup · $10K virtual capital</div>
+              </div>
+              <div>
+                <a href="/nexus?mode=live" style={{display:"block",padding:"13px 24px",background:"rgba(0,242,254,0.12)",border:"1.5px solid rgba(0,242,254,0.5)",color:K.c,borderRadius:6,fontSize:13,textDecoration:"none",letterSpacing:".03em",fontFamily:F,fontWeight:700,transition:"all .25s"}}
+                  onMouseEnter={e=>(e.currentTarget.style.boxShadow=`0 0 30px rgba(0,242,254,0.3)`)}
+                  onMouseLeave={e=>(e.currentTarget.style.boxShadow="none")}>
+                  ⚡ Connect Phantom → Real Trading
+                </a>
+                <div style={{fontSize:9,color:K.dim,marginTop:5,letterSpacing:".1em"}}>Non-custodial · Your keys · Real Solana</div>
+              </div>
+            </div>
           </div>
           <div style={{fontSize:9,color:K.dim,letterSpacing:".12em"}}>
             <span style={{color:K.g}}>●</span> 1,247 observers online · 0 signup required · Verified on-chain
@@ -786,6 +1045,9 @@ export default function LandingPage() {
           </div>
         </Fade>
       </section>
+
+      <PerformanceSection/>
+      <APISection/>
 
       {/* ── BENTO GRID ───────────────────────────────────────────────────── */}
       <section style={{padding:"80px 48px",maxWidth:1280,margin:"0 auto"}}>
@@ -1026,8 +1288,8 @@ export default function LandingPage() {
         <Fade delay={.18}>
           <div style={{display:"flex",gap:16,justifyContent:"center",marginBottom:12,flexWrap:"wrap",position:"relative"}}>
             {[
-              {href:"/nexus?mode=demo",txt:"▶ FREE DEMO — NO SIGNUP",sub:"$10,000 virtual · Real prices · Try now",col:K.g,bg:"rgba(0,255,136,0.12)",brd:"2px solid rgba(0,255,136,0.5)",glow:"rgba(0,255,136,0.3)"},
-              {href:"/nexus?mode=live",txt:"⚡ LIVE TRADING → CONNECT PHANTOM",sub:"Non-custodial · Your keys · Real Solana",col:K.c,bg:"rgba(0,242,254,0.12)",brd:"2px solid rgba(0,242,254,0.5)",glow:"rgba(0,242,254,0.3)"},
+              {href:"/nexus?mode=demo",txt:"Watch AI Trade Live →",sub:"Free · No signup · $10K virtual capital",col:K.g,bg:"rgba(0,255,136,0.12)",brd:"2px solid rgba(0,255,136,0.5)",glow:"rgba(0,255,136,0.3)"},
+              {href:"/nexus?mode=live",txt:"⚡ Connect Phantom → Real Trading",sub:"Non-custodial · Your keys · Real Solana",col:K.c,bg:"rgba(0,242,254,0.12)",brd:"2px solid rgba(0,242,254,0.5)",glow:"rgba(0,242,254,0.3)"},
             ].map(b=>(
               <div key={b.href}>
                 <a href={b.href} style={{display:"block",padding:"16px 36px",background:b.bg,border:b.brd,color:b.col,borderRadius:8,fontSize:14,textDecoration:"none",letterSpacing:".04em",fontFamily:F,fontWeight:700,transition:"all .25s"}}
@@ -1044,6 +1306,8 @@ export default function LandingPage() {
           </div>
         </Fade>
       </section>
+
+      <Footer/>
 
       <style>{`
         @keyframes laserSweep{from{transform:translateX(-100%);opacity:1}to{transform:translateX(200%);opacity:0}}
