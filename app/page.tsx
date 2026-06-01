@@ -1001,6 +1001,217 @@ function GlobeDebateSection() {
   );
 }
 
+// ── Proof Section ────────────────────────────────────────────────────────────
+function ProofSection() {
+  const [activeTab,setActiveTab]=useState('trades');
+  const TABS=[
+    {id:'trades', label:'OPEN TRADES',   icon:'▲'},
+    {id:'profile',label:'TRADE PROFILE', icon:'◈'},
+    {id:'losses', label:'LOSSES',        icon:'▼'},
+    {id:'chart',  label:'TA ANALYSIS',   icon:'⬡'},
+  ];
+  const cardLabel=(tab:string,i:number)=>tab==='trades'?'▲ LONG SOL':tab==='profile'?'◈ TRADER DNA':tab==='losses'?'▼ LOSS CONTAINED':'⬡ TA SIGNALS';
+  const cardVal=(tab:string)=>tab==='losses'?'-$18.40':'+$47.83';
+  return (
+    <section style={{padding:'100px 40px',background:'#04060D',position:'relative',borderTop:'1px solid rgba(0,242,254,0.06)'}}>
+      <div style={{maxWidth:1100,margin:'0 auto'}}>
+        <Fade>
+          <div style={{textAlign:'center',marginBottom:48}}>
+            <div style={{fontSize:10,color:K.c,letterSpacing:'.4em',marginBottom:12,fontFamily:'monospace'}}>◈ PROOF OF RESULTS</div>
+            <h2 style={{fontSize:38,fontWeight:900,color:'white',margin:'0 0 12px'}}>No claims. Just results.</h2>
+            <p style={{fontSize:14,color:K.dim,lineHeight:1.8,margin:0}}>Real sessions. Real trades. Real P&L.<br/>Including the losses — because that's what trust looks like.</p>
+          </div>
+        </Fade>
+        <Fade delay={.1}>
+          <div style={{display:'flex',gap:4,marginBottom:32,background:'rgba(6,10,18,0.8)',border:'1px solid rgba(0,242,254,0.08)',borderRadius:8,padding:4,width:'fit-content',margin:'0 auto 32px'}}>
+            {TABS.map(tab=>(
+              <button key={tab.id} onClick={()=>setActiveTab(tab.id)} style={{padding:'8px 18px',background:activeTab===tab.id?'rgba(0,242,254,0.12)':'transparent',border:activeTab===tab.id?'1px solid rgba(0,242,254,0.3)':'1px solid transparent',borderRadius:6,cursor:'pointer',fontSize:10,fontFamily:'monospace',color:activeTab===tab.id?K.c:K.dim,fontWeight:700,letterSpacing:'.1em',transition:'all .2s'}}>
+                {tab.icon} {tab.label}
+              </button>
+            ))}
+          </div>
+        </Fade>
+        <Fade delay={.15}>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(320px,1fr))',gap:16}}>
+            {[1,2,3].map(i=>(
+              <div key={i} style={{background:'rgba(6,10,18,0.8)',border:'1px solid rgba(0,242,254,0.1)',borderRadius:12,overflow:'hidden',transition:'all .3s',cursor:'pointer'}}
+                onMouseEnter={e=>{(e.currentTarget as HTMLDivElement).style.borderColor='rgba(0,242,254,0.3)';(e.currentTarget as HTMLDivElement).style.transform='translateY(-4px)';(e.currentTarget as HTMLDivElement).style.boxShadow='0 12px 40px rgba(0,0,0,0.4)';}}
+                onMouseLeave={e=>{(e.currentTarget as HTMLDivElement).style.borderColor='rgba(0,242,254,0.1)';(e.currentTarget as HTMLDivElement).style.transform='translateY(0)';(e.currentTarget as HTMLDivElement).style.boxShadow='none';}}>
+                <div style={{width:'100%',aspectRatio:'16/10',background:'#060A12',display:'flex',alignItems:'center',justifyContent:'center',position:'relative',overflow:'hidden'}}>
+                  <div style={{textAlign:'center',color:'#0A1828',fontFamily:'monospace'}}>
+                    <div style={{fontSize:32,marginBottom:8}}>◌</div>
+                    <div style={{fontSize:10,letterSpacing:'.2em'}}>SCREENSHOT {i}</div>
+                    <div style={{fontSize:9,marginTop:4,opacity:.7}}>/public/screenshots/{activeTab}-{i}.png</div>
+                  </div>
+                  <div style={{position:'absolute',inset:0,pointerEvents:'none',background:'repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,242,254,0.015) 3px,rgba(0,242,254,0.015) 4px)'}}/>
+                </div>
+                <div style={{padding:'12px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                  <span style={{fontSize:10,color:K.dim,fontFamily:'monospace'}}>{cardLabel(activeTab,i)}</span>
+                  <span style={{fontSize:10,color:activeTab==='losses'?K.r:K.g,fontFamily:'monospace',fontWeight:700}}>{cardVal(activeTab)}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Fade>
+        <Fade delay={.2}>
+          <div style={{marginTop:24,padding:'14px 20px',background:'rgba(255,51,102,0.06)',border:'1px solid rgba(255,51,102,0.15)',borderRadius:6,textAlign:'center',fontSize:11,color:K.dim,fontFamily:'monospace',lineHeight:1.8}}>
+            ⚠ We show losses too — because real intelligence means knowing when to be wrong. &nbsp;<span style={{color:K.r}}>Loss rate: ~35% · Always contained by AEGIS risk engine.</span>
+          </div>
+        </Fade>
+      </div>
+    </section>
+  );
+}
+
+// ── Founder Section ───────────────────────────────────────────────────────────
+function FounderSection() {
+  return (
+    <section style={{padding:'100px 40px',background:'rgba(6,10,18,0.4)',position:'relative',borderTop:'1px solid rgba(0,242,254,0.06)',overflow:'hidden'}}>
+      <div style={{position:'absolute',inset:0,opacity:0.02,backgroundImage:`linear-gradient(rgba(0,242,254,1) 1px,transparent 1px),linear-gradient(90deg,rgba(0,242,254,1) 1px,transparent 1px)`,backgroundSize:'60px 60px'}}/>
+      <div style={{maxWidth:900,margin:'0 auto',position:'relative',display:'grid',gridTemplateColumns:'1fr 1.6fr',gap:64,alignItems:'center'}}>
+        {/* LEFT — hexagonal avatar */}
+        <Fade>
+          <div style={{position:'relative'}}>
+            <div style={{width:260,height:260,position:'relative',margin:'0 auto'}}>
+              <svg width="260" height="260" style={{position:'absolute',inset:0}}>
+                <polygon points="130,8 244,68 244,192 130,252 16,192 16,68" fill="none" stroke={K.c} strokeWidth="1" opacity="0.3"/>
+                <polygon points="130,20 232,75 232,185 130,240 28,185 28,75" fill="none" stroke={K.c} strokeWidth="0.5" opacity="0.15"/>
+                {([[130,8],[244,68],[244,192],[130,252],[16,192],[16,68]] as [number,number][]).map(([x,y],i)=>(
+                  <circle key={i} cx={x} cy={y} r="3" fill={K.c} opacity="0.5"/>
+                ))}
+                <line x1="16" y1="130" x2="244" y2="130" stroke={K.c} strokeWidth="0.8" opacity="0.3">
+                  <animateTransform attributeName="transform" type="translate" values="0,-120;0,120;0,-120" dur="4s" repeatCount="indefinite"/>
+                </line>
+              </svg>
+              <div style={{position:'absolute',top:'8%',left:'8%',width:'84%',height:'84%',clipPath:'polygon(50% 0%,100% 25%,100% 75%,50% 100%,0% 75%,0% 25%)',background:'linear-gradient(135deg,#0A1628,#060A12)',display:'flex',alignItems:'center',justifyContent:'center',overflow:'hidden'}}>
+                <div style={{textAlign:'center',color:'#0A1828'}}>
+                  <div style={{fontSize:40}}>◈</div>
+                  <div style={{fontSize:9,fontFamily:'monospace',letterSpacing:'.1em',marginTop:8}}>FOUNDER PHOTO</div>
+                  <div style={{fontSize:8,opacity:0.6,marginTop:4}}>/public/founder.jpg</div>
+                </div>
+              </div>
+              <a href="https://x.com/cbompemo_dev" target="_blank" rel="noopener"
+                style={{position:'absolute',bottom:-16,right:-8,padding:'8px 14px',background:'rgba(4,6,13,0.97)',border:'1px solid rgba(0,242,254,0.3)',borderRadius:20,textDecoration:'none',display:'flex',alignItems:'center',gap:6,backdropFilter:'blur(8px)',boxShadow:'0 4px 20px rgba(0,0,0,0.4)'}}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill={K.hi}><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.748l7.73-8.835L1.254 2.25H8.08l4.253 5.622zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
+                <span style={{fontSize:10,color:K.hi,fontFamily:'monospace',fontWeight:700}}>@cbompemo_dev</span>
+              </a>
+            </div>
+          </div>
+        </Fade>
+        {/* RIGHT — text */}
+        <Fade delay={.15}>
+          <div>
+            <div style={{fontSize:10,color:K.c,letterSpacing:'.4em',marginBottom:16,fontFamily:'monospace'}}>◈ THE FOUNDER</div>
+            <h2 style={{fontSize:38,fontWeight:900,color:'white',margin:'0 0 8px',lineHeight:1.2,fontFamily:'monospace'}}>Cedrick B.</h2>
+            <div style={{fontSize:12,color:K.c,fontFamily:'monospace',letterSpacing:'.15em',marginBottom:24,opacity:0.7}}>BUILDER · ENTREPRENEUR · ITALY</div>
+            <p style={{fontSize:14,color:K.dim,lineHeight:1.9,marginBottom:24,margin:'0 0 24px'}}>
+              "I built KYMIA because I was tired of watching dashboards that looked intelligent but traded on random signals. I wanted something that actually reasons — like a real trading desk, but autonomous."
+            </p>
+            <p style={{fontSize:13,color:'#1A3050',lineHeight:1.9,marginBottom:32,margin:'0 0 32px'}}>
+              KYMIA is the result of combining AI agent architecture with real market microstructure. Every agent has a specific role. Every signal has a real source. Every trade is verifiable on-chain.
+            </p>
+            <div style={{display:'flex',gap:24,marginBottom:32}}>
+              {([['18','Agents Built'],['7','Real APIs'],['24/7','Autonomous']] as [string,string][]).map(([v,l],i)=>(
+                <div key={i}>
+                  <div style={{fontSize:24,fontWeight:900,color:K.c,fontFamily:'monospace',textShadow:`0 0 12px ${K.c}`}}>{v}</div>
+                  <div style={{fontSize:9,color:K.dim,letterSpacing:'.1em',marginTop:3}}>{l}</div>
+                </div>
+              ))}
+            </div>
+            <a href="https://x.com/cbompemo_dev" target="_blank" rel="noopener"
+              style={{display:'inline-flex',alignItems:'center',gap:10,padding:'12px 24px',background:'rgba(168,208,236,0.06)',border:'1px solid rgba(168,208,236,0.2)',borderRadius:8,textDecoration:'none'}}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill={K.hi}><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.748l7.73-8.835L1.254 2.25H8.08l4.253 5.622zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
+              <span style={{fontSize:12,color:K.hi,fontFamily:'monospace',fontWeight:700,letterSpacing:'.1em'}}>Follow the journey →</span>
+            </a>
+          </div>
+        </Fade>
+      </div>
+    </section>
+  );
+}
+
+// ── FAQ Section ───────────────────────────────────────────────────────────────
+const FAQS=[
+  {q:"Is KYMIA real AI or just random signals?",a:"Every signal comes from real APIs. LEVIATHAN reads actual whale wallet movements on DexScreener. LENS calculates RSI from real Kraken candles. ECHO reads the Fear & Greed index. No random number generators. Every decision has a verifiable data source."},
+  {q:"How is DEMO mode different from LIVE mode?",a:"In DEMO mode, you get $10,000 virtual capital. The prices are 100% real — SOL, BTC, ETH from Kraken and Jupiter. Only the money is virtual. In LIVE mode, you connect your Phantom wallet and agents execute real Jupiter swaps on your behalf. KYMIA never holds your funds."},
+  {q:"Can KYMIA guarantee profits?",a:"No. And anyone who guarantees profits in trading is lying to you. KYMIA is designed to trade with discipline, analyze more data than any human can, and manage risk systematically. Win rates of 60-65% are realistic targets. Losses exist and are always contained by AEGIS."},
+  {q:"Which assets can KYMIA trade?",a:"Currently: SOL, BTC (wBTC), ETH (wETH), JUP, WIF, BONK, PYTH, RAY, ORCA, POPCAT and more. All on Solana via Jupiter DEX. The SCANNER tab also monitors new token launches and detects rug pull risks before entering."},
+  {q:"How does the consensus system work?",a:"17 specialized agents each vote BUY, SELL, or HOLD based on their specific indicator. CONSENSUS only fires a signal when 60% or more agree with sufficient average confidence. AEGIS then runs a final risk check: Kelly sizing, max exposure, peak hours filter."},
+  {q:"Is my wallet safe in LIVE mode?",a:"KYMIA is non-custodial. We never hold your private keys or funds. When a trade fires in LIVE mode, KYMIA builds a Jupiter swap transaction and sends it to your Phantom wallet for signing. You can reject any trade. Your keys = your funds."},
+  {q:"Can I verify the trades on-chain?",a:"Yes. KYMIA maintains a public Solana address. Every live trade appears there. You can check it on Solscan or Birdeye at any time. No editing, no cherry-picking — full transparent history since day one."},
+  {q:"What happens during a Black Swan event?",a:"KYMIA has a Black Swan detector. When multiple assets show extreme volatility simultaneously, the UI shifts to alert mode, AEGIS automatically reduces exposure, and a circuit breaker can halt all trading. You saw the FTX and LUNA replays — the system is designed to survive crashes."},
+];
+
+function FAQSection() {
+  const [open,setOpen]=useState<number|null>(0);
+  return (
+    <section style={{padding:'100px 40px',background:'#04060D',borderTop:'1px solid rgba(0,242,254,0.06)'}}>
+      <div style={{maxWidth:780,margin:'0 auto'}}>
+        <Fade>
+          <div style={{textAlign:'center',marginBottom:56}}>
+            <div style={{fontSize:10,color:K.c,letterSpacing:'.4em',marginBottom:12,fontFamily:'monospace'}}>◈ QUESTIONS & ANSWERS</div>
+            <h2 style={{fontSize:36,fontWeight:900,color:'white',margin:0}}>Everything you need to know.</h2>
+          </div>
+        </Fade>
+        <div style={{display:'flex',flexDirection:'column',gap:4}}>
+          {FAQS.map((faq,i)=>(
+            <Fade key={i} delay={i*.04}>
+              <div style={{background:open===i?'rgba(0,242,254,0.04)':'rgba(6,10,18,0.6)',border:`1px solid ${open===i?'rgba(0,242,254,0.2)':'rgba(0,242,254,0.06)'}`,borderRadius:8,overflow:'hidden',transition:'all .25s'}}>
+                <button onClick={()=>setOpen(open===i?null:i)} style={{width:'100%',padding:'20px 24px',background:'none',border:'none',cursor:'pointer',textAlign:'left',display:'flex',justifyContent:'space-between',alignItems:'center',gap:16}}>
+                  <span style={{fontSize:14,color:open===i?K.c:K.hi,fontWeight:open===i?700:400,fontFamily:'monospace',lineHeight:1.4,transition:'color .2s'}}>{faq.q}</span>
+                  <span style={{fontSize:18,color:open===i?K.c:K.dim,flexShrink:0,transition:'all .25s',transform:open===i?'rotate(45deg)':'none',display:'inline-block'}}>+</span>
+                </button>
+                {open===i&&(
+                  <div style={{padding:'0 24px 20px 24px',paddingTop:16,fontSize:13,color:K.dim,lineHeight:1.9,fontFamily:'monospace',borderTop:'1px solid rgba(0,242,254,0.06)'}}>{faq.a}</div>
+                )}
+              </div>
+            </Fade>
+          ))}
+        </div>
+        <Fade delay={.3}>
+          <div style={{marginTop:40,textAlign:'center',padding:24,background:'rgba(0,242,254,0.04)',border:'1px solid rgba(0,242,254,0.1)',borderRadius:8}}>
+            <div style={{fontSize:13,color:K.dim,marginBottom:12}}>Still have questions?</div>
+            <a href="https://x.com/cbompemo_dev" target="_blank" rel="noopener" style={{fontSize:12,color:K.c,fontFamily:'monospace',fontWeight:700,textDecoration:'none',letterSpacing:'.1em'}}>Ask on X → @cbompemo_dev</a>
+          </div>
+        </Fade>
+      </div>
+    </section>
+  );
+}
+
+// ── Disclaimer Section ────────────────────────────────────────────────────────
+function DisclaimerSection() {
+  return (
+    <section style={{padding:'48px 40px',background:'rgba(4,6,13,0.98)',borderTop:'1px solid rgba(255,51,102,0.1)'}}>
+      <div style={{maxWidth:900,margin:'0 auto'}}>
+        <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:20}}>
+          <div style={{width:32,height:32,borderRadius:6,background:'rgba(255,51,102,0.1)',border:'1px solid rgba(255,51,102,0.3)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+            <span style={{color:K.r,fontSize:14}}>⚠</span>
+          </div>
+          <div style={{fontSize:11,color:K.r,fontFamily:'monospace',fontWeight:700,letterSpacing:'.2em'}}>RISK DISCLOSURE & LEGAL DISCLAIMER</div>
+        </div>
+        <div style={{fontSize:11,color:'#1A3050',lineHeight:2,fontFamily:'monospace'}}>
+          {([
+            ['PAPER TRADING & SIMULATION','The DEMO mode uses virtual capital ($10,000) and does not involve real funds. Results in demo mode do not guarantee similar results in live trading.'],
+            ['NOT FINANCIAL ADVICE','KYMIA is an autonomous trading tool for informational and educational purposes only. Nothing on this platform constitutes financial, investment, or trading advice. Always conduct your own research before investing.'],
+            ['TRADING RISK','Cryptocurrency trading involves substantial risk of loss. The volatile nature of crypto markets means you could lose some or all of your invested capital. Never invest more than you can afford to lose.'],
+            ['NON-CUSTODIAL','In LIVE mode, KYMIA never holds, stores, or controls user funds. All transactions are executed directly through the user\'s Phantom wallet via Jupiter DEX. Users maintain full custody of their assets at all times.'],
+            ['PAST PERFORMANCE','Historical performance data shown on this platform is for illustrative purposes only. Past performance of the KYMIA system does not guarantee future results.'],
+            ['REGULATORY COMPLIANCE','Users are responsible for ensuring their use of KYMIA complies with applicable laws and regulations in their jurisdiction. KYMIA is not registered as a financial advisor, broker, or investment advisor in any jurisdiction.'],
+          ] as [string,string][]).map(([label,text],i)=>(
+            <p key={i} style={{marginBottom:12,margin:'0 0 12px'}}>
+              <span style={{color:K.dim,fontWeight:700}}>{label}: </span>{text}
+            </p>
+          ))}
+        </div>
+        <div style={{marginTop:20,padding:'12px 16px',background:'rgba(255,51,102,0.04)',border:'1px solid rgba(255,51,102,0.1)',borderRadius:4,fontSize:10,color:'#1A3050',fontFamily:'monospace',textAlign:'center'}}>
+          By using KYMIA you acknowledge that you have read, understood, and agree to this disclaimer. · <span style={{color:K.r,marginLeft:4}}>Trade responsibly.</span>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 // ── Footer ────────────────────────────────────────────────────────────────────
 function Footer() {
   return (
@@ -1238,8 +1449,11 @@ export default function LandingPage() {
         </Fade>
       </section>
 
+      <ProofSection/>
       <PerformanceSection/>
       <APISection/>
+      <FounderSection/>
+      <FAQSection/>
 
       {/* ── BENTO GRID ───────────────────────────────────────────────────── */}
       <section style={{padding:"80px 48px",maxWidth:1280,margin:"0 auto"}}>
@@ -1499,6 +1713,7 @@ export default function LandingPage() {
         </Fade>
       </section>
 
+      <DisclaimerSection/>
       <Footer/>
 
       <style>{`
