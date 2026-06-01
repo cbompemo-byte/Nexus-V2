@@ -1,7 +1,6 @@
 "use client";
 import { useState, useEffect, useRef, useMemo } from "react";
 import { motion, AnimatePresence, useInView } from "framer-motion";
-import { LandingGlobe } from "./landing-globe";
 
 const K = { c:"#00F2FE",g:"#00FF88",r:"#FF3366",gold:"#FFD700",pu:"#BD00FF",dim:"#2A5070",hi:"#A8D0EC",bg:"#04060D" };
 const F = "'JetBrains Mono','Courier New',monospace";
@@ -820,6 +819,122 @@ function APISection() {
   );
 }
 
+// ── Cyber Globe (SVG wireframe) ───────────────────────────────────────────────
+function CyberGlobe({sig}:{sig:string}) {
+  const [rot,setRot]=useState(0);
+  const [tick,setTick]=useState(0);
+  const [arcs,setArcs]=useState<{id:number;f:string;t:string;col:string}[]>([]);
+  const [labels,setLabels]=useState<{id:number;pnl:number;sym:string;angle:number;dist:number;born:number}[]>([]);
+  const arcId=useRef(0);
+  const labId=useRef(0);
+
+  useEffect(()=>{const iv=setInterval(()=>setRot(r=>(r+0.5)%360),50);return()=>clearInterval(iv);},[]);
+
+  useEffect(()=>{
+    const iv=setInterval(()=>{
+      setTick(t=>t+1);
+      const C=['NYC','LON','TYO','SGP','DXB','HKG'];
+      const f=C[Math.floor(Math.random()*C.length)];
+      const t=C[Math.floor(Math.random()*C.length)];
+      if(f!==t){
+        const col=sig==='BUY'?K.g:sig==='SELL'?K.r:K.c;
+        const id=arcId.current++;
+        setArcs(a=>[...a.slice(-5),{id,f,t,col}]);
+        setTimeout(()=>setArcs(a=>a.filter(x=>x.id!==id)),2500);
+      }
+      if(Math.random()>0.4){
+        const pnl=(Math.random()>0.6?1:-1)*(Math.random()*90+8);
+        const sym=['SOL','BTC','ETH','JUP'][Math.floor(Math.random()*4)];
+        const id=labId.current++;
+        setLabels(l=>[...l.slice(-5),{id,pnl,sym,angle:Math.random()*360,dist:15+Math.random()*45,born:Date.now()}]);
+        setTimeout(()=>setLabels(l=>l.filter(x=>x.id!==id)),2800);
+      }
+    },1600);
+    return()=>clearInterval(iv);
+  },[sig]);
+
+  const R=110,cx=140,cy=140;
+  const proj=(lat:number,lon:number)=>{
+    const phi=lat*Math.PI/180;
+    const theta=((lon+rot)%360)*Math.PI/180;
+    const x=R*Math.cos(phi)*Math.sin(theta);
+    const y=-R*Math.sin(phi);
+    return{x:cx+x,y:cy+y,vis:R*Math.cos(phi)*Math.cos(theta)>-5};
+  };
+  const CI:{[k:string]:{lt:number;ln:number;c:string}}={
+    NYC:{lt:40.7,ln:280,c:'#00F2FE'},LON:{lt:51.5,ln:0,c:'#00F2FE'},
+    TYO:{lt:35.7,ln:140,c:'#FFD700'},SGP:{lt:1.35,ln:104,c:'#00FF88'},
+    DXB:{lt:25.2,ln:55,c:'#FFD700'},HKG:{lt:22.3,ln:114,c:'#FFD700'},
+  };
+  const mkArc=(p1:{x:number;y:number},p2:{x:number;y:number})=>{
+    const mx=(p1.x+p2.x)/2,my=(p1.y+p2.y)/2;
+    const dx=p2.x-p1.x,dy=p2.y-p1.y,l=Math.sqrt(dx*dx+dy*dy)||1;
+    const lft=Math.max(14,l*.4);
+    return`M${p1.x},${p1.y} Q${mx-(dy/l)*lft},${my+(dx/l)*lft} ${p2.x},${p2.y}`;
+  };
+  const eR=9+Math.sin(tick*.5)*2;
+  const eO=.5+Math.sin(tick*.4)*.35;
+
+  return (
+    <svg width="280" height="280" style={{display:'block',overflow:'visible'}}>
+      <style>{`@keyframes arcflow{0%{stroke-dashoffset:200}100%{stroke-dashoffset:0}}.af{stroke-dasharray:200;animation:arcflow 2.2s ease-out forwards}@keyframes mf{0%{opacity:0}20%{opacity:1}100%{opacity:0}}.mf{animation:mf 2.8s ease-out forwards}`}</style>
+      <defs>
+        <radialGradient id="lgbg" cx="38%" cy="30%"><stop offset="0%" stopColor="#0D2040"/><stop offset="100%" stopColor="#030810"/></radialGradient>
+        <radialGradient id="lggl" cx="50%" cy="50%"><stop offset="55%" stopColor="transparent"/><stop offset="100%" stopColor="#00F2FE" stopOpacity=".22"/></radialGradient>
+        <radialGradient id="leye" cx="38%" cy="35%"><stop offset="0%" stopColor="#FFF" stopOpacity=".9"/><stop offset="55%" stopColor="#00F2FE" stopOpacity=".8"/><stop offset="100%" stopColor="#BD00FF" stopOpacity=".6"/></radialGradient>
+        <filter id="lgf"><feGaussianBlur stdDeviation="2.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+        <clipPath id="lgcp"><circle cx={cx} cy={cy} r={R}/></clipPath>
+      </defs>
+      <circle cx={cx} cy={cy} r={R+18} fill="none" stroke={K.c} strokeWidth=".3" opacity=".08" strokeDasharray="3 8"/>
+      <circle cx={cx} cy={cy} r={R+9}  fill="none" stroke={K.c} strokeWidth=".5" opacity=".15" strokeDasharray="5 5"/>
+      <circle cx={cx} cy={cy} r={R}    fill="url(#lgbg)"/>
+      {[-60,-30,0,30,60].map(lat=>{
+        const pts=Array.from({length:37},(_,i)=>{const p=proj(lat,i*10);return p.vis?`${p.x},${p.y}`:null;}).filter(Boolean);
+        return pts.length>1?<polyline key={'la'+lat} points={pts.join(' ')} fill="none" stroke="#0044DD" strokeWidth=".5" opacity=".2" clipPath="url(#lgcp)"/>:null;
+      })}
+      {[0,60,120,180,240,300].map(lon=>{
+        const pts=Array.from({length:19},(_,i)=>{const p=proj((i-9)*10,lon);return p.vis?`${p.x},${p.y}`:null;}).filter(Boolean);
+        return pts.length>1?<polyline key={'lo'+lon} points={pts.join(' ')} fill="none" stroke={K.c} strokeWidth=".3" opacity=".12" clipPath="url(#lgcp)"/>:null;
+      })}
+      <circle cx={cx} cy={cy} r={R} fill="url(#lggl)" clipPath="url(#lgcp)"/>
+      {labels.map(lb=>{
+        const rad=lb.angle*Math.PI/180;
+        const col=lb.pnl>=0?K.g:K.r;
+        return(
+          <g key={lb.id} className="mf" clipPath="url(#lgcp)">
+            <text x={cx+Math.cos(rad)*lb.dist} y={cy+Math.sin(rad)*lb.dist} textAnchor="middle" fontSize="11" fill={col} fontWeight="900" fontFamily="monospace">{lb.pnl>=0?'+$':'-$'}{Math.abs(lb.pnl).toFixed(0)}</text>
+          </g>
+        );
+      })}
+      {arcs.map(arc=>{
+        const ca=CI[arc.f],cb=CI[arc.t];if(!ca||!cb)return null;
+        const pa=proj(ca.lt,ca.ln),pb=proj(cb.lt,cb.ln);
+        if(!pa.vis||!pb.vis)return null;
+        return<path key={arc.id} d={mkArc(pa,pb)} fill="none" stroke={arc.col} strokeWidth="2.5" opacity=".9" className="af" filter="url(#lgf)" clipPath="url(#lgcp)"/>;
+      })}
+      {Object.entries(CI).map(([n,ci])=>{
+        const p=proj(ci.lt,ci.ln);if(!p.vis)return null;
+        const isA=arcs.some(a=>a.f===n||a.t===n);
+        return(
+          <g key={n} filter={isA?"url(#lgf)":undefined}>
+            {isA&&<circle cx={p.x} cy={p.y} r="10" fill="none" stroke={ci.c} strokeWidth=".8" opacity=".3"/>}
+            <circle cx={p.x} cy={p.y} r={isA?5:3} fill={ci.c} opacity={isA?1:.7}/>
+            <circle cx={p.x} cy={p.y} r={isA?8:5} fill="none" stroke={ci.c} strokeWidth={isA?1.2:.6} opacity={isA?.6:.3}/>
+            <text x={p.x+8} y={p.y+3} fontSize="8.5" fill={ci.c} opacity={isA?1:.7} fontFamily="monospace" fontWeight={isA?"700":"400"}>{n}</text>
+          </g>
+        );
+      })}
+      <circle cx={cx} cy={cy} r={R} fill="none" stroke={K.c} strokeWidth="1.5" opacity=".55"/>
+      <g filter="url(#lgf)">
+        <circle cx={cx} cy={cy} r={eR+6} fill={K.c} opacity=".05"/>
+        <circle cx={cx} cy={cy} r={eR+3} fill="none" stroke={K.c} strokeWidth=".6" opacity=".2" strokeDasharray="3 5"/>
+        <circle cx={cx} cy={cy} r={eR}   fill="url(#leye)" opacity={eO}/>
+        <circle cx={cx-2.5} cy={cy-2.5}  r={eR*.3} fill="#FFF" opacity=".45"/>
+      </g>
+    </svg>
+  );
+}
+
 // ── Debate Terminal ───────────────────────────────────────────────────────────
 const DEBATE_CYCLES = [
   [
@@ -843,7 +958,7 @@ const DEBATE_CYCLES = [
 type DLine = {ag:string;col:string;sig:string;conf:number;text:string};
 type ConsensusData = {signal:string;symbol:string;votes:number;total:number;conf:number;tp:number;sl:number};
 
-function DebateTerminal() {
+function DebateTerminal({onSignalChange}:{onSignalChange?:(s:string)=>void}={}) {
   const [lines,setLines]           = useState<DLine[]>([]);
   const [consensus,setConsensus]   = useState<ConsensusData|null>(null);
   const [phase,setPhase]           = useState<'debating'|'consensus'|'executing'>('debating');
@@ -878,6 +993,7 @@ function DebateTerminal() {
             const votes=cycle.filter(l=>l.sig===sig).length;
             const avgConf=Math.round(cycle.reduce((a,l)=>a+l.conf,0)/cycle.length);
             setConsensus({signal:sig,symbol:'SOL',votes,total:cycle.length,conf:avgConf,tp:isBuy?188.20:168.40,sl:isBuy?173.86:183.60});
+            onSignalChange?.(sig);
             safe(()=>{
               setPhase('executing');
               let prog=0;
@@ -908,13 +1024,6 @@ function DebateTerminal() {
 
   return (
     <div>
-      <div style={{fontSize:10,color:K.c,letterSpacing:'.4em',marginBottom:16,fontFamily:'monospace'}}>◈ LIVE SWARM INTELLIGENCE</div>
-      <h2 style={{fontSize:36,fontWeight:900,color:'white',margin:'0 0 8px',lineHeight:1.2}}>
-        Agents debate.<br/><span style={{color:K.c}}>Markets obey.</span>
-      </h2>
-      <p style={{fontSize:13,color:K.dim,lineHeight:1.8,marginBottom:28,margin:'0 0 28px'}}>
-        Every 15 seconds, 18 agents analyze real data<br/>and debate until one signal emerges.
-      </p>
       {/* Terminal window */}
       <div style={{background:'rgba(4,6,13,0.97)',border:'1px solid rgba(0,242,254,0.15)',borderRadius:10,overflow:'hidden',boxShadow:'0 0 40px rgba(0,242,254,0.06),inset 0 0 30px rgba(0,0,0,0.5)'}}>
         {/* Title bar */}
@@ -985,17 +1094,40 @@ function DebateTerminal() {
 
 // ── Globe + Debate Section ────────────────────────────────────────────────────
 function GlobeDebateSection() {
+  const [sig,setSig]=useState('BUY');
   return (
-    <section style={{position:'relative',minHeight:'100vh',background:'#04060D',overflow:'hidden',display:'flex',alignItems:'center'}}>
-      {/* Globe — left 65% */}
-      <div style={{position:'absolute',left:'-5%',top:'50%',transform:'translateY(-50%)',width:'65%',aspectRatio:'1/1',zIndex:1}}>
-        <LandingGlobe/>
-      </div>
-      {/* Fade overlay */}
-      <div style={{position:'absolute',inset:0,zIndex:2,background:'linear-gradient(90deg,transparent 0%,transparent 40%,rgba(4,6,13,0.7) 55%,rgba(4,6,13,0.97) 68%,#04060D 80%)'}}/>
-      {/* Right content */}
-      <div style={{position:'relative',zIndex:3,marginLeft:'auto',width:'48%',paddingRight:'5%',paddingTop:80,paddingBottom:80}}>
-        <DebateTerminal/>
+    <section style={{padding:'60px 40px',background:'#04060D',position:'relative',borderTop:'1px solid rgba(0,242,254,0.06)',overflow:'hidden'}}>
+      <div style={{position:'absolute',inset:0,pointerEvents:'none',background:'repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,242,254,0.012) 3px,rgba(0,242,254,0.012) 4px)'}}/>
+      <div style={{maxWidth:1100,margin:'0 auto',display:'grid',gridTemplateColumns:'320px 1fr',gap:40,alignItems:'start',position:'relative'}}>
+        {/* LEFT — globe + stats */}
+        <div style={{display:'flex',flexDirection:'column',gap:16}}>
+          <div style={{fontSize:10,color:K.c,letterSpacing:'.4em',fontFamily:'monospace'}}>◈ GLOBAL MACRO SPHERE</div>
+          <div style={{background:'#060A12',border:'1px solid rgba(0,242,254,0.12)',borderRadius:12,padding:16,display:'flex',flexDirection:'column',alignItems:'center',boxShadow:'0 0 40px rgba(0,242,254,0.04),inset 0 0 30px rgba(0,0,0,0.5)'}}>
+            <CyberGlobe sig={sig}/>
+            <div style={{width:'100%',marginTop:12,display:'grid',gridTemplateColumns:'1fr 1fr',gap:6}}>
+              {([['SOL','$178.40',K.c,'+2.1%'],['BTC','$67,420',K.gold,'+0.8%'],['AGENTS','17/18',K.g,'LIVE'],['SIGNAL',sig,sig==='BUY'?K.g:K.r,'NOW']] as [string,string,string,string][]).map(([l,v,c,t],i)=>(
+                <div key={i} style={{padding:'8px 10px',background:'rgba(4,6,13,0.8)',border:`1px solid ${c}18`,borderRadius:4}}>
+                  <div style={{fontSize:8,color:K.dim,fontFamily:'monospace',letterSpacing:'.1em'}}>{l}</div>
+                  <div style={{fontSize:12,color:c,fontWeight:700,fontFamily:'monospace'}}>{v}</div>
+                  <div style={{fontSize:8,color:c,opacity:.6,fontFamily:'monospace'}}>{t}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div style={{display:'flex',alignItems:'center',gap:8,padding:'10px 14px',background:'rgba(0,242,254,0.04)',border:'1px solid rgba(0,242,254,0.1)',borderRadius:6}}>
+            <div style={{width:6,height:6,borderRadius:'50%',background:K.g,boxShadow:`0 0 8px ${K.g}`,animation:'pu 1s infinite',flexShrink:0}}/>
+            <span style={{fontSize:10,color:K.dim,fontFamily:'monospace'}}>Globe synchronized with debate consensus</span>
+          </div>
+        </div>
+        {/* RIGHT — debate terminal */}
+        <div>
+          <div style={{marginBottom:20}}>
+            <div style={{fontSize:10,color:K.c,letterSpacing:'.4em',marginBottom:8,fontFamily:'monospace'}}>◈ LIVE SWARM INTELLIGENCE</div>
+            <h2 style={{fontSize:40,fontWeight:900,color:'white',margin:0,lineHeight:1.2}}>Agents debate.<br/><span style={{color:K.c}}>Markets obey.</span></h2>
+            <p style={{fontSize:13,color:K.dim,lineHeight:1.8,marginTop:10,marginBottom:0}}>Every 15 seconds, 18 agents analyze real data and debate until one signal emerges.</p>
+          </div>
+          <DebateTerminal onSignalChange={setSig}/>
+        </div>
       </div>
     </section>
   );
