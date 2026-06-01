@@ -1544,8 +1544,6 @@ export default function LandingPage() {
         </motion.div>
       </section>
 
-      <GlobeDebateSection/>
-
       {/* ── LANDING SWARM ────────────────────────────────────────────────── */}
       <section style={{padding:"100px 40px",background:"#04060D",position:"relative",overflow:"hidden"}}>
         {/* ambient glow */}
@@ -1580,6 +1578,8 @@ export default function LandingPage() {
           </div>
         </Fade>
       </section>
+
+      <GlobeDebateSection/>
 
       <ProofSection/>
       <PerformanceSection/>
