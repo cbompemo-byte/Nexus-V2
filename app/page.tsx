@@ -708,15 +708,23 @@ function APISection() {
   useEffect(()=>{const iv=setInterval(()=>setTick(t=>t+1),1500);return()=>clearInterval(iv);},[]);
 
   const APIS=[
-    {name:'KRAKEN',     role:'RSI · EMA · MACD · ADX',       col:'#FF3366',symbol:'K',  agents:['LENS','RADAR','RAZOR','VECTOR','TITAN','ORACLE']},
-    {name:'COINGECKO',  role:'Volume · BTC Dominance',        col:'#00FF88',symbol:'CG', agents:['SURGE','ATLAS']},
-    {name:'DEXSCREENER',role:'Whale Pressure · Order Depth',  col:'#00F2FE',symbol:'DS', agents:['LEVIATHAN','SHIELD']},
-    {name:'DERIBIT',    role:'Funding Rate · Open Interest',  col:'#BD00FF',symbol:'D',  agents:['PHANTOM']},
-    {name:'COINGLASS',  role:'Liquidation Data',              col:'#FFD700',symbol:'CG', agents:['HYDRA']},
-    {name:'FEAR & GREED',role:'Market Sentiment Index',       col:'#FF7A59',symbol:'F&G',agents:['ECHO']},
-    {name:'HELIUS',     role:'On-Chain Wallet Data',          col:'#FF3366',symbol:'H',  agents:['ON-CHAIN']},
-    {name:'JUPITER',    role:'DEX Price Feeds · Swaps',       col:'#00F2FE',symbol:'JUP',agents:['DELTA','EXECUTOR']},
-  ] as const;
+    {name:'KRAKEN',      role:'RSI · EMA · MACD · ADX',      col:'#5741D9',agents:['LENS','RADAR','RAZOR','VECTOR','TITAN','ORACLE'],
+     logo:<svg viewBox="0 0 24 24" width="30" height="30" fill="#5741D9"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.562 16.394l-1.055.87-4.507-5.48v7.012H10.5v-7.012l-4.507 5.48-1.055-.87 4.87-5.923L5.938 4.548l1.055-.87L10.5 7.916V.804h1.5v7.112l3.507-4.238 1.055.87-3.931 4.923 4.931 5.923z"/></svg>},
+    {name:'COINGECKO',   role:'Volume · BTC Dominance',      col:'#8DC63F',agents:['SURGE','ATLAS'],
+     logo:<svg viewBox="0 0 24 24" width="30" height="30" fill="#8DC63F"><path d="M11.997 0C5.373 0 0 5.373 0 11.997 0 18.625 5.373 24 11.997 24 18.625 24 24 18.625 24 11.997 24 5.373 18.625 0 11.997 0zm4.45 6.531c.449 0 .809.361.809.81 0 .449-.36.81-.81.81-.449 0-.81-.361-.81-.81.001-.449.362-.81.811-.81zm-8.012.428c2.432-.011 4.9 1.088 6.435 3.168.11.154.073.368-.081.477-.153.11-.368.073-.477-.081-1.399-1.896-3.653-2.895-5.878-2.88C5.852 7.657 3.45 9.744 3.45 12.45c0 2.724 2.415 4.919 5.392 4.919 2.41 0 4.534-1.461 5.199-3.55.088-.281.381-.44.661-.352.28.088.44.381.352.661-.784 2.497-3.28 4.226-6.212 4.226-3.534 0-6.378-2.68-6.378-5.904 0-3.184 2.775-5.49 5.971-5.491zm9.303 2.19c.396.225.533.726.308 1.122l-2.52 4.396c.131.249.206.532.206.833 0 .993-.806 1.799-1.8 1.799-.992 0-1.799-.806-1.799-1.8 0-.993.807-1.799 1.8-1.799.306 0 .594.077.845.213l2.638-4.456c.225-.395.726-.533 1.122-.308z"/></svg>},
+    {name:'DEXSCREENER', role:'Whale Pressure · Order Depth',col:'#00F2FE',agents:['LEVIATHAN','SHIELD'],
+     logo:<svg viewBox="0 0 252 300" width="28" height="28" fill="#00F2FE"><path d="M151.818 106.866c9.177-4.576 20.854-11.312 32.545-20.541 2.465-1.917 6.956-1.703 10.281 1.036 3.324 2.739 4.206 6.979 1.74 8.896-12.483 9.708-24.896 16.964-34.807 21.993 1.679 4.416 2.598 9.238 2.598 14.295 0 24.272-19.671 43.943-43.943 43.943s-43.943-19.671-43.943-43.943 19.671-43.943 43.943-43.943c9.048 0 17.449 2.756 24.429 7.481zm-7.611 43.056c0-13.748-11.144-24.893-24.893-24.893s-24.893 11.144-24.893 24.893 11.144 24.893 24.893 24.893 24.893-11.144 24.893-24.893zm20.883-77.004c-4.779-2.859-9.911-5.212-15.278-6.878L162.86 50.5c1.595-5.31 7.138-8.326 12.449-6.732 5.311 1.594 8.326 7.138 6.732 12.449l-16.951 16.701zM126 15c-61.3 0-111 49.7-111 111s49.7 111 111 111 111-49.7 111-111S187.3 15 126 15zM15 126C15 64.921 64.921 15 126 15s111 49.921 111 111-49.921 111-111 111S15 187.079 15 126z"/></svg>},
+    {name:'DERIBIT',     role:'Funding Rate · Open Interest',col:'#BD00FF',agents:['PHANTOM'],
+     logo:<svg viewBox="0 0 40 40" width="30" height="30"><circle cx="20" cy="20" r="18" fill="none" stroke="#BD00FF" strokeWidth="2.5"/><text x="20" y="26" textAnchor="middle" fontSize="17" fill="#BD00FF" fontWeight="900" fontFamily="monospace">D</text></svg>},
+    {name:'SOLANA',      role:'Blockchain · Execution Layer',col:'#9945FF',agents:['EXECUTOR','ON-CHAIN'],
+     logo:<svg viewBox="0 0 397 311" width="30" height="30"><defs><linearGradient id="solG" x1="0%" y1="100%" x2="100%" y2="0%"><stop offset="0%" stopColor="#9945FF"/><stop offset="100%" stopColor="#14F195"/></linearGradient></defs><path fill="url(#solG)" d="M64.6 237.9a9.6 9.6 0 016.8-2.8h317.3c4.3 0 6.4 5.2 3.4 8.2l-56.7 56.7a9.6 9.6 0 01-6.8 2.8H11.3c-4.3 0-6.4-5.2-3.4-8.2l56.7-56.7zm0-164.2A9.9 9.9 0 0171.4 71h317.3c4.3 0 6.4 5.2 3.4 8.2l-56.7 56.7a9.6 9.6 0 01-6.8 2.8H11.3c-4.3 0-6.4-5.2-3.4-8.2l56.7-56.8zM335.4 2.8A9.6 9.6 0 00328.6 0H11.3C7 0 4.9 5.2 7.9 8.2l56.7 56.7a9.6 9.6 0 006.8 2.8h317.3c4.3 0 6.4-5.2 3.4-8.2L335.4 2.8z"/></svg>},
+    {name:'JUPITER',     role:'DEX Swaps · Price Feeds',     col:'#C7F284',agents:['DELTA','EXECUTOR'],
+     logo:<svg viewBox="0 0 100 100" width="30" height="30"><circle cx="50" cy="50" r="44" fill="none" stroke="#C7F284" strokeWidth="4"/><text x="50" y="57" textAnchor="middle" fontSize="24" fill="#C7F284" fontWeight="900" fontFamily="monospace">JUP</text></svg>},
+    {name:'ANTHROPIC',   role:'Debate Theater · DNA Card',   col:'#CC785C',agents:['DEBATE','DNA CARD'],
+     logo:<svg viewBox="0 0 100 100" width="30" height="30"><rect width="100" height="100" rx="20" fill="#CC785C" opacity="0.15"/><text x="50" y="62" textAnchor="middle" fontSize="46" fill="#CC785C" fontWeight="400" fontFamily="serif">∞</text></svg>},
+    {name:'FEAR & GREED',role:'Market Sentiment',            col:'#FF7A59',agents:['ECHO'],
+     logo:<svg viewBox="0 0 100 100" width="30" height="30"><path d="M50 82 A36 36 0 0 1 14 50" fill="none" stroke="#FF3366" strokeWidth="9" strokeLinecap="round"/><path d="M14 50 A36 36 0 0 1 50 14" fill="none" stroke="#FFD700" strokeWidth="9" strokeLinecap="round"/><path d="M50 14 A36 36 0 0 1 86 50" fill="none" stroke="#00FF88" strokeWidth="9" strokeLinecap="round"/><path d="M86 50 A36 36 0 0 1 50 82" fill="none" stroke="#00FF88" strokeWidth="9" strokeLinecap="round"/><line x1="50" y1="50" x2="72" y2="28" stroke="#FF7A59" strokeWidth="4" strokeLinecap="round"/><circle cx="50" cy="50" r="6" fill="#FF7A59"/></svg>},
+  ];
   const autoActive=tick%APIS.length;
   const CX=300,CY=300,R=210;
 
@@ -777,11 +785,11 @@ function APISection() {
               const isActive=activeApi===i||autoActive===i;
               return (
                 <div key={api.name} onMouseEnter={()=>setActiveApi(i)} onMouseLeave={()=>setActiveApi(null)}
-                  style={{position:'absolute',left:x-44,top:y-44,width:88,height:88,cursor:'pointer',zIndex:5}}>
-                  {isActive&&<div style={{position:'absolute',inset:-8,borderRadius:20,border:`1px solid ${api.col}40`,animation:'pu 1s infinite'}}/>}
-                  <div style={{width:'100%',height:'100%',borderRadius:16,background:isActive?`${api.col}18`:'rgba(6,10,18,0.9)',border:`1.5px solid ${isActive?api.col:api.col+'30'}`,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',transition:'all .3s ease',boxShadow:isActive?`0 0 24px ${api.col}25`:'none'}}>
-                    <div style={{fontSize:15,fontWeight:900,color:isActive?api.col:api.col+'60',fontFamily:'monospace',transition:'all .3s'}}>{api.symbol}</div>
-                    <div style={{fontSize:7.5,color:isActive?api.col:'#1A3050',fontFamily:'monospace',fontWeight:700,textAlign:'center',marginTop:4,letterSpacing:'.05em',lineHeight:1.3,padding:'0 4px'}}>{api.name}</div>
+                  style={{position:'absolute',left:x-48,top:y-48,width:96,height:96,cursor:'pointer',zIndex:5}}>
+                  {isActive&&<div style={{position:'absolute',inset:-8,borderRadius:22,border:`1px solid ${api.col}40`,animation:'pu 1s infinite'}}/>}
+                  <div style={{width:'100%',height:'100%',borderRadius:18,background:isActive?`${api.col}18`:'rgba(6,10,18,0.9)',border:`1.5px solid ${isActive?api.col:api.col+'30'}`,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',transition:'all .3s ease',boxShadow:isActive?`0 0 28px ${api.col}30`:'none',gap:6}}>
+                    <div style={{opacity:isActive?1:0.45,transition:'opacity .3s',display:'flex',alignItems:'center',justifyContent:'center'}}>{api.logo}</div>
+                    <div style={{fontSize:7,color:isActive?api.col:'#1A3050',fontFamily:'monospace',fontWeight:700,textAlign:'center',letterSpacing:'.05em',lineHeight:1.3,padding:'0 4px'}}>{api.name}</div>
                   </div>
                   {isActive&&(
                     <div style={{position:'absolute',left:x<300?'105%':'auto',right:x>=300?'105%':'auto',top:'50%',transform:'translateY(-50%)',background:'rgba(4,6,13,0.97)',border:`1px solid ${api.col}40`,borderRadius:8,padding:'12px 14px',minWidth:160,zIndex:100,whiteSpace:'nowrap',boxShadow:`0 0 20px ${api.col}15`}}>
