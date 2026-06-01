@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect, useRef, useMemo } from "react";
 import { motion, AnimatePresence, useInView } from "framer-motion";
+import { LandingGlobe } from "./landing-globe";
 
 const K = { c:"#00F2FE",g:"#00FF88",r:"#FF3366",gold:"#FFD700",pu:"#BD00FF",dim:"#2A5070",hi:"#A8D0EC",bg:"#04060D" };
 const F = "'JetBrains Mono','Courier New',monospace";
@@ -819,6 +820,187 @@ function APISection() {
   );
 }
 
+// ── Debate Terminal ───────────────────────────────────────────────────────────
+const DEBATE_CYCLES = [
+  [
+    {ag:'LEVIATHAN',col:'#BD00FF',sig:'BUY', conf:88,text:'Whale accumulation +12,400 SOL from Binance. Smart money entering.'},
+    {ag:'LENS',     col:'#BD00FF',sig:'BUY', conf:82,text:'RSI(14) = 38.2 — Oversold territory. Mean reversion likely.'},
+    {ag:'RADAR',    col:'#00F2FE',sig:'BUY', conf:79,text:'EMA9 crossed above EMA21 on 5m chart. Bullish momentum confirmed.'},
+    {ag:'SURGE',    col:'#00FF88',sig:'BUY', conf:74,text:'Volume +340% above 24H average. Institutional buying pattern.'},
+    {ag:'ECHO',     col:'#FF7A59',sig:'BUY', conf:68,text:'Fear & Greed: 28 (Extreme Fear). Historically bullish from here.'},
+    {ag:'AEGIS',    col:'#FF3366',sig:'BUY', conf:76,text:'Exposure 14.2% — Kelly approved. Risk parameters nominal.'},
+  ],
+  [
+    {ag:'PHANTOM',  col:'#BD00FF',sig:'SELL',conf:84,text:'Funding rate +0.048% — longs overpaying. Short squeeze likely.'},
+    {ag:'HYDRA',    col:'#FF3366',sig:'SELL',conf:79,text:'$180M short liquidations at $179.50. Cascade imminent.'},
+    {ag:'VECTOR',   col:'#00F2FE',sig:'SELL',conf:71,text:'ADX 34 — -DI above +DI. Strong downtrend confirmed.'},
+    {ag:'TITAN',    col:'#FFD700',sig:'SELL',conf:66,text:'SMA50 crossing below SMA200. Regime shift to BEARISH.'},
+    {ag:'SHIELD',   col:'#00F2FE',sig:'SELL',conf:73,text:'Bid/ask ratio 0.38 — heavy sell wall detected at resistance.'},
+    {ag:'AEGIS',    col:'#FF3366',sig:'SELL',conf:80,text:'Reducing exposure 35%. Risk veto: macro conditions unfavorable.'},
+  ],
+];
+
+type DLine = {ag:string;col:string;sig:string;conf:number;text:string};
+type ConsensusData = {signal:string;symbol:string;votes:number;total:number;conf:number;tp:number;sl:number};
+
+function DebateTerminal() {
+  const [lines,setLines]           = useState<DLine[]>([]);
+  const [consensus,setConsensus]   = useState<ConsensusData|null>(null);
+  const [phase,setPhase]           = useState<'debating'|'consensus'|'executing'>('debating');
+  const [exeProgress,setExeProgress] = useState(0);
+  const termRef   = useRef<HTMLDivElement>(null);
+  const mounted   = useRef(true);
+
+  useEffect(()=>{
+    mounted.current=true;
+    let cycleIdx=0;
+    let timers:ReturnType<typeof setTimeout>[]=[];
+
+    const safe=(fn:()=>void,ms:number)=>{
+      const t=setTimeout(()=>{if(mounted.current)fn();},ms);
+      timers.push(t);
+      return t;
+    };
+
+    const runCycle=()=>{
+      if(!mounted.current)return;
+      const cycle=DEBATE_CYCLES[cycleIdx%DEBATE_CYCLES.length];
+      setPhase('debating');setConsensus(null);setExeProgress(0);setLines([]);
+      let lineIdx=0,current:DLine[]=[];
+
+      const addLine=()=>{
+        if(!mounted.current)return;
+        if(lineIdx>=cycle.length){
+          safe(()=>{
+            setPhase('consensus');
+            const isBuy=cycle.filter(l=>l.sig==='BUY').length>=cycle.filter(l=>l.sig==='SELL').length;
+            const sig=isBuy?'BUY':'SELL';
+            const votes=cycle.filter(l=>l.sig===sig).length;
+            const avgConf=Math.round(cycle.reduce((a,l)=>a+l.conf,0)/cycle.length);
+            setConsensus({signal:sig,symbol:'SOL',votes,total:cycle.length,conf:avgConf,tp:isBuy?188.20:168.40,sl:isBuy?173.86:183.60});
+            safe(()=>{
+              setPhase('executing');
+              let prog=0;
+              const progStep=()=>{
+                if(!mounted.current)return;
+                prog+=4;setExeProgress(prog);
+                if(prog<100)safe(progStep,60);
+                else safe(()=>{cycleIdx++;runCycle();},2500);
+              };
+              safe(progStep,60);
+            },2000);
+          },600);
+          return;
+        }
+        current=[...current,cycle[lineIdx]];
+        setLines([...current]);lineIdx++;
+        if(termRef.current)termRef.current.scrollTop=termRef.current.scrollHeight;
+        safe(addLine,900+Math.random()*400);
+      };
+      safe(addLine,500);
+    };
+    runCycle();
+    return()=>{mounted.current=false;timers.forEach(clearTimeout);};
+  },[]);
+
+  const consBuy=consensus?.signal==='BUY';
+  const consCol=consBuy?K.g:K.r;
+
+  return (
+    <div>
+      <div style={{fontSize:10,color:K.c,letterSpacing:'.4em',marginBottom:16,fontFamily:'monospace'}}>◈ LIVE SWARM INTELLIGENCE</div>
+      <h2 style={{fontSize:36,fontWeight:900,color:'white',margin:'0 0 8px',lineHeight:1.2}}>
+        Agents debate.<br/><span style={{color:K.c}}>Markets obey.</span>
+      </h2>
+      <p style={{fontSize:13,color:K.dim,lineHeight:1.8,marginBottom:28,margin:'0 0 28px'}}>
+        Every 15 seconds, 18 agents analyze real data<br/>and debate until one signal emerges.
+      </p>
+      {/* Terminal window */}
+      <div style={{background:'rgba(4,6,13,0.97)',border:'1px solid rgba(0,242,254,0.15)',borderRadius:10,overflow:'hidden',boxShadow:'0 0 40px rgba(0,242,254,0.06),inset 0 0 30px rgba(0,0,0,0.5)'}}>
+        {/* Title bar */}
+        <div style={{padding:'10px 16px',borderBottom:'1px solid rgba(0,242,254,0.08)',background:'rgba(6,10,18,0.9)',display:'flex',alignItems:'center',gap:8}}>
+          {['#FF3366','#FFD700','#00FF88'].map((c,i)=><div key={i} style={{width:9,height:9,borderRadius:'50%',background:c}}/>)}
+          <span style={{flex:1,textAlign:'center',fontSize:9,color:K.dim,fontFamily:'monospace',letterSpacing:'.12em'}}>KYMIA SWARM DEBATE — LIVE</span>
+          <div style={{display:'flex',alignItems:'center',gap:4,padding:'2px 7px',background:'rgba(0,255,136,0.12)',border:'1px solid rgba(0,255,136,0.3)',borderRadius:10}}>
+            <div style={{width:4,height:4,borderRadius:'50%',background:K.g,animation:'pu 1s infinite'}}/>
+            <span style={{fontSize:7,color:K.g,fontFamily:'monospace'}}>LIVE</span>
+          </div>
+        </div>
+        {/* Lines */}
+        <div ref={termRef} style={{padding:16,height:320,overflowY:'auto',scrollBehavior:'smooth'}}>
+          {lines.map((line,i)=>(
+            <div key={i} style={{display:'flex',gap:10,marginBottom:14,animation:'slideInLeft 0.4s ease forwards'}}>
+              <div style={{minWidth:72,padding:'4px 6px',background:`${line.col}18`,border:`1px solid ${line.col}40`,borderRadius:4,textAlign:'center',flexShrink:0,alignSelf:'flex-start'}}>
+                <div style={{fontSize:8,color:line.col,fontFamily:'monospace',fontWeight:900,letterSpacing:'.06em'}}>{line.ag}</div>
+                <div style={{fontSize:8,color:line.col,fontFamily:'monospace',marginTop:2,opacity:0.8}}>{line.conf}%</div>
+              </div>
+              <div style={{flex:1}}>
+                <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:4}}>
+                  <span style={{padding:'1px 7px',background:`${line.sig==='BUY'?K.g:line.sig==='SELL'?K.r:K.gold}20`,color:line.sig==='BUY'?K.g:line.sig==='SELL'?K.r:K.gold,border:`1px solid ${line.sig==='BUY'?K.g:line.sig==='SELL'?K.r:K.gold}40`,borderRadius:2,fontSize:8,fontFamily:'monospace',fontWeight:700}}>{line.sig}</span>
+                </div>
+                <div style={{fontSize:11,color:K.hi,lineHeight:1.6,fontStyle:'italic'}}>"{line.text}"</div>
+              </div>
+            </div>
+          ))}
+          {consensus&&(
+            <div style={{marginTop:8,padding:16,background:`${consCol}0C`,border:`2px solid ${consCol}40`,borderRadius:8,animation:'slideInLeft 0.5s ease forwards'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+                <span style={{fontSize:10,color:consCol,fontFamily:'monospace',fontWeight:900,letterSpacing:'.1em'}}>⟹ SWARM CONSENSUS</span>
+                <span style={{fontSize:18,fontWeight:900,color:consCol,fontFamily:'monospace',textShadow:`0 0 14px ${consCol}`}}>{consensus.signal} {consensus.symbol}</span>
+              </div>
+              <div style={{display:'flex',gap:16,fontSize:10,color:K.dim,fontFamily:'monospace',marginBottom:8}}>
+                <span>{consensus.votes}/{consensus.total} agents</span>
+                <span>Conf: {consensus.conf}%</span>
+                <span style={{color:consCol}}>TP ${consensus.tp.toFixed(2)}</span>
+                <span style={{color:K.r}}>SL ${consensus.sl.toFixed(2)}</span>
+              </div>
+              {phase==='executing'&&(
+                <div>
+                  <div style={{display:'flex',justifyContent:'space-between',fontSize:9,color:K.dim,fontFamily:'monospace',marginBottom:4}}>
+                    <span>{exeProgress<100?`▶ Executing ${consensus.signal} ${consensus.symbol}...`:'✓ TRADE OPENED @ MARKET PRICE'}</span>
+                    <span style={{color:consCol}}>{exeProgress}%</span>
+                  </div>
+                  <div style={{height:4,background:'#06090F',borderRadius:2,overflow:'hidden'}}>
+                    <div style={{height:'100%',borderRadius:2,background:consCol,width:`${exeProgress}%`,transition:'width 0.06s linear',boxShadow:`0 0 8px ${consCol}`}}/>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+        {/* Footer bar */}
+        <div style={{padding:'8px 16px',borderTop:'1px solid rgba(0,242,254,0.06)',background:'rgba(4,6,13,0.9)',display:'flex',justifyContent:'space-between',fontSize:8,color:'#0A1828',fontFamily:'monospace'}}>
+          <span>18 AGENTS · REAL MARKET DATA</span>
+          <span>15s CYCLE · SOLANA NETWORK</span>
+        </div>
+      </div>
+      {/* CTAs */}
+      <div style={{marginTop:28,display:'flex',gap:12}}>
+        <a href="/nexus?mode=demo" style={{flex:1,padding:14,background:'rgba(0,255,136,0.12)',border:'1.5px solid rgba(0,255,136,0.4)',borderRadius:8,textAlign:'center',color:K.g,fontSize:13,fontFamily:'monospace',fontWeight:700,textDecoration:'none',letterSpacing:'.08em',display:'block'}}>Watch AI Trade Live →</a>
+        <a href="/nexus?mode=live" style={{flex:1,padding:14,background:'rgba(0,242,254,0.08)',border:'1px solid rgba(0,242,254,0.3)',borderRadius:8,textAlign:'center',color:K.c,fontSize:13,fontFamily:'monospace',fontWeight:700,textDecoration:'none',letterSpacing:'.08em',display:'block'}}>⚡ Connect Phantom</a>
+      </div>
+    </div>
+  );
+}
+
+// ── Globe + Debate Section ────────────────────────────────────────────────────
+function GlobeDebateSection() {
+  return (
+    <section style={{position:'relative',minHeight:'100vh',background:'#04060D',overflow:'hidden',display:'flex',alignItems:'center'}}>
+      {/* Globe — left 65% */}
+      <div style={{position:'absolute',left:'-5%',top:'50%',transform:'translateY(-50%)',width:'65%',aspectRatio:'1/1',zIndex:1}}>
+        <LandingGlobe/>
+      </div>
+      {/* Fade overlay */}
+      <div style={{position:'absolute',inset:0,zIndex:2,background:'linear-gradient(90deg,transparent 0%,transparent 40%,rgba(4,6,13,0.7) 55%,rgba(4,6,13,0.97) 68%,#04060D 80%)'}}/>
+      {/* Right content */}
+      <div style={{position:'relative',zIndex:3,marginLeft:'auto',width:'48%',paddingRight:'5%',paddingTop:80,paddingBottom:80}}>
+        <DebateTerminal/>
+      </div>
+    </section>
+  );
+}
+
 // ── Footer ────────────────────────────────────────────────────────────────────
 function Footer() {
   return (
@@ -1018,6 +1200,8 @@ export default function LandingPage() {
           <LivePrices/>
         </motion.div>
       </section>
+
+      <GlobeDebateSection/>
 
       {/* ── LANDING SWARM ────────────────────────────────────────────────── */}
       <section style={{padding:"100px 40px",background:"#04060D",position:"relative",overflow:"hidden"}}>
@@ -1318,6 +1502,8 @@ export default function LandingPage() {
       <Footer/>
 
       <style>{`
+        @keyframes agentPop{0%{opacity:0;transform:translateX(-50%) translateY(-10px)}15%{opacity:1;transform:translateX(-50%) translateY(0)}75%{opacity:1}100%{opacity:0;transform:translateX(-50%) translateY(-15px)}}
+        @keyframes slideInLeft{from{opacity:0;transform:translateX(-12px)}to{opacity:1;transform:translateX(0)}}
         @keyframes laserSweep{from{transform:translateX(-100%);opacity:1}to{transform:translateX(200%);opacity:0}}
         @keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
         @keyframes pu{0%,100%{opacity:1}50%{opacity:.3}}
