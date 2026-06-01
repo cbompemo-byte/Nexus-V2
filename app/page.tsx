@@ -115,6 +115,114 @@ function SkullFace({size,col,active,scanning,conflict}:{size:number;col:string;a
   );
 }
 
+// ── Explanation panel (shared logic) ─────────────────────────────────────────
+function ExplanationPanel({steps}:{steps:{num:string;title:string;col:string;icon:string;agents:string[];description:string;terminal:string[]}[]}) {
+  const [activeStep, setActiveStep] = useState(0);
+  const [typed,      setTyped]      = useState('');
+  const [charIdx,    setCharIdx]    = useState(0);
+
+  useEffect(()=>{
+    const iv=setInterval(()=>{
+      setActiveStep(s=>(s+1)%steps.length);
+      setCharIdx(0); setTyped('');
+    },5000);
+    return()=>clearInterval(iv);
+  },[steps.length]);
+
+  const step=steps[activeStep];
+  const fullText=step.terminal.join('\n');
+
+  useEffect(()=>{setCharIdx(0);setTyped('');},[activeStep]);
+
+  useEffect(()=>{
+    if(charIdx>=fullText.length)return;
+    const t=setTimeout(()=>{setTyped(fullText.slice(0,charIdx+1));setCharIdx(c=>c+1);},18);
+    return()=>clearTimeout(t);
+  },[charIdx,fullText]);
+
+  return (
+    <div style={{display:'flex',flexDirection:'column',gap:20}}>
+      {/* Progress tabs */}
+      <div style={{display:'flex',gap:8,marginBottom:4}}>
+        {steps.map((s,i)=>(
+          <div key={i} onClick={()=>{setActiveStep(i);setCharIdx(0);setTyped('');}}
+            style={{flex:1,height:3,borderRadius:2,cursor:'pointer',transition:'all .3s',
+              background:i===activeStep?s.col:'#0A1D33',
+              boxShadow:i===activeStep?`0 0 8px ${s.col}`:'none'}}/>
+        ))}
+      </div>
+      {/* Title */}
+      <div>
+        <div style={{fontSize:10,color:step.col,letterSpacing:'.3em',marginBottom:4,fontFamily:'monospace'}}>{step.icon} STEP {step.num}</div>
+        <div style={{fontSize:20,fontWeight:900,color:'white',lineHeight:1.3,marginBottom:10}}>{step.title}</div>
+        <p style={{fontSize:12,color:K.dim,lineHeight:1.8,marginBottom:16}}>{step.description}</p>
+      </div>
+      {/* Agent tags */}
+      <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:8}}>
+        {step.agents.map(a=>(
+          <div key={a} style={{padding:'3px 9px',background:step.col+'14',border:`1px solid ${step.col}35`,
+            borderRadius:3,fontSize:9,color:step.col,fontFamily:'monospace',fontWeight:700}}>{a}</div>
+        ))}
+      </div>
+      {/* Terminal */}
+      <div style={{background:'rgba(4,6,13,0.95)',border:`1px solid ${step.col}20`,borderRadius:6,
+        padding:'14px 16px',fontFamily:'monospace',fontSize:10,color:K.hi,lineHeight:1.9,
+        minHeight:140,boxShadow:`inset 0 0 20px ${step.col}06`}}>
+        {typed.split('\n').map((line,i)=>{
+          const bracket=line.match(/\[([^\]]+)\]/)?.[1];
+          const rest=line.replace(/\[([^\]]+)\]\s*/,'');
+          return(
+            <div key={i}>
+              {bracket&&<span style={{color:step.col,fontWeight:700}}>[{bracket}]</span>}
+              <span style={{color:K.hi}}>{' '}{rest}</span>
+            </div>
+          );
+        })}
+        {charIdx<fullText.length&&(
+          <span style={{display:'inline-block',width:7,height:12,background:step.col,
+            animation:'blink 0.8s infinite',marginLeft:2,verticalAlign:'middle'}}/>
+        )}
+      </div>
+      {/* Progress bar */}
+      <div style={{height:2,background:'#06090F',borderRadius:1}}>
+        <div style={{height:'100%',borderRadius:1,background:step.col,
+          width:`${Math.min((charIdx/fullText.length)*100,100)}%`,
+          transition:'width .05s',boxShadow:`0 0 6px ${step.col}`}}/>
+      </div>
+    </div>
+  );
+}
+
+const LEFT_STEPS = [
+  {num:'01',title:'REAL DATA INGESTION',col:'#00F2FE',icon:'◉',
+   agents:['LENS','RADAR','SURGE','ATLAS'],
+   description:'Every 15 seconds, agents fetch real market data from Kraken, CoinGecko, DexScreener and Deribit APIs.',
+   terminal:['[LENS]   Fetching RSI(14) from Kraken...','[LENS]   RSI = 38.2 — OVERSOLD detected','[RADAR]  EMA9 = 178.12 | EMA21 = 177.44','[RADAR]  Bullish crossover CONFIRMED','[SURGE]  Volume +340% above 24H average','[ATLAS]  BTC dominance: 54.8% → falling']},
+  {num:'02',title:'SIGNAL GENERATION',col:'#00FF88',icon:'⚡',
+   agents:['LEVIATHAN','ECHO','PHANTOM','SHIELD'],
+   description:'Each agent runs its proprietary algorithm. RSI, EMA crossovers, whale flows, funding rates — all computed simultaneously.',
+   terminal:['[LEVIA]  Whale wallet 9WzD...WWM','[LEVIA]  +12,400 SOL withdrawn from Binance','[LEVIA]  Buy pressure: 0.641 → BUY signal','[ECHO]   Fear & Greed index: 28 (Extreme Fear)','[ECHO]   Historical: +340% avg return → BUY','[PHNTM]  Funding rate: -0.031% → Longs cheap']},
+  {num:'03',title:'AGENT VOTE',col:'#FFD700',icon:'◈',
+   agents:['CONSENSUS','AEGIS'],
+   description:'Each agent casts a weighted vote: BUY, SELL, or HOLD. Confidence score determines vote weight.',
+   terminal:['[LENS]     BUY  82% confidence','[RADAR]    BUY  79% confidence','[LEVIA]    BUY  86% confidence','[SURGE]    BUY  71% confidence','[ECHO]     BUY  68% confidence','[AEGIS]    Risk check: 14.2% exposure ✓']},
+];
+
+const RIGHT_STEPS = [
+  {num:'04',title:'CONSENSUS ENGINE',col:'#BD00FF',icon:'◈',
+   agents:['CONSENSUS','NEURAL','WATCH'],
+   description:'CONSENSUS tallies all votes. Only when 60%+ of agents agree with sufficient confidence — a signal fires.',
+   terminal:['[CNSNS]  Tallying 18 agent votes...','[CNSNS]  BUY:  14 agents (78%)','[CNSNS]  SELL:  2 agents (11%)','[CNSNS]  HOLD:  2 agents (11%)','[CNSNS]  Weighted confidence: 82%','[CNSNS]  ✓ THRESHOLD REACHED → EXECUTE']},
+  {num:'05',title:'RISK MANAGEMENT',col:'#FF3366',icon:'⛔',
+   agents:['AEGIS','WATCH'],
+   description:'AEGIS runs a final risk check: Kelly Criterion sizing, max exposure, peak hours filter, loss streak control.',
+   terminal:['[AEGIS]  Portfolio exposure: 14.2% ✓','[AEGIS]  Kelly sizing: 12% @ 82% conf','[AEGIS]  Peak hours: NY SESSION ✓','[AEGIS]  Loss streak: 0 consecutive ✓','[AEGIS]  Macro filter: BTC +0.8% ✓','[AEGIS]  ✓ ALL CHECKS PASSED → GO']},
+  {num:'06',title:'TRADE EXECUTION',col:'#00FF88',icon:'▲',
+   agents:['EXECUTOR','JUPITER'],
+   description:'The trade executes at the real market price. SL -2.5%, TP +5.5%, trailing stop at +1.5% to lock gains.',
+   terminal:['[EXEC]   Building Jupiter swap...','[EXEC]   SOL/USDC | Amount: $1,200','[EXEC]   Entry price: $178.42 (live)','[EXEC]   Stop-loss:   $173.86 (-2.5%)','[EXEC]   Take-profit: $188.24 (+5.5%)','[EXEC]   ▲ LONG SOL OPENED @ $178.42']},
+];
+
 // ── Landing Swarm ─────────────────────────────────────────────────────────────
 function LandingSwarm() {
   const [signals,   setSignals]   = useState<Record<string,string>>({});
@@ -645,23 +753,34 @@ export default function LandingPage() {
       </section>
 
       {/* ── LANDING SWARM ────────────────────────────────────────────────── */}
-      <section style={{padding:"80px 20px",textAlign:"center",background:"rgba(4,6,13,1)",position:"relative"}}>
+      <section style={{padding:"100px 40px",background:"#04060D",position:"relative",overflow:"hidden"}}>
+        {/* ambient glow */}
+        <div style={{position:"absolute",top:"50%",left:"50%",transform:"translate(-50%,-50%)",width:600,height:600,borderRadius:"50%",background:"radial-gradient(circle,rgba(0,242,254,0.04) 0%,transparent 70%)",pointerEvents:"none"}}/>
         <Fade>
-          <div style={{fontSize:10,color:K.c,letterSpacing:".4em",marginBottom:12}}>◈ WATCH THE SWARM THINK</div>
-          <div style={{fontSize:32,fontWeight:900,color:"white",marginBottom:8}}>18 agents. One consensus.</div>
-          <div style={{fontSize:13,color:K.dim,lineHeight:1.8,marginBottom:48}}>
-            Every agent analyzes real market data.<br/>
-            They vote. They debate. They decide.<br/>
-            Hover over any agent to see their thesis.
+          <div style={{textAlign:"center",marginBottom:64}}>
+            <div style={{fontSize:10,color:K.c,letterSpacing:".4em",marginBottom:12,fontFamily:F}}>◈ WATCH THE SWARM THINK</div>
+            <div style={{fontSize:32,fontWeight:900,color:"white",marginBottom:8}}>18 agents. One consensus.</div>
+            <div style={{fontSize:13,color:K.dim,lineHeight:1.8}}>Every agent analyzes real market data. They vote. They debate. They decide.</div>
           </div>
         </Fade>
-        <Fade delay={.1}><LandingSwarm/></Fade>
+        <Fade delay={.1}>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 560px 1fr",gap:48,alignItems:"center",maxWidth:1280,margin:"0 auto"}}>
+            <ExplanationPanel steps={LEFT_STEPS}/>
+            <LandingSwarm/>
+            <ExplanationPanel steps={RIGHT_STEPS}/>
+          </div>
+        </Fade>
         <Fade delay={.2}>
-          <div style={{marginTop:60,display:"flex",justifyContent:"center",gap:32,flexWrap:"wrap"}}>
-            {[{v:'18',l:'COGNITIVE AGENTS'},{v:'15s',l:'CYCLE TIME'},{v:'≥60%',l:'CONSENSUS THRESHOLD'},{v:'0',l:'EMOTIONS'}].map((s,i)=>(
-              <div key={i} style={{textAlign:"center"}}>
-                <div style={{fontSize:28,fontWeight:900,color:K.c,fontFamily:"monospace",textShadow:`0 0 20px ${K.c}`}}>{s.v}</div>
-                <div style={{fontSize:9,color:K.dim,letterSpacing:".2em",marginTop:4}}>{s.l}</div>
+          <div style={{marginTop:72,display:"flex",justifyContent:"center",gap:48,flexWrap:"wrap",borderTop:"1px solid rgba(0,242,254,0.08)",paddingTop:48,maxWidth:900,margin:"72px auto 0"}}>
+            {[
+              {v:'15s',  l:'DATA REFRESH',        col:K.c},
+              {v:'≥60%', l:'CONSENSUS THRESHOLD', col:K.g},
+              {v:'82%',  l:'AVG CONFIDENCE',      col:K.gold},
+              {v:'24/7', l:'NEVER STOPS',          col:K.pu},
+            ].map((s,i)=>(
+              <div key={i} style={{textAlign:"center",minWidth:120}}>
+                <div style={{fontSize:32,fontWeight:900,color:s.col,fontFamily:"monospace",textShadow:`0 0 24px ${s.col}88`}}>{s.v}</div>
+                <div style={{fontSize:9,color:K.dim,letterSpacing:".2em",marginTop:6}}>{s.l}</div>
               </div>
             ))}
           </div>
