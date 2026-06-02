@@ -1284,31 +1284,45 @@ function ProofSection() {
           </div>
         </Fade>
         <Fade delay={.15}>
-          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(320px,1fr))',gap:16}}>
-            {[1,2,3].map(i=>(
-              <div key={i} style={{background:'rgba(6,10,18,0.8)',border:'1px solid rgba(0,242,254,0.1)',borderRadius:12,overflow:'hidden',transition:'all .3s',cursor:'pointer'}}
-                onMouseEnter={e=>{(e.currentTarget as HTMLDivElement).style.borderColor='rgba(0,242,254,0.3)';(e.currentTarget as HTMLDivElement).style.transform='translateY(-4px)';(e.currentTarget as HTMLDivElement).style.boxShadow='0 12px 40px rgba(0,0,0,0.4)';}}
-                onMouseLeave={e=>{(e.currentTarget as HTMLDivElement).style.borderColor='rgba(0,242,254,0.1)';(e.currentTarget as HTMLDivElement).style.transform='translateY(0)';(e.currentTarget as HTMLDivElement).style.boxShadow='none';}}>
-                <div style={{width:'100%',aspectRatio:'16/10',background:'#060A12',display:'flex',alignItems:'center',justifyContent:'center',position:'relative',overflow:'hidden'}}>
-                  {activeTab==='trades'&&i===1
-                    ? <img src="/screenshots/trades-1.png" alt="KYMIA Live Trades" style={{width:'100%',display:'block',borderRadius:8}}/>
-                    : activeTab==='profile'&&i===1
-                    ? <img src="/screenshots/profile-1.png" alt="KYMIA Performance DNA Card" style={{width:'100%',display:'block',borderRadius:8,objectFit:'cover'}}/>
-                    : <div style={{textAlign:'center',color:'#0A1828',fontFamily:'monospace'}}>
-                        <div style={{fontSize:32,marginBottom:8}}>◌</div>
-                        <div style={{fontSize:10,letterSpacing:'.2em'}}>SCREENSHOT {i}</div>
-                        <div style={{fontSize:9,marginTop:4,opacity:.7}}>/public/screenshots/{activeTab}-{i}.png</div>
-                      </div>
-                  }
-                  <div style={{position:'absolute',inset:0,pointerEvents:'none',background:'repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,242,254,0.015) 3px,rgba(0,242,254,0.015) 4px)'}}/>
-                </div>
-                <div style={{padding:'12px 16px',display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:4}}>
-                  <span style={{fontSize:activeTab==='trades'&&i===1?9:10,color:K.dim,fontFamily:'monospace'}}>{cardLabel(activeTab,i)}</span>
-                  <span style={{fontSize:activeTab==='trades'&&i===1?9:10,color:activeTab==='losses'?K.r:K.g,fontFamily:'monospace',fontWeight:700}}>{cardVal(activeTab,i)}</span>
+          {activeTab==='trades'
+            ? <div style={{display:'grid',gridTemplateColumns:'1fr',gap:16}}>
+                <div style={{background:'rgba(6,10,18,0.8)',border:'1px solid rgba(0,242,254,0.1)',borderRadius:12,overflow:'hidden',transition:'all .3s',cursor:'pointer'}}
+                  onMouseEnter={e=>{(e.currentTarget as HTMLDivElement).style.borderColor='rgba(0,242,254,0.3)';(e.currentTarget as HTMLDivElement).style.boxShadow='0 12px 40px rgba(0,0,0,0.4)';}}
+                  onMouseLeave={e=>{(e.currentTarget as HTMLDivElement).style.borderColor='rgba(0,242,254,0.1)';(e.currentTarget as HTMLDivElement).style.boxShadow='none';}}>
+                  <div style={{background:'#060A12',border:'1px solid rgba(0,242,254,0.15)',borderRadius:8,overflow:'hidden',position:'relative'}}>
+                    <img src="/screenshots/trades-1.png" alt="KYMIA Live Trades — 4 simultaneous positions" style={{width:'100%',display:'block',objectFit:'contain',objectPosition:'top',maxHeight:'none',height:'auto'}}/>
+                    <div style={{position:'absolute',inset:0,pointerEvents:'none',background:'repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,242,254,0.012) 3px,rgba(0,242,254,0.012) 4px)'}}/>
+                  </div>
+                  <div style={{padding:'12px 16px',display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:4}}>
+                    <span style={{fontSize:9,color:K.dim,fontFamily:'monospace'}}>{cardLabel('trades',1)}</span>
+                    <span style={{fontSize:9,color:K.g,fontFamily:'monospace',fontWeight:700}}>{cardVal('trades',1)}</span>
+                  </div>
                 </div>
               </div>
-            ))}
-          </div>
+            : <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(320px,1fr))',gap:16}}>
+                {[1,2,3].map(i=>(
+                  <div key={i} style={{background:'rgba(6,10,18,0.8)',border:'1px solid rgba(0,242,254,0.1)',borderRadius:12,overflow:'hidden',transition:'all .3s',cursor:'pointer'}}
+                    onMouseEnter={e=>{(e.currentTarget as HTMLDivElement).style.borderColor='rgba(0,242,254,0.3)';(e.currentTarget as HTMLDivElement).style.transform='translateY(-4px)';(e.currentTarget as HTMLDivElement).style.boxShadow='0 12px 40px rgba(0,0,0,0.4)';}}
+                    onMouseLeave={e=>{(e.currentTarget as HTMLDivElement).style.borderColor='rgba(0,242,254,0.1)';(e.currentTarget as HTMLDivElement).style.transform='translateY(0)';(e.currentTarget as HTMLDivElement).style.boxShadow='none';}}>
+                    <div style={{width:'100%',aspectRatio:'16/10',background:'#060A12',display:'flex',alignItems:'center',justifyContent:'center',position:'relative',overflow:'hidden'}}>
+                      {activeTab==='profile'&&i===1
+                        ? <img src="/screenshots/profile-1.png" alt="KYMIA Performance DNA Card" style={{width:'100%',display:'block',borderRadius:8,objectFit:'cover'}}/>
+                        : <div style={{textAlign:'center',color:'#0A1828',fontFamily:'monospace'}}>
+                            <div style={{fontSize:32,marginBottom:8}}>◌</div>
+                            <div style={{fontSize:10,letterSpacing:'.2em'}}>SCREENSHOT {i}</div>
+                            <div style={{fontSize:9,marginTop:4,opacity:.7}}>/public/screenshots/{activeTab}-{i}.png</div>
+                          </div>
+                      }
+                      <div style={{position:'absolute',inset:0,pointerEvents:'none',background:'repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,242,254,0.015) 3px,rgba(0,242,254,0.015) 4px)'}}/>
+                    </div>
+                    <div style={{padding:'12px 16px',display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:4}}>
+                      <span style={{fontSize:10,color:K.dim,fontFamily:'monospace'}}>{cardLabel(activeTab,i)}</span>
+                      <span style={{fontSize:10,color:activeTab==='losses'?K.r:K.g,fontFamily:'monospace',fontWeight:700}}>{cardVal(activeTab,i)}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+          }
         </Fade>
         <Fade delay={.2}>
           <div style={{marginTop:24,display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))',gap:8}}>
