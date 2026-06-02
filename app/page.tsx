@@ -1275,11 +1275,14 @@ function ProofSection() {
                 onMouseEnter={e=>{(e.currentTarget as HTMLDivElement).style.borderColor='rgba(0,242,254,0.3)';(e.currentTarget as HTMLDivElement).style.transform='translateY(-4px)';(e.currentTarget as HTMLDivElement).style.boxShadow='0 12px 40px rgba(0,0,0,0.4)';}}
                 onMouseLeave={e=>{(e.currentTarget as HTMLDivElement).style.borderColor='rgba(0,242,254,0.1)';(e.currentTarget as HTMLDivElement).style.transform='translateY(0)';(e.currentTarget as HTMLDivElement).style.boxShadow='none';}}>
                 <div style={{width:'100%',aspectRatio:'16/10',background:'#060A12',display:'flex',alignItems:'center',justifyContent:'center',position:'relative',overflow:'hidden'}}>
-                  <div style={{textAlign:'center',color:'#0A1828',fontFamily:'monospace'}}>
-                    <div style={{fontSize:32,marginBottom:8}}>◌</div>
-                    <div style={{fontSize:10,letterSpacing:'.2em'}}>SCREENSHOT {i}</div>
-                    <div style={{fontSize:9,marginTop:4,opacity:.7}}>/public/screenshots/{activeTab}-{i}.png</div>
-                  </div>
+                  {activeTab==='profile'&&i===1
+                    ? <img src="/screenshots/profile-1.png" alt="KYMIA Performance DNA Card" style={{width:'100%',display:'block',borderRadius:8,objectFit:'cover'}}/>
+                    : <div style={{textAlign:'center',color:'#0A1828',fontFamily:'monospace'}}>
+                        <div style={{fontSize:32,marginBottom:8}}>◌</div>
+                        <div style={{fontSize:10,letterSpacing:'.2em'}}>SCREENSHOT {i}</div>
+                        <div style={{fontSize:9,marginTop:4,opacity:.7}}>/public/screenshots/{activeTab}-{i}.png</div>
+                      </div>
+                  }
                   <div style={{position:'absolute',inset:0,pointerEvents:'none',background:'repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,242,254,0.015) 3px,rgba(0,242,254,0.015) 4px)'}}/>
                 </div>
                 <div style={{padding:'12px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
@@ -1357,6 +1360,10 @@ function FounderSection() {
                   <div style={{fontSize:9,color:K.dim,letterSpacing:'.1em',marginTop:3}}>{l}</div>
                 </div>
               ))}
+            </div>
+            <div style={{marginBottom:24}}>
+              <div style={{fontSize:8,color:K.dim,fontFamily:'monospace',letterSpacing:'.2em',marginBottom:8}}>◈ TRADER DNA CARD</div>
+              <img src="/screenshots/profile-1.png" style={{width:'100%',borderRadius:8}} alt="KYMIA Performance DNA Card"/>
             </div>
             <a href="https://x.com/cbompemo_dev" target="_blank" rel="noopener"
               style={{display:'inline-flex',alignItems:'center',gap:10,padding:'12px 24px',background:'rgba(168,208,236,0.06)',border:'1px solid rgba(168,208,236,0.2)',borderRadius:8,textDecoration:'none'}}>
