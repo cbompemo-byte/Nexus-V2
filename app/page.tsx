@@ -1849,16 +1849,8 @@ export default function LandingPage() {
         <Fade><div style={{textAlign:"center",marginBottom:48}}><div style={{fontSize:11,color:K.c,letterSpacing:".3em"}}>◈ DISCOVER YOUR TRADING DNA</div></div></Fade>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:48,alignItems:"center"}}>
           <Fade delay={.1}>
-            <div style={{...PANEL,padding:28,borderColor:`${K.gold}30`,background:`linear-gradient(135deg,rgba(6,10,18,.9) 0%,rgba(255,215,0,.04) 100%)`}}>
-              <div style={{fontSize:10,color:K.c,letterSpacing:".2em",marginBottom:4}}>◈ KYMIA PERFORMANCE DNA</div>
-              <div style={{fontSize:9,color:K.gold,marginBottom:18}}>GOLD TIER · Score 74/100</div>
-              <div style={{fontSize:22,fontWeight:900,color:K.gold,marginBottom:20,textShadow:`0 0 16px ${K.gold}60`}}>"Momentum Predator"</div>
-              {[["WIN RATE","64%",K.g],["BEST TRADE","+$247",K.g],["TRADES","24",K.c]].map(([l,v,c],i)=>(
-                <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"7px 0",borderBottom:i<2?"1px solid rgba(0,242,254,0.06)":"none",fontSize:11}}>
-                  <span style={{color:K.dim}}>{l}</span><span style={{color:c as string,fontWeight:700}}>{v}</span>
-                </div>
-              ))}
-              <a href="/nexus?mode=demo" style={{display:"block",marginTop:20,padding:"10px",textAlign:"center",background:`${K.gold}15`,border:`1px solid ${K.gold}40`,color:K.gold,borderRadius:4,fontSize:10,textDecoration:"none",letterSpacing:".1em"}}>SHARE YOUR DNA →</a>
+            <div style={{border:'1px solid rgba(189,0,255,0.3)',borderRadius:12,overflow:'hidden',boxShadow:'0 0 40px rgba(189,0,255,0.08)'}}>
+              <img src="/screenshots/profile-1.png" alt="KYMIA Performance DNA — Momentum Predator" style={{width:'100%',display:'block',objectFit:'cover'}}/>
             </div>
           </Fade>
           <Fade delay={.2}>
