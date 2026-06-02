@@ -1247,8 +1247,23 @@ function ProofSection() {
     {id:'losses', label:'LOSSES',        icon:'▼'},
     {id:'chart',  label:'TA ANALYSIS',   icon:'⬡'},
   ];
-  const cardLabel=(tab:string,i:number)=>tab==='trades'?'▲ LONG SOL':tab==='profile'?'◈ TRADER DNA':tab==='losses'?'▼ LOSS CONTAINED':'⬡ TA SIGNALS';
-  const cardVal=(tab:string)=>tab==='losses'?'-$18.40':'+$47.83';
+  const cardLabel=(tab:string,i:number)=>{
+    if(tab==='trades') return i===1?'SOL LONG +$8.15 · JTO SHORT +$5.07 · WIF TRAIL +$42.31':'▲ LONG SOL';
+    if(tab==='profile') return '◈ TRADER DNA';
+    if(tab==='losses') return '▼ LOSS CONTAINED';
+    return '⬡ TA SIGNALS';
+  };
+  const cardVal=(tab:string,i:number)=>{
+    if(tab==='trades'&&i===1) return '4 simultaneous positions · LONG + SHORT active';
+    return tab==='losses'?'-$18.40':'+$47.83';
+  };
+  const PROOF_STATS=[
+    {text:'POPCAT +$67.06 in single trade',col:K.g},
+    {text:'WIF TRAIL +4.13% locked by trailing stop',col:K.g},
+    {text:'WHALE DETECTED: +12,400 SOL Binance outflow',col:K.c},
+    {text:'60s MILESTONE: Portfolio tracking active',col:K.gold},
+  ];
+  const TICKER_ITEMS='SOL +$8.15 · JUP -$16.77 · JTO SHORT +$5.07 · WIF TRAIL +$42.31 · POPCAT +$67.06 · SOL +$8.15 · JUP -$16.77 · JTO SHORT +$5.07 · WIF TRAIL +$42.31 · POPCAT +$67.06';
   return (
     <section style={{padding:'100px 40px',background:'#04060D',position:'relative',borderTop:'1px solid rgba(0,242,254,0.06)'}}>
       <div style={{maxWidth:1100,margin:'0 auto'}}>
@@ -1275,7 +1290,9 @@ function ProofSection() {
                 onMouseEnter={e=>{(e.currentTarget as HTMLDivElement).style.borderColor='rgba(0,242,254,0.3)';(e.currentTarget as HTMLDivElement).style.transform='translateY(-4px)';(e.currentTarget as HTMLDivElement).style.boxShadow='0 12px 40px rgba(0,0,0,0.4)';}}
                 onMouseLeave={e=>{(e.currentTarget as HTMLDivElement).style.borderColor='rgba(0,242,254,0.1)';(e.currentTarget as HTMLDivElement).style.transform='translateY(0)';(e.currentTarget as HTMLDivElement).style.boxShadow='none';}}>
                 <div style={{width:'100%',aspectRatio:'16/10',background:'#060A12',display:'flex',alignItems:'center',justifyContent:'center',position:'relative',overflow:'hidden'}}>
-                  {activeTab==='profile'&&i===1
+                  {activeTab==='trades'&&i===1
+                    ? <img src="/screenshots/trades-1.png" alt="KYMIA Live Trades" style={{width:'100%',display:'block',borderRadius:8}}/>
+                    : activeTab==='profile'&&i===1
                     ? <img src="/screenshots/profile-1.png" alt="KYMIA Performance DNA Card" style={{width:'100%',display:'block',borderRadius:8,objectFit:'cover'}}/>
                     : <div style={{textAlign:'center',color:'#0A1828',fontFamily:'monospace'}}>
                         <div style={{fontSize:32,marginBottom:8}}>◌</div>
@@ -1285,20 +1302,42 @@ function ProofSection() {
                   }
                   <div style={{position:'absolute',inset:0,pointerEvents:'none',background:'repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,242,254,0.015) 3px,rgba(0,242,254,0.015) 4px)'}}/>
                 </div>
-                <div style={{padding:'12px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-                  <span style={{fontSize:10,color:K.dim,fontFamily:'monospace'}}>{cardLabel(activeTab,i)}</span>
-                  <span style={{fontSize:10,color:activeTab==='losses'?K.r:K.g,fontFamily:'monospace',fontWeight:700}}>{cardVal(activeTab)}</span>
+                <div style={{padding:'12px 16px',display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:4}}>
+                  <span style={{fontSize:activeTab==='trades'&&i===1?9:10,color:K.dim,fontFamily:'monospace'}}>{cardLabel(activeTab,i)}</span>
+                  <span style={{fontSize:activeTab==='trades'&&i===1?9:10,color:activeTab==='losses'?K.r:K.g,fontFamily:'monospace',fontWeight:700}}>{cardVal(activeTab,i)}</span>
                 </div>
               </div>
             ))}
           </div>
         </Fade>
         <Fade delay={.2}>
-          <div style={{marginTop:24,padding:'14px 20px',background:'rgba(255,51,102,0.06)',border:'1px solid rgba(255,51,102,0.15)',borderRadius:6,textAlign:'center',fontSize:11,color:K.dim,fontFamily:'monospace',lineHeight:1.8}}>
-            ⚠ We show losses too — because real intelligence means knowing when to be wrong. &nbsp;<span style={{color:K.r}}>Loss rate: ~35% · Always contained by AEGIS risk engine.</span>
+          <div style={{marginTop:24,display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))',gap:8}}>
+            {PROOF_STATS.map((s,i)=>(
+              <div key={i} style={{padding:'10px 14px',background:'rgba(6,10,18,0.8)',border:`1px solid ${s.col}18`,borderLeft:`3px solid ${s.col}`,borderRadius:4,fontSize:10,color:s.col,fontFamily:'monospace',fontWeight:700}}>
+                {s.text}
+              </div>
+            ))}
+          </div>
+        </Fade>
+        <Fade delay={.22}>
+          <div style={{marginTop:16,overflow:'hidden',padding:'10px 0',background:'rgba(6,10,18,0.6)',border:'1px solid rgba(0,242,254,0.06)',borderRadius:6}}>
+            <div style={{display:'flex',whiteSpace:'nowrap',animation:'ticker 22s linear infinite',fontSize:10,fontFamily:'monospace',letterSpacing:'.08em'}}>
+              {[0,1].map(p=>(
+                <span key={p} style={{paddingRight:60}}>
+                  {TICKER_ITEMS.split(' · ').map((t,i)=>(
+                    <span key={i} style={{color:t.includes('-$')||t.includes('SHORT')?K.r:K.g,marginRight:32}}>{t}</span>
+                  ))}
+                </span>
+              ))}
+            </div>
           </div>
         </Fade>
         <Fade delay={.25}>
+          <div style={{marginTop:16,padding:'14px 20px',background:'rgba(255,51,102,0.06)',border:'1px solid rgba(255,51,102,0.15)',borderRadius:6,textAlign:'center',fontSize:11,color:K.dim,fontFamily:'monospace',lineHeight:1.8}}>
+            ⚠ We show losses too — because real intelligence means knowing when to be wrong. &nbsp;<span style={{color:K.r}}>Loss rate: ~35% · Always contained by AEGIS risk engine.</span>
+          </div>
+        </Fade>
+        <Fade delay={.3}>
           <TAProofSection/>
         </Fade>
       </div>
