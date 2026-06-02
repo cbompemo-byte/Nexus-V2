@@ -1284,45 +1284,124 @@ function ProofSection() {
           </div>
         </Fade>
         <Fade delay={.15}>
-          {activeTab==='trades'
-            ? <div style={{display:'grid',gridTemplateColumns:'1fr',gap:16}}>
-                <div style={{background:'rgba(6,10,18,0.8)',border:'1px solid rgba(0,242,254,0.1)',borderRadius:12,overflow:'hidden',transition:'all .3s',cursor:'pointer'}}
-                  onMouseEnter={e=>{(e.currentTarget as HTMLDivElement).style.borderColor='rgba(0,242,254,0.3)';(e.currentTarget as HTMLDivElement).style.boxShadow='0 12px 40px rgba(0,0,0,0.4)';}}
-                  onMouseLeave={e=>{(e.currentTarget as HTMLDivElement).style.borderColor='rgba(0,242,254,0.1)';(e.currentTarget as HTMLDivElement).style.boxShadow='none';}}>
-                  <div style={{background:'#060A12',border:'1px solid rgba(0,242,254,0.15)',borderRadius:8,overflow:'hidden',position:'relative'}}>
-                    <img src="/screenshots/trades-1.png" alt="KYMIA Live Trades — 4 simultaneous positions" style={{width:'100%',display:'block',objectFit:'contain',objectPosition:'top',maxHeight:'none',height:'auto'}}/>
-                    <div style={{position:'absolute',inset:0,pointerEvents:'none',background:'repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,242,254,0.012) 3px,rgba(0,242,254,0.012) 4px)'}}/>
+          {/* ── OPEN TRADES ── */}
+          {activeTab==='trades'&&(
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:24,alignItems:'start'}}>
+              {/* Left: screenshot in terminal frame */}
+              <div style={{background:'#060A12',border:'1px solid rgba(0,242,254,0.2)',borderRadius:10,overflow:'hidden'}}>
+                <div style={{background:'rgba(6,10,18,0.95)',borderBottom:'1px solid rgba(0,242,254,0.1)',padding:'8px 14px',display:'flex',alignItems:'center',gap:6}}>
+                  {['#FF3366','#FFD700','#00FF88'].map((c,i)=><div key={i} style={{width:8,height:8,borderRadius:'50%',background:c}}/>)}
+                  <span style={{flex:1,textAlign:'center',fontSize:9,color:K.dim,fontFamily:'monospace',letterSpacing:'.12em'}}>KYMIA · LIVE SESSION</span>
+                  <div style={{display:'flex',alignItems:'center',gap:4,padding:'2px 7px',background:'rgba(0,255,136,0.1)',border:'1px solid rgba(0,255,136,0.3)',borderRadius:10}}>
+                    <div style={{width:4,height:4,borderRadius:'50%',background:K.g,animation:'pu 1s infinite'}}/>
+                    <span style={{fontSize:7,color:K.g}}>LIVE</span>
                   </div>
-                  <div style={{padding:'12px 16px',display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:4}}>
-                    <span style={{fontSize:9,color:K.dim,fontFamily:'monospace'}}>{cardLabel('trades',1)}</span>
-                    <span style={{fontSize:9,color:K.g,fontFamily:'monospace',fontWeight:700}}>{cardVal('trades',1)}</span>
+                </div>
+                <div style={{position:'relative'}}>
+                  <img src="/screenshots/trades-1.png" alt="KYMIA Live Trades — 4 simultaneous positions" style={{width:'100%',display:'block',height:'auto'}}/>
+                  <div style={{position:'absolute',inset:0,pointerEvents:'none',background:'repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,242,254,0.012) 3px,rgba(0,242,254,0.012) 4px)'}}/>
+                </div>
+              </div>
+              {/* Right: position cards */}
+              <div style={{display:'flex',flexDirection:'column',gap:10}}>
+                <div style={{fontSize:9,color:K.dim,fontFamily:'monospace',letterSpacing:'.15em',marginBottom:4}}>◈ 4 SIMULTANEOUS POSITIONS · LONG + SHORT</div>
+                {([
+                  {sym:'SOL',dir:'▲ LONG', pnl:'+$8.15', col:K.g, note:'EMA9 × EMA21 crossover · Kelly 8%'},
+                  {sym:'JUP',dir:'▲ LONG', pnl:'-$16.77',col:K.r, note:'Stop-loss triggered at -2.5% · AEGIS protected'},
+                  {sym:'JTO',dir:'▼ SHORT',pnl:'+$5.07', col:K.g, note:'Funding rate +0.048% · Short squeeze setup'},
+                  {sym:'WIF',dir:'🔒 TRAIL',pnl:'+$42.31',col:K.g, note:'Trailing stop locked at +4.13% · Running'},
+                ] as {sym:string;dir:string;pnl:string;col:string;note:string}[]).map((p,i)=>(
+                  <div key={i} style={{padding:'12px 14px',background:'rgba(6,10,18,0.8)',border:`1px solid ${p.col}20`,borderLeft:`3px solid ${p.col}`,borderRadius:6}}>
+                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}}>
+                      <div style={{display:'flex',alignItems:'center',gap:8}}>
+                        <span style={{fontSize:13,fontWeight:900,color:'white',fontFamily:'monospace'}}>{p.sym}</span>
+                        <span style={{fontSize:9,color:p.col,fontFamily:'monospace',fontWeight:700}}>{p.dir}</span>
+                      </div>
+                      <span style={{fontSize:14,fontWeight:900,color:p.col,fontFamily:'monospace',textShadow:`0 0 10px ${p.col}60`}}>{p.pnl}</span>
+                    </div>
+                    <div style={{fontSize:9,color:K.dim,fontFamily:'monospace'}}>{p.note}</div>
+                  </div>
+                ))}
+                {/* POPCAT win card */}
+                <div style={{padding:'12px 14px',background:'linear-gradient(135deg,rgba(0,255,136,0.08),rgba(0,255,136,0.02))',border:`1px solid ${K.g}30`,borderRadius:6,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                  <div>
+                    <div style={{fontSize:9,color:K.dim,fontFamily:'monospace',marginBottom:3}}>◈ CLOSED · BEST TRADE</div>
+                    <div style={{fontSize:13,fontWeight:900,color:'white',fontFamily:'monospace'}}>POPCAT</div>
+                  </div>
+                  <div style={{textAlign:'right'}}>
+                    <div style={{fontSize:20,fontWeight:900,color:K.g,fontFamily:'monospace',textShadow:`0 0 16px ${K.g}`}}>+$67.06</div>
+                    <div style={{fontSize:8,color:K.g,fontFamily:'monospace',opacity:.7}}>TAKE PROFIT HIT</div>
                   </div>
                 </div>
               </div>
-            : <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(320px,1fr))',gap:16}}>
-                {[1,2,3].map(i=>(
-                  <div key={i} style={{background:'rgba(6,10,18,0.8)',border:'1px solid rgba(0,242,254,0.1)',borderRadius:12,overflow:'hidden',transition:'all .3s',cursor:'pointer'}}
-                    onMouseEnter={e=>{(e.currentTarget as HTMLDivElement).style.borderColor='rgba(0,242,254,0.3)';(e.currentTarget as HTMLDivElement).style.transform='translateY(-4px)';(e.currentTarget as HTMLDivElement).style.boxShadow='0 12px 40px rgba(0,0,0,0.4)';}}
-                    onMouseLeave={e=>{(e.currentTarget as HTMLDivElement).style.borderColor='rgba(0,242,254,0.1)';(e.currentTarget as HTMLDivElement).style.transform='translateY(0)';(e.currentTarget as HTMLDivElement).style.boxShadow='none';}}>
-                    <div style={{width:'100%',aspectRatio:'16/10',background:'#060A12',display:'flex',alignItems:'center',justifyContent:'center',position:'relative',overflow:'hidden'}}>
-                      {activeTab==='profile'&&i===1
-                        ? <img src="/screenshots/profile-1.png" alt="KYMIA Performance DNA Card" style={{width:'100%',display:'block',borderRadius:8,objectFit:'cover'}}/>
-                        : <div style={{textAlign:'center',color:'#0A1828',fontFamily:'monospace'}}>
-                            <div style={{fontSize:32,marginBottom:8}}>◌</div>
-                            <div style={{fontSize:10,letterSpacing:'.2em'}}>SCREENSHOT {i}</div>
-                            <div style={{fontSize:9,marginTop:4,opacity:.7}}>/public/screenshots/{activeTab}-{i}.png</div>
-                          </div>
-                      }
-                      <div style={{position:'absolute',inset:0,pointerEvents:'none',background:'repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,242,254,0.015) 3px,rgba(0,242,254,0.015) 4px)'}}/>
-                    </div>
-                    <div style={{padding:'12px 16px',display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:4}}>
-                      <span style={{fontSize:10,color:K.dim,fontFamily:'monospace'}}>{cardLabel(activeTab,i)}</span>
-                      <span style={{fontSize:10,color:activeTab==='losses'?K.r:K.g,fontFamily:'monospace',fontWeight:700}}>{cardVal(activeTab,i)}</span>
-                    </div>
+            </div>
+          )}
+
+          {/* ── TRADE PROFILE ── */}
+          {activeTab==='profile'&&(
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:24,alignItems:'start'}}>
+              {/* Left: DNA card screenshot */}
+              <div style={{border:'1px solid rgba(189,0,255,0.3)',borderRadius:10,overflow:'hidden',boxShadow:'0 0 40px rgba(189,0,255,0.08)'}}>
+                <img src="/screenshots/profile-1.png" alt="KYMIA Performance DNA — Momentum Predator" style={{width:'100%',display:'block',height:'auto'}}/>
+              </div>
+              {/* Right: explanation + stats */}
+              <div style={{display:'flex',flexDirection:'column',gap:16}}>
+                <div>
+                  <div style={{fontSize:9,color:K.gold,fontFamily:'monospace',letterSpacing:'.2em',marginBottom:6}}>◈ KYMIA PERFORMANCE DNA</div>
+                  <div style={{fontSize:9,color:K.gold,fontFamily:'monospace',marginBottom:12,opacity:.8}}>GOLD TIER · Score 74/100</div>
+                  <div style={{fontSize:28,fontWeight:900,color:K.gold,fontFamily:'monospace',textShadow:`0 0 20px ${K.gold}60`,marginBottom:16}}>"Momentum Predator"</div>
+                </div>
+                {([['WIN RATE','64%',K.g],['BEST TRADE','+$247',K.g],['AVG HOLD','8.4 min',K.c],['TRADES THIS SESSION','24',K.c],['AEGIS SCORE','98/100',K.g]] as [string,string,string][]).map(([l,v,c],i)=>(
+                  <div key={i} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 0',borderBottom:'1px solid rgba(0,242,254,0.06)',fontSize:11}}>
+                    <span style={{color:K.dim,fontFamily:'monospace'}}>{l}</span>
+                    <span style={{color:c,fontWeight:700,fontFamily:'monospace'}}>{v}</span>
                   </div>
                 ))}
+                <a href="/nexus?mode=demo" style={{display:'block',marginTop:8,padding:'11px',textAlign:'center',background:`${K.gold}15`,border:`1px solid ${K.gold}40`,color:K.gold,borderRadius:6,fontSize:10,textDecoration:'none',letterSpacing:'.1em',fontFamily:'monospace',fontWeight:700}}>
+                  ▶ GENERATE YOUR DNA →
+                </a>
               </div>
-          }
+            </div>
+          )}
+
+          {/* ── TA ANALYSIS ── */}
+          {activeTab==='chart'&&(
+            <div style={{background:'#060A12',border:'1px solid rgba(0,242,254,0.2)',borderRadius:10,overflow:'hidden'}}>
+              <div style={{background:'rgba(6,10,18,0.95)',borderBottom:'1px solid rgba(0,242,254,0.1)',padding:'8px 14px',display:'flex',alignItems:'center',gap:6}}>
+                {['#FF3366','#FFD700','#00FF88'].map((c,i)=><div key={i} style={{width:8,height:8,borderRadius:'50%',background:c}}/>)}
+                <span style={{flex:1,textAlign:'center',fontSize:9,color:K.dim,fontFamily:'monospace',letterSpacing:'.12em'}}>KYMIA · TRADINGVIEW · SOL/USD · 5m</span>
+                <span style={{fontSize:8,color:K.c,fontFamily:'monospace',padding:'2px 8px',border:'1px solid rgba(0,242,254,0.2)',borderRadius:4}}>BEFORE ENTRY @$81.22</span>
+              </div>
+              <div style={{position:'relative'}}>
+                <img src="/screenshots/chart-1.png" alt="KYMIA TradingView Analysis" style={{width:'100%',display:'block',height:'auto'}} onError={e=>(e.currentTarget.style.display='none')}/>
+                <div style={{position:'absolute',inset:0,pointerEvents:'none',background:'repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,242,254,0.012) 3px,rgba(0,242,254,0.012) 4px)'}}/>
+              </div>
+            </div>
+          )}
+
+          {/* ── LOSSES ── */}
+          {activeTab==='losses'&&(
+            <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(320px,1fr))',gap:16}}>
+              {[1,2,3].map(i=>(
+                <div key={i} style={{background:'rgba(6,10,18,0.8)',border:'1px solid rgba(0,242,254,0.1)',borderRadius:12,overflow:'hidden',transition:'all .3s',cursor:'pointer'}}
+                  onMouseEnter={e=>{(e.currentTarget as HTMLDivElement).style.borderColor='rgba(0,242,254,0.3)';(e.currentTarget as HTMLDivElement).style.transform='translateY(-4px)';(e.currentTarget as HTMLDivElement).style.boxShadow='0 12px 40px rgba(0,0,0,0.4)';}}
+                  onMouseLeave={e=>{(e.currentTarget as HTMLDivElement).style.borderColor='rgba(0,242,254,0.1)';(e.currentTarget as HTMLDivElement).style.transform='translateY(0)';(e.currentTarget as HTMLDivElement).style.boxShadow='none';}}>
+                  <div style={{width:'100%',aspectRatio:'16/10',background:'#060A12',display:'flex',alignItems:'center',justifyContent:'center',position:'relative',overflow:'hidden'}}>
+                    <div style={{textAlign:'center',color:'#0A1828',fontFamily:'monospace'}}>
+                      <div style={{fontSize:32,marginBottom:8}}>◌</div>
+                      <div style={{fontSize:10,letterSpacing:'.2em'}}>SCREENSHOT {i}</div>
+                      <div style={{fontSize:9,marginTop:4,opacity:.7}}>/public/screenshots/losses-{i}.png</div>
+                    </div>
+                    <div style={{position:'absolute',inset:0,pointerEvents:'none',background:'repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,242,254,0.015) 3px,rgba(0,242,254,0.015) 4px)'}}/>
+                  </div>
+                  <div style={{padding:'12px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                    <span style={{fontSize:10,color:K.dim,fontFamily:'monospace'}}>▼ LOSS CONTAINED</span>
+                    <span style={{fontSize:10,color:K.r,fontFamily:'monospace',fontWeight:700}}>-$18.40</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </Fade>
         <Fade delay={.2}>
           <div style={{marginTop:24,display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))',gap:8}}>
