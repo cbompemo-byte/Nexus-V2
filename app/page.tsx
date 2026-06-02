@@ -1133,6 +1133,111 @@ function GlobeDebateSection() {
   );
 }
 
+// ── TA Proof Section ─────────────────────────────────────────────────────────
+function TAProofSection() {
+  const [step,setStep]=useState(0);
+  const [revealed,setRevealed]=useState<number[]>([]);
+
+  useEffect(()=>{
+    const steps=[0,1,2,3,4,5];
+    steps.forEach((s,i)=>{setTimeout(()=>{setRevealed(r=>[...r,s]);setStep(s);},i*800);});
+    const iv=setInterval(()=>{
+      setRevealed([]);setStep(0);
+      steps.forEach((s,i)=>{setTimeout(()=>{setRevealed(r=>[...r,s]);setStep(s);},i*800);});
+    },12000);
+    return()=>clearInterval(iv);
+  },[]);
+
+  const STEPS=[
+    {agent:'LEVIATHAN',col:'#BD00FF',icon:'🐋',type:'WHALE PRESSURE',  finding:'Buy pressure = 62%',          detail:'→ ABOVE AVERAGE volume — breakout likely',       signal:'BUY',conf:88,src:'DexScreener on-chain flow'},
+    {agent:'SURGE',    col:'#00FF88',icon:'▲', type:'VOLUME ANALYSIS', finding:'24h Vol change = +6.0%',       detail:'→ ABOVE AVERAGE volume — breakout likely',       signal:'BUY',conf:74,src:'CoinGecko 24H volume'},
+    {agent:'LENS',     col:'#BD00FF',icon:'◎', type:'RSI SIGNAL',      finding:'RSI(14) = 38.2',               detail:'→ Oversold territory. Mean reversion likely.',   signal:'BUY',conf:82,src:'Kraken 1m candles'},
+    {agent:'RADAR',    col:'#00F2FE',icon:'◈', type:'EMA CROSSOVER',   finding:'EMA9 crossed above EMA21',     detail:'→ Bullish momentum confirmed on 5m chart',       signal:'BUY',conf:79,src:'Kraken 5m candles'},
+    {agent:'RAZOR',    col:'#FFD700',icon:'⚡', type:'MACD SIGNAL',     finding:'MACD bullish crossover',       detail:'→ Momentum accelerating. RSI < 55.',             signal:'BUY',conf:76,src:'Kraken 1m MACD'},
+    {agent:'AEGIS',    col:'#FF3366',icon:'⛔', type:'RISK CHECK',      finding:'Kelly sizing: 8% @ 82% conf', detail:'→ All checks passed. EXECUTE.',                  signal:'BUY',conf:100,src:'Portfolio risk engine'},
+  ];
+  const LEVELS=[
+    {label:'ENTRY',       value:'$81.22',col:K.c,  desc:'Real Jupiter price at execution'},
+    {label:'STOP LOSS',   value:'$79.19',col:K.r,  desc:'-2.5% max loss protection'},
+    {label:'TAKE PROFIT', value:'$85.68',col:K.g,  desc:'+5.5% target return'},
+    {label:'TRAIL',       value:'$80.60',col:K.gold,desc:'Activated at +1.5% to lock gains'},
+  ];
+
+  return (
+    <div style={{marginTop:60}}>
+      <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:32}}>
+        <div style={{width:3,height:40,background:'linear-gradient(#00F2FE,#BD00FF)',borderRadius:2}}/>
+        <div>
+          <div style={{fontSize:10,color:K.c,letterSpacing:'.3em',fontFamily:'monospace',marginBottom:4}}>◈ WHAT THE AI SAW</div>
+          <div style={{fontSize:22,fontWeight:900,color:'white'}}>Every trade has a technical thesis.</div>
+        </div>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:24}}>
+        {/* LEFT — step reveal */}
+        <div>
+          <div style={{fontSize:10,color:K.dim,fontFamily:'monospace',marginBottom:14,letterSpacing:'.1em'}}>SOL/USD · 5m · BINANCE · BEFORE ENTRY @$81.22</div>
+          <div style={{display:'flex',flexDirection:'column',gap:8}}>
+            {STEPS.map((s,i)=>{
+              const on=revealed.includes(i);
+              return(
+                <div key={i} style={{padding:'12px 14px',background:on?`rgba(${s.signal==='BUY'?'0,255,136':'255,51,102'},0.05)`:'rgba(6,10,18,0.4)',border:`1px solid ${on?s.col+'30':'rgba(0,242,254,0.04)'}`,borderLeft:`3px solid ${on?s.col:'#0A1D33'}`,borderRadius:4,opacity:on?1:0.25,transform:on?'translateX(0)':'translateX(-8px)',transition:'all 0.4s ease'}}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:on?6:0}}>
+                    <div style={{display:'flex',alignItems:'center',gap:7}}>
+                      <span style={{fontSize:12}}>{s.icon}</span>
+                      <span style={{fontSize:10,color:s.col,fontWeight:700,fontFamily:'monospace'}}>{s.agent}</span>
+                      <span style={{fontSize:8,color:K.dim,fontFamily:'monospace'}}>{s.type}</span>
+                    </div>
+                    <span style={{padding:'2px 7px',background:`${s.signal==='BUY'?K.g:K.r}20`,color:s.signal==='BUY'?K.g:K.r,border:`1px solid ${s.signal==='BUY'?K.g+'40':K.r+'40'}`,borderRadius:2,fontSize:8,fontFamily:'monospace',fontWeight:700}}>{s.signal} {s.conf}%</span>
+                  </div>
+                  {on&&(<>
+                    <div style={{fontSize:12,color:K.hi,fontFamily:'monospace',fontWeight:700,marginBottom:2}}>{s.finding}</div>
+                    <div style={{fontSize:10,color:K.dim,fontFamily:'monospace'}}>{s.detail}</div>
+                    <div style={{fontSize:8,color:s.col,opacity:.5,marginTop:4,fontFamily:'monospace'}}>Source: {s.src}</div>
+                  </>)}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        {/* RIGHT — chart + levels + comparison */}
+        <div style={{display:'flex',flexDirection:'column',gap:16}}>
+          <div style={{background:'#060A12',border:'1px solid rgba(0,242,254,0.15)',borderRadius:8,overflow:'hidden',position:'relative'}}>
+            <img src="/screenshots/chart-1.png" alt="KYMIA TradingView Analysis" style={{width:'100%',display:'block',objectFit:'cover'}} onError={e=>(e.currentTarget.style.display='none')}/>
+            <div style={{padding:'40px 20px',display:'flex',alignItems:'center',justifyContent:'center',flexDirection:'column',gap:8}}>
+              <div style={{fontSize:24}}>📊</div>
+              <div style={{fontSize:10,color:'#0A1828',fontFamily:'monospace',textAlign:'center'}}>TRADINGVIEW CHART<br/>Add: /public/screenshots/chart-1.png</div>
+            </div>
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+            {LEVELS.map((lv,i)=>(
+              <div key={i} style={{padding:'10px 12px',background:'rgba(4,6,13,0.9)',border:`1px solid ${lv.col}20`,borderLeft:`3px solid ${lv.col}`,borderRadius:4}}>
+                <div style={{fontSize:8,color:K.dim,fontFamily:'monospace',marginBottom:3}}>{lv.label}</div>
+                <div style={{fontSize:16,fontWeight:900,color:lv.col,fontFamily:'monospace',textShadow:`0 0 10px ${lv.col}`,marginBottom:3}}>{lv.value}</div>
+                <div style={{fontSize:8,color:'#1A3050',fontFamily:'monospace'}}>{lv.desc}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{padding:16,background:'rgba(4,6,13,0.9)',border:'1px solid rgba(0,242,254,0.08)',borderRadius:6}}>
+            <div style={{fontSize:9,color:K.dim,fontFamily:'monospace',letterSpacing:'.15em',marginBottom:12}}>KYMIA vs HUMAN ANALYST</div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+              {([{side:'HUMAN',col:K.dim,items:['1-2 indicators','30-60s decision','Emotional bias','Misses whale data']},{side:'KYMIA',col:K.c,items:['17 indicators','15s decision','Zero emotion','On-chain + CEX data']}] as {side:string;col:string;items:string[]}[]).map((c,i)=>(
+                <div key={i}>
+                  <div style={{fontSize:9,color:c.col,fontFamily:'monospace',fontWeight:700,marginBottom:6,letterSpacing:'.1em'}}>{c.side}</div>
+                  {c.items.map((item,j)=>(
+                    <div key={j} style={{display:'flex',alignItems:'center',gap:5,marginBottom:4,fontSize:10,color:K.dim}}>
+                      <span style={{color:i===1?K.g:'#FF336660',fontSize:10}}>{i===1?'✓':'✗'}</span>{item}
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Proof Section ────────────────────────────────────────────────────────────
 function ProofSection() {
   const [activeTab,setActiveTab]=useState('trades');
@@ -1189,6 +1294,9 @@ function ProofSection() {
           <div style={{marginTop:24,padding:'14px 20px',background:'rgba(255,51,102,0.06)',border:'1px solid rgba(255,51,102,0.15)',borderRadius:6,textAlign:'center',fontSize:11,color:K.dim,fontFamily:'monospace',lineHeight:1.8}}>
             ⚠ We show losses too — because real intelligence means knowing when to be wrong. &nbsp;<span style={{color:K.r}}>Loss rate: ~35% · Always contained by AEGIS risk engine.</span>
           </div>
+        </Fade>
+        <Fade delay={.25}>
+          <TAProofSection/>
         </Fade>
       </div>
     </section>
