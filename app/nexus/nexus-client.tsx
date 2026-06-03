@@ -45,7 +45,7 @@ const getStop=(pos:{avg:number,peak?:number},cur:number):number=>{
   if(pct>=5)return(pos.peak||cur)*0.99;
   if(pct>=3)return(pos.peak||cur)*0.985;
   if(pct>=1.5)return pos.avg;
-  return pos.avg*0.975;
+  return pos.avg*0.982; // tightened: -1.8% (was -2.5%)
 };
 const CORRELATED:{[k:string]:string[]}={
   SOL:["JUP","RAY","ORCA","JTO","DRIFT"],BTC:["ETH"],ETH:["BTC"],
@@ -62,8 +62,8 @@ const MISSIONS=[
 // ── Experienced Trader Rules ──────────────────────────────────────────────────
 const TRADER_RULES={
   peakHoursUTC:[[7,9],[13,17]] as [number,number][],
-  offPeakMinConf:72,
-  peakMinConf:55,
+  offPeakMinConf:75,          // raised from 72 → 75
+  peakMinConf:75,             // raised from 55 → 75 (was too loose)
   peakConfBoost:15,           // +15% confidence during peak hours
   loss2SizeMultiplier:0.60,   // 2 losses → -40% size
   loss3SizeMultiplier:0.40,   // 3 losses → -60% size + 5min pause
@@ -74,6 +74,8 @@ const TRADER_RULES={
   scaleInAddFrac:0.04,        // +4% when price confirms +1%
   scaleInTriggerPct:1.0,      // add at +1% gain
 };
+const CONSENSUS_THRESHOLD=0.72; // raised from 0.60 → 0.72
+const MIN_AGENTS_AGREE=3;       // at least 3 agents must signal same direction
 
 function isPeakHour():boolean{
   const h=new Date().getUTCHours();
@@ -652,8 +654,8 @@ function TradeModal({trade,position,agentSignals,onClose,onClosePosition}:{trade
   const sym=trade?.sym||position&&Object.keys(position).length?"SOL":"SOL";
   const [chartInterval,setChartInterval]=useState("5");
   const entry=trade?.price||position?.avg||0;
-  const sl=entry*0.975;
-  const tp=entry*1.055;
+  const sl=entry*0.982;  // tightened: -1.8% (was -2.5%)
+  const tp=entry*1.065;  // widened:   +6.5% (was +5.5%) → R:R 1:3.6
   const trailPrice=position?.peak?position.peak*0.988:null;
   // For live P&L we approximate from entry; real-time updates come via pricesRef but we don't have it here — show static entry-based badge
   const curPnL:number|null=null;
@@ -1700,6 +1702,84 @@ function PerformanceCard({trades,totalPnL,onClose}:{trades:Trade[],totalPnL:numb
   );
 }
 
+// ── Top 100 Scanner ───────────────────────────────────────────────────────────
+type Top100Coin={id:string;symbol:string;name:string;price:number;change1h:number;change24h:number;change7d:number;volume:number;marketCap:number;rank:number};
+type ScanOpportunity=Top100Coin&{score:number;reasons:string[];signal:string;confidence:number};
+
+const fetchTop100=async():Promise<Top100Coin[]>=>{
+  try{
+    const res=await fetch("https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=1&sparkline=false&price_change_percentage=1h,24h,7d");
+    const data=await res.json();
+    return data.map((c:any)=>({id:c.id,symbol:c.symbol.toUpperCase(),name:c.name,price:c.current_price,change1h:c.price_change_percentage_1h_in_currency||0,change24h:c.price_change_percentage_24h||0,change7d:c.price_change_percentage_7d_in_currency||0,volume:c.total_volume,marketCap:c.market_cap,rank:c.market_cap_rank}));
+  }catch{return [];}
+};
+
+const scanOpportunities=async():Promise<ScanOpportunity[]>=>{
+  const top100=await fetchTop100();
+  const opps:ScanOpportunity[]=[];
+  for(const coin of top100){
+    let score=0;const reasons:string[]=[];
+    if(coin.change1h>2.5){score+=30;reasons.push(`+${coin.change1h.toFixed(1)}% last hour`);}
+    if(coin.volume>coin.marketCap*0.08){score+=25;reasons.push(`Volume ${((coin.volume/coin.marketCap)*100).toFixed(0)}% of market cap`);}
+    if(coin.change7d<-10&&coin.change1h>1.5){score+=20;reasons.push("Recovery from 7d dip — reversal signal");}
+    if(coin.change1h>1&&coin.change24h>5){score+=15;reasons.push("Momentum building 1h + 24h");}
+    if(score>=50)opps.push({...coin,score,reasons,signal:score>=70?"STRONG BUY":"BUY",confidence:Math.min(95,50+score)});
+  }
+  return opps.sort((a,b)=>b.score-a.score).slice(0,10);
+};
+
+// ── Memecoin Confirm Modal ────────────────────────────────────────────────────
+type MemeToken={symbol:string;name:string;address?:string;price:number;priceChange1h:number;volume1h:number;liquidity:number;buyRatio:number;ageH:number;dexUrl?:string;rugScore:number;rugFlags:string[];txns1h:{buys:number;sells:number}};
+
+function MemeConfirmModal({token,onConfirm,onReject}:{token:MemeToken;onConfirm:()=>void;onReject:()=>void}){
+  const rugCol=token.rugScore>70?K.g:token.rugScore>40?K.gold:K.r;
+  const rugLabel=token.rugScore>70?"RELATIVELY SAFE":token.rugScore>40?"CAUTION":"HIGH RISK";
+  return(
+    <div style={{position:"fixed",inset:0,zIndex:700,background:"rgba(2,4,10,0.95)",backdropFilter:"blur(16px)",display:"flex",alignItems:"center",justifyContent:"center"}}>
+      <div style={{background:"#060A12",border:"2px solid rgba(255,215,0,0.3)",borderRadius:12,padding:28,width:420,boxShadow:"0 0 60px rgba(255,215,0,0.08)",fontFamily:"monospace"}}>
+        <div style={{fontSize:10,color:K.gold,letterSpacing:".3em",marginBottom:12}}>⚡ NEW MEMECOIN DETECTED</div>
+        <div style={{padding:"14px 16px",marginBottom:16,background:"rgba(255,215,0,0.05)",border:"1px solid rgba(255,215,0,0.15)",borderRadius:8}}>
+          <div style={{display:"flex",justifyContent:"space-between",marginBottom:12}}>
+            <div>
+              <div style={{fontSize:22,fontWeight:900,color:K.gold}}>{token.symbol}</div>
+              <div style={{fontSize:11,color:K.dim}}>{token.name}</div>
+            </div>
+            <div style={{textAlign:"right"}}>
+              <div style={{fontSize:18,fontWeight:700,color:K.g}}>+{token.priceChange1h?.toFixed(0)}%</div>
+              <div style={{fontSize:9,color:K.dim}}>last hour</div>
+            </div>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
+            {([["AGE",`${token.ageH}h old`,K.c],["LIQUIDITY",`$${(token.liquidity/1000).toFixed(0)}K`,K.hi],["BUY PRESSURE",`${token.buyRatio}%`,K.g],["VOL 1H",`$${(token.volume1h/1000).toFixed(0)}K`,K.hi],["BUYS 1H",`${token.txns1h?.buys||0}`,K.g],["SELLS 1H",`${token.txns1h?.sells||0}`,K.r]] as [string,string,string][]).map(([l,v,c],i)=>(
+              <div key={i} style={{padding:"6px 8px",background:"#04060D",borderRadius:4}}>
+                <div style={{fontSize:7,color:K.dim}}>{l}</div>
+                <div style={{fontSize:11,color:c,fontWeight:700}}>{v}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div style={{padding:"10px 14px",marginBottom:16,background:rugCol+"10",border:"1px solid "+rugCol+"30",borderRadius:6}}>
+          <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
+            <span style={{fontSize:10,color:K.dim}}>RUG SCORE</span>
+            <span style={{fontSize:12,color:rugCol,fontWeight:700}}>{token.rugScore}/100 — {rugLabel}</span>
+          </div>
+          {token.rugFlags.length>0&&<div style={{fontSize:9,color:K.r}}>⚠ {token.rugFlags.join(" · ")}</div>}
+        </div>
+        <div style={{padding:"10px 14px",marginBottom:20,background:"rgba(0,255,136,0.05)",border:"1px solid rgba(0,255,136,0.15)",borderRadius:6,fontSize:11,color:K.hi,fontStyle:"italic",lineHeight:1.6}}>
+          "LEVIATHAN + SURGE aligned: {token.buyRatio}% buy pressure with ${(token.volume1h/1000).toFixed(0)}K volume in 1H. Early momentum signal. HIGH RISK — small allocation only."
+        </div>
+        <div style={{fontSize:9,color:K.dim,marginBottom:16,textAlign:"center",lineHeight:1.6}}>
+          ⚠ Memecoins can lose 100% of value instantly.<br/>This is DEMO mode — virtual funds only.<br/>Max allocation: 3% of portfolio.
+        </div>
+        <div style={{display:"flex",gap:10}}>
+          <button onClick={onReject} style={{flex:1,padding:12,background:"transparent",color:K.dim,border:"1px solid #0A1D33",borderRadius:6,fontFamily:"monospace",fontSize:11,cursor:"pointer"}}>SKIP</button>
+          <button onClick={onConfirm} style={{flex:2,padding:12,background:"rgba(255,215,0,0.12)",color:K.gold,border:"2px solid rgba(255,215,0,0.4)",borderRadius:6,fontFamily:"monospace",fontSize:12,fontWeight:700,cursor:"pointer",boxShadow:"0 0 16px rgba(255,215,0,0.15)",letterSpacing:".08em"}}>⚡ BUY {token.symbol} — 3%</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function KYMIA({isLive=false}:{isLive?:boolean}){
   const prices=usePrices();
   const pricesRef=useRef(prices);
@@ -1744,6 +1824,10 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   const [beatResult,setBeatResult]=useState<string|null>(null);
   const [newTokens,setNewTokens]=useState<NewToken[]>([]);
   const [scannerLoading,setScannerLoading]=useState(false);
+  const [scannerSubTab,setScannerSubTab]=useState<"new"|"top100">("new");
+  const [top100Opps,setTop100Opps]=useState<ScanOpportunity[]>([]);
+  const [top100Loading,setTop100Loading]=useState(false);
+  const [memeAlert,setMemeAlert]=useState<MemeToken|null>(null);
   const [dataStatus,setDataStatus]=useState<DataStatus>({jupiter:"loading",binance:"loading",coingecko:"loading",lastUpdate:0});
   const [chartTrade,setChartTrade]=useState<{trade:Trade|null,position:Position|null,agentSignals?:AgentSignals}|null>(null);
   const [confirmClose,setConfirmClose]=useState<string|null>(null);
@@ -2064,10 +2148,14 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
       const sellPct=totalW>0?sellW/totalW:0;
       const dir=buyPct>=sellPct?"BUY":"SELL";
       const agreePct=dir==="BUY"?buyPct:sellPct;
-      const sig=agreePct>=0.60?dir:"HOLD";
+      // Count agents explicitly agreeing (not just weighted)
+      const buyAgents=active.filter(ag=>ag.sig==="BUY").length;
+      const sellAgents=active.filter(ag=>ag.sig==="SELL").length;
+      const agreeCount=dir==="BUY"?buyAgents:sellAgents;
+      const sig=(agreePct>=CONSENSUS_THRESHOLD&&agreeCount>=MIN_AGENTS_AGREE)?dir:"HOLD";
       const conf=Math.round(agreePct*100);
-      console.log("[CONSENSUS] active="+active.length+" BUY="+Math.round(buyPct*100)+"% SELL="+Math.round(sellPct*100)+"% agree="+Math.round(agreePct*100)+"% → SIG:"+sig+" CONF:"+conf);
-      updates["consensus"]={sig,conf,real:true,on:true,th:`${active.length}/17 agents reporting\nBUY weight: ${Math.round(buyPct*100)}% | SELL: ${Math.round(sellPct*100)}%\nAgreement: ${Math.round(agreePct*100)}%\n${sig==="HOLD"?"No consensus (need 60%+)":dir+" consensus confirmed"}`};
+      console.log("[CONSENSUS] active="+active.length+" BUY="+Math.round(buyPct*100)+"% SELL="+Math.round(sellPct*100)+"% agree="+Math.round(agreePct*100)+"% agents="+agreeCount+" → SIG:"+sig+" CONF:"+conf);
+      updates["consensus"]={sig,conf,real:true,on:true,th:`${active.length}/17 agents reporting\nBUY weight: ${Math.round(buyPct*100)}% | SELL: ${Math.round(sellPct*100)}%\nAgreement: ${Math.round(agreePct*100)}% (need 72%+)\nAgents aligned: ${agreeCount}/${active.length} (need ${MIN_AGENTS_AGREE}+)\n${sig==="HOLD"?"No consensus — threshold not met":dir+" consensus confirmed"}`};
     }catch(e){console.error("[CONSENSUS] FAILED",e);updates["consensus"]={real:false};}
 
     // Apply all updates + track last-active timestamps
@@ -2117,6 +2205,56 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
     const iv=setInterval(scanNewTokens,60000);
     return()=>clearInterval(iv);
   },[scanNewTokens]);
+
+  // ── Top 100 opportunity scanner (60s) ────────────────────────────────────
+  useEffect(()=>{
+    const run=async()=>{
+      setTop100Loading(true);
+      const opps=await scanOpportunities();
+      setTop100Opps(opps);
+      setTop100Loading(false);
+      if(opps.length>0)log("SCANNER",`[SCANNER] Found ${opps.length} opportunities in top 100`,K.gold);
+    };
+    run();
+    const iv=setInterval(run,60000);
+    return()=>clearInterval(iv);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[]);
+
+  // ── Memecoin detector (3 min, only when running) ─────────────────────────
+  useEffect(()=>{
+    if(!running)return;
+    const scan=async()=>{
+      try{
+        const r=await fetch("/api/dexscreener?type=new-tokens");
+        const d=await r.json();
+        const pairs=d.pairs||[];
+        const fresh=pairs.filter((p:any)=>{
+          const ageH=(Date.now()-p.pairCreatedAt)/3600000;
+          return ageH<6&&(p.liquidity?.usd||0)>20000&&(p.volume?.h1||0)>5000;
+        }).sort((a:any,b:any)=>(b.volume?.h1||0)-(a.volume?.h1||0)).slice(0,5).map((p:any)=>{
+          const buys=p.txns?.h1?.buys||0,sells=p.txns?.h1?.sells||1;
+          const buyRatio=Math.round(buys/(buys+sells)*100);
+          let rugScore=100;const rugFlags:string[]=[];
+          if((p.liquidity?.usd||0)<50000){rugScore-=30;rugFlags.push("Low liquidity");}
+          if(buyRatio>85){rugScore-=25;rugFlags.push("Suspicious buy pressure");}
+          if(!p.info?.websites?.length){rugScore-=20;rugFlags.push("No website");}
+          return{symbol:p.baseToken?.symbol,name:p.baseToken?.name,address:p.baseToken?.address,price:parseFloat(p.priceUsd||"0"),priceChange1h:p.priceChange?.h1||0,volume1h:p.volume?.h1||0,liquidity:p.liquidity?.usd||0,buyRatio,ageH:Math.round((Date.now()-p.pairCreatedAt)/3600000),dexUrl:p.url,rugScore,rugFlags,txns1h:{buys,sells}};
+        });
+        if(fresh.length>0&&!memeAlert){
+          const best=fresh[0] as MemeToken;
+          if(best.rugScore>50&&best.buyRatio>60){
+            setMemeAlert(best);
+            log("LEVIATHAN",`🚨 NEW MEMECOIN: ${best.symbol} +${best.priceChange1h?.toFixed(0)}% | Rug: ${best.rugScore}/100`,K.gold);
+          }
+        }
+      }catch{}
+    };
+    scan();
+    const iv=setInterval(scan,180000);
+    return()=>clearInterval(iv);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[running]);
 
   // Demo burst: fire 3 trades quickly after start (SOL/JUP/WIF with named agents)
   useEffect(()=>{
@@ -2174,8 +2312,8 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
       const pct=isShort?((pos.avg-cur)/pos.avg)*100:((cur-pos.avg)/pos.avg)*100;
 
       if(isShort){
-        // SHORT: SL = entry*1.025, TP = entry*0.945
-        const sl=pos.avg*1.025,tp=pos.avg*0.945;
+        // SHORT: SL = entry*1.018 (-1.8% tighter), TP = entry*0.935 (+6.5% wider)
+        const sl=pos.avg*1.018,tp=pos.avg*0.935;
         // 4h expiry
         if(pos.entryMs&&now-pos.entryMs>4*60*60*1000){
           setPort(prev=>{const p2={...prev.pos};delete p2[sym];return{...prev,cash:prev.cash+pos.avg*pos.qty+pnl,pos:p2};});
@@ -2306,7 +2444,7 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
     },8000);
     const iv=setInterval(()=>{
       const cs=agStRef.current["consensus"];
-      if(!cs?.on||!cs.conf||cs.conf<45)return;
+      if(!cs?.on||!cs.conf||cs.conf<75)return; // raised floor from 45 → 75
       // Pick volatile non-stable token
       const allKeys=Object.keys(SYMS);
       const pool=allKeys.filter(sym=>{
@@ -2397,7 +2535,7 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
       }
       // SHORT: separate path — triggers on SELL consensus (≥55%) OR multi-TF SELL signal
       // Macro SHORT block: BTC up >4% blocks shorts
-      if((cs.sig==="SELL"&&(cs.conf||0)>=55)||sig.isSell){
+      if((cs.sig==="SELL"&&(cs.conf||0)>=72)||sig.isSell){ // raised from 55 → 72
         if(btcBullish){log("ATLAS","[ATLAS] ⚠ BTC macro bullish ("+fP(btcChange)+") — SHORT blocked",K.gold);}
         else{
           const shortSym=selectBestShort();
@@ -3186,12 +3324,17 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
 
       {tab==="scanner"&&(
         <div style={{flex:1,padding:10,overflow:"auto",display:"flex",flexDirection:"column",gap:8}}>
-          <div className="panel" style={{padding:"8px 12px",display:"flex",alignItems:"center",gap:10}}>
-            <span style={{fontSize:9,color:K.c,letterSpacing:".1em"}}>⊕ NEW TOKEN SCANNER</span>
-            <span style={{fontSize:8,color:K.dim}}>DexScreener · Solana · auto-refresh 60s</span>
-            <button className="btn" onClick={scanNewTokens} disabled={scannerLoading} style={{marginLeft:"auto",padding:"2px 10px",background:K.c+"10",color:K.c,border:"1px solid "+K.c+"30"}}>{scannerLoading?"⟳ SCANNING...":"↻ REFRESH"}</button>
+          {/* Sub-tab bar */}
+          <div className="panel" style={{padding:"6px 10px",display:"flex",alignItems:"center",gap:8}}>
+            {([["new","⊕ NEW TOKENS"],["top100","◈ TOP 100 SCAN"]] as [string,string][]).map(([v,l])=>(
+              <button key={v} onClick={()=>setScannerSubTab(v as "new"|"top100")} style={{padding:"4px 14px",background:scannerSubTab===v?K.c+"18":"transparent",border:scannerSubTab===v?"1px solid "+K.c+"40":"1px solid transparent",borderRadius:4,color:scannerSubTab===v?K.c:K.dim,fontSize:9,fontFamily:"monospace",cursor:"pointer",letterSpacing:".08em"}}>{l}</button>
+            ))}
+            <span style={{fontSize:8,color:K.dim,marginLeft:4}}>auto-refresh 60s</span>
+            <button className="btn" onClick={scannerSubTab==="new"?scanNewTokens:()=>{setTop100Loading(true);scanOpportunities().then(o=>{setTop100Opps(o);setTop100Loading(false);});}} style={{marginLeft:"auto",padding:"2px 10px",background:K.c+"10",color:K.c,border:"1px solid "+K.c+"30"}}>{(scannerLoading||top100Loading)?"⟳ SCANNING...":"↻ REFRESH"}</button>
           </div>
-          {newTokens.length===0
+
+          {/* NEW TOKENS sub-tab */}
+          {scannerSubTab==="new"&&(newTokens.length===0
             ?<div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",color:K.dim,fontSize:11}}>{scannerLoading?"Scanning DexScreener...":"No tokens loaded yet"}</div>
             :<div className="panel" style={{overflow:"auto",flex:1}}>
               <table style={{width:"100%",borderCollapse:"collapse"}}>
@@ -3227,7 +3370,48 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
                   })}
                 </tbody>
               </table>
-            </div>}
+            </div>
+          )}
+
+          {/* TOP 100 SCANNER sub-tab */}
+          {scannerSubTab==="top100"&&(
+            top100Loading&&top100Opps.length===0
+              ?<div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",color:K.dim,fontSize:11}}>⟳ Scanning top 100 by market cap...</div>
+              :top100Opps.length===0
+              ?<div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:8,color:K.dim,fontSize:11}}>
+                <div>No strong opportunities found in top 100 right now.</div>
+                <div style={{fontSize:9,color:K.dim}}>Threshold: score ≥ 50 · Checks: 1h momentum, volume surge, 7d recovery</div>
+              </div>
+              :<div style={{display:"flex",flexDirection:"column",gap:8}}>
+                <div style={{fontSize:8,color:K.dim,padding:"2px 0",letterSpacing:".1em"}}>◈ {top100Opps.length} OPPORTUNITIES DETECTED · SORTED BY SCORE</div>
+                {top100Opps.map((c,i)=>(
+                  <div key={c.id} className="panel" style={{padding:"10px 14px",borderColor:c.signal==="STRONG BUY"?K.g+"40":K.gold+"30",display:"flex",gap:12,alignItems:"center"}}>
+                    <div style={{fontSize:11,color:K.dim,fontFamily:"monospace",minWidth:20}}>#{c.rank}</div>
+                    <div style={{flex:1}}>
+                      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+                        <span style={{fontSize:12,fontWeight:900,color:K.c,fontFamily:"monospace"}}>{c.symbol}</span>
+                        <span style={{fontSize:8,color:K.dim}}>{c.name}</span>
+                        <span style={{padding:"1px 7px",background:c.signal==="STRONG BUY"?K.g+"20":K.gold+"20",color:c.signal==="STRONG BUY"?K.g:K.gold,border:"1px solid "+(c.signal==="STRONG BUY"?K.g+"40":K.gold+"40"),borderRadius:2,fontSize:8,fontFamily:"monospace",fontWeight:700}}>{c.signal}</span>
+                      </div>
+                      <div style={{display:"flex",gap:16,fontSize:9,marginBottom:4}}>
+                        <span style={{color:c.change1h>=0?K.g:K.r}}>1H {c.change1h>=0?"+":""}{c.change1h.toFixed(1)}%</span>
+                        <span style={{color:c.change24h>=0?K.g:K.r}}>24H {c.change24h>=0?"+":""}{c.change24h.toFixed(1)}%</span>
+                        <span style={{color:c.change7d>=0?K.g:K.r}}>7D {c.change7d>=0?"+":""}{c.change7d.toFixed(1)}%</span>
+                        <span style={{color:K.tx}}>${c.price>=1000?c.price.toLocaleString("en-US",{maximumFractionDigits:0}):c.price>=1?c.price.toFixed(2):c.price.toPrecision(4)}</span>
+                      </div>
+                      <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+                        {c.reasons.map((r,j)=><span key={j} style={{fontSize:8,color:K.dim,padding:"1px 6px",background:"#04060D",border:"1px solid #0A1D33",borderRadius:2}}>✓ {r}</span>)}
+                      </div>
+                    </div>
+                    <div style={{textAlign:"right",minWidth:56}}>
+                      <div style={{fontSize:14,fontWeight:900,color:c.signal==="STRONG BUY"?K.g:K.gold,fontFamily:"monospace",textShadow:`0 0 10px ${c.signal==="STRONG BUY"?K.g:K.gold}60`}}>{c.score}</div>
+                      <div style={{fontSize:7,color:K.dim,letterSpacing:".05em"}}>SCORE</div>
+                      <div style={{fontSize:9,color:K.tx,marginTop:2}}>{c.confidence}%</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+          )}
         </div>
       )}
 
@@ -3311,6 +3495,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
 
       {/* Trade Chart Modal */}
       {missionCelebration&&<MissionComplete mission={missionCelebration} onDismiss={()=>setMissionCelebration(null)}/>}
+      {memeAlert&&<MemeConfirmModal token={memeAlert} onConfirm={()=>{const p=pricesRef.current[memeAlert.symbol];if(p){const alloc=portRef.current.cash*0.03;const qty=alloc/p.price;setPort(prev=>{if(prev.pos[memeAlert.symbol])return prev;return{...prev,cash:prev.cash-alloc,pos:{...prev.pos,[memeAlert.symbol]:{qty,avg:p.price,entryMs:Date.now(),side:"LONG",scaledIn:false}}};});setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym:memeAlert.symbol,side:"BUY",qty,price:p.price,pnl:0,conf:memeAlert.rugScore,t:ts(),ms:Date.now(),agent:"LEVIATHAN",reason:`Memecoin: ${memeAlert.rugFlags[0]||"Early momentum"}`},...t.slice(0,99)]);log("EXEC",`⚡ MEMECOIN ${memeAlert.symbol} @ ${fPrice(p.price)} — 3% alloc`,K.gold);}setMemeAlert(null);}} onReject={()=>{log("USER",`⏭ Skipped ${memeAlert.symbol}`,K.dim);setMemeAlert(null);}}/>}
 
       {chartTrade&&<TradeModal
         trade={chartTrade.trade}
