@@ -593,6 +593,7 @@ function Nav() {
         ))}
       </div>
       <div style={{display:"flex",gap:8}}>
+        <a href="/leaderboard" style={{padding:"5px 14px",background:"rgba(255,215,0,0.08)",border:"1px solid rgba(255,215,0,0.3)",color:"#FFD700",fontSize:9,borderRadius:3,textDecoration:"none",letterSpacing:".1em",fontFamily:F}}>🏆 LEADERBOARD</a>
         <a href="/nexus?mode=demo" style={{padding:"5px 14px",background:"rgba(0,255,136,0.12)",border:"1px solid rgba(0,255,136,0.4)",color:K.g,fontSize:9,borderRadius:3,textDecoration:"none",letterSpacing:".1em",fontFamily:F}}>▶ FREE DEMO</a>
         <a href="/nexus?mode=live" style={{padding:"5px 14px",background:"rgba(0,242,254,0.12)",border:"1px solid rgba(0,242,254,0.4)",color:K.c,fontSize:9,borderRadius:3,textDecoration:"none",letterSpacing:".1em",fontFamily:F}}>⚡ LIVE →</a>
       </div>

@@ -1780,6 +1780,45 @@ function MemeConfirmModal({token,onConfirm,onReject}:{token:MemeToken;onConfirm:
   );
 }
 
+// ── Market Regime Engine ─────────────────────────────────────────────────────
+type MarketRegime="BULL_TREND"|"BEAR_TREND"|"SIDEWAYS"|"VOLATILE";
+type RegimeState={regime:MarketRegime;confidence:number;reason:string};
+
+const detectMarketRegime=async():Promise<RegimeState>=>{
+  try{
+    const r=await fetch("/api/market?type=sma");
+    const d=await r.json();
+    const regime:string=d.regime??"neutral";
+    const sma50:number=d.sma50??0;
+    const sma200:number=d.sma200??1;
+    const dist=Math.abs((sma50-sma200)/sma200*100);
+    if(regime==="bull"&&dist>3)return{regime:"BULL_TREND",confidence:Math.min(95,65+dist*2),reason:`SMA50 +${dist.toFixed(1)}% above SMA200`};
+    if(regime==="bear"&&dist>3)return{regime:"BEAR_TREND",confidence:Math.min(95,65+dist*2),reason:`SMA50 ${dist.toFixed(1)}% below SMA200`};
+    if(dist<1)return{regime:"SIDEWAYS",confidence:70,reason:"SMA50/200 tightly converged"};
+    return{regime:"VOLATILE",confidence:60,reason:"Regime transitioning"};
+  }catch{return{regime:"SIDEWAYS",confidence:50,reason:"Data unavailable"};}
+};
+
+// ── Viral Card Modal ──────────────────────────────────────────────────────────
+function ViralCardModal({sym,pnl,pct,onClose}:{sym:string;pnl:number;pct:number;onClose:()=>void}){
+  const col=pnl>=0?K.g:K.r;
+  const tweet=`Just closed ${sym} for ${pnl>=0?"+":""}$${Math.abs(pnl).toFixed(0)} (${pct>=0?"+":""}${pct.toFixed(1)}%) with KYMIA AI! 🤖💰\n#KYMIA #CryptoTrading #AITrading\ntry.kymia.ai`;
+  return(
+    <div style={{position:"fixed",inset:0,zIndex:800,background:"rgba(2,4,10,0.97)",backdropFilter:"blur(20px)",display:"flex",alignItems:"center",justifyContent:"center"}} onClick={onClose}>
+      <div style={{background:"#060A12",border:`2px solid ${col}50`,borderRadius:16,padding:32,width:380,boxShadow:`0 0 80px ${col}20`,textAlign:"center",fontFamily:"monospace"}} onClick={e=>e.stopPropagation()}>
+        <div style={{fontSize:10,color:col,letterSpacing:".3em",marginBottom:16}}>⚡ WINNING TRADE CLOSED</div>
+        <div style={{fontSize:64,fontWeight:900,color:col,textShadow:`0 0 30px ${col}`,marginBottom:4}}>{pnl>=0?"+":"-"}${Math.abs(pnl).toFixed(0)}</div>
+        <div style={{fontSize:18,color:col,marginBottom:24}}>{pct>=0?"+":""}{pct.toFixed(1)}% · {sym}</div>
+        <div style={{padding:"12px 16px",background:`${col}08`,border:`1px solid ${col}25`,borderRadius:8,marginBottom:24,fontSize:10,color:K.hi,lineHeight:1.7,textAlign:"left",whiteSpace:"pre-line"}}>{tweet}</div>
+        <div style={{display:"flex",gap:10}}>
+          <button onClick={onClose} style={{flex:1,padding:12,background:"transparent",color:K.dim,border:"1px solid #0A1D33",borderRadius:6,fontFamily:"monospace",fontSize:11,cursor:"pointer"}}>CLOSE</button>
+          <button onClick={()=>{navigator.clipboard?.writeText(tweet);onClose();}} style={{flex:2,padding:12,background:`${col}15`,color:col,border:`2px solid ${col}40`,borderRadius:6,fontFamily:"monospace",fontSize:12,fontWeight:700,cursor:"pointer",letterSpacing:".08em"}}>🐦 COPY & SHARE</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function KYMIA({isLive=false}:{isLive?:boolean}){
   const prices=usePrices();
   const pricesRef=useRef(prices);
@@ -1828,6 +1867,8 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   const [top100Opps,setTop100Opps]=useState<ScanOpportunity[]>([]);
   const [top100Loading,setTop100Loading]=useState(false);
   const [memeAlert,setMemeAlert]=useState<MemeToken|null>(null);
+  const [marketRegime,setMarketRegime]=useState<RegimeState|null>(null);
+  const [viralCard,setViralCard]=useState<{sym:string;pnl:number;pct:number}|null>(null);
   const [dataStatus,setDataStatus]=useState<DataStatus>({jupiter:"loading",binance:"loading",coingecko:"loading",lastUpdate:0});
   const [chartTrade,setChartTrade]=useState<{trade:Trade|null,position:Position|null,agentSignals?:AgentSignals}|null>(null);
   const [confirmClose,setConfirmClose]=useState<string|null>(null);
@@ -1849,6 +1890,7 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   const swarmRef=useRef<HTMLDivElement>(null);
   const entropyRef=useRef(entropy);
   useEffect(()=>{entropyRef.current=entropy;},[entropy]);
+  const btcFlowRef=useRef<number>(0);
 
   // Keep completedMissions ref in sync for use inside effects
   useEffect(()=>{completedMissionsRef.current=completedMissions;},[completedMissions]);
@@ -2256,6 +2298,45 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[running]);
 
+  // ── Market Regime Engine (2 min cycle) ──────────────────────────────────────
+  useEffect(()=>{
+    const detect=async()=>{
+      const r=await detectMarketRegime();
+      setMarketRegime(prev=>{
+        if(prev&&prev.regime!==r.regime)log("ATLAS",`[REGIME] ${r.regime} — ${r.reason} (${r.confidence}% conf)`,r.regime==="BULL_TREND"?K.g:r.regime==="BEAR_TREND"?K.r:K.gold);
+        return r;
+      });
+    };
+    detect();
+    const iv=setInterval(detect,120000);
+    return()=>clearInterval(iv);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[]);
+
+  // ── Correlation Flow Tracker (BTC moves → alt prediction) ────────────────
+  useEffect(()=>{
+    if(!running)return;
+    const iv=setInterval(()=>{
+      const btcData=pricesRef.current["BTC"];
+      if(!btcData)return;
+      const cur=btcData.change;
+      const prev=btcFlowRef.current;
+      const delta=cur-prev;
+      btcFlowRef.current=cur;
+      if(Math.abs(delta)>1.8){
+        const isUp=delta>0;
+        const mag=Math.abs(delta).toFixed(1);
+        if(isUp){
+          setTimeout(()=>log("ATLAS",`[FLOW] BTC +${mag}% surge → alt momentum expected 2-4H. SURGE+LENS watching`,K.g),25000);
+        }else{
+          setTimeout(()=>log("ATLAS",`[FLOW] BTC -${mag}% drop → capital flight risk. AEGIS: tighten stops`,K.gold),15000);
+        }
+      }
+    },30000);
+    return()=>clearInterval(iv);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[running]);
+
   // Demo burst: fire 3 trades quickly after start (SOL/JUP/WIF with named agents)
   useEffect(()=>{
     if(!running)return;
@@ -2381,6 +2462,7 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
     const card:WinCard={id:Math.random().toString(36).slice(2),sym,pnl,pct,price,agent,t:ts(),origin};
     setWinCards(prev=>[...prev.slice(-1),card]);
     setTrades(t=>[{id:card.id,sym,side:"SELL",qty:0,price,pnl,conf:80,t:card.t,ms:Date.now(),agent,reason:reason||agent},...t.slice(0,99)]);
+    if(pnl>=50)setTimeout(()=>setViralCard({sym,pnl,pct}),800);
   };
 
   // Real-data agents — NEVER overwritten by simulation (only AEGIS remains sim)
@@ -2730,6 +2812,19 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
   const rc=(aiData?.regime as string||"").includes("BULL")?K.g:(aiData?.regime as string||"").includes("BEAR")?K.r:K.gold;
   const entropyCol=entropy<30?K.r:entropy>70?K.g:K.gold;
 
+  const generateWeeklyReport=()=>{
+    const cl=tradesRef.current.filter((t:Trade)=>t.pnl!==0);
+    const wins=cl.filter((t:Trade)=>t.pnl>0);
+    const losses=cl.filter((t:Trade)=>t.pnl<0);
+    const totalPnL=cl.reduce((s:number,t:Trade)=>s+t.pnl,0);
+    const wr=cl.length?Math.round(wins.length/cl.length*100):0;
+    const best=wins.length?Math.max(...wins.map((t:Trade)=>t.pnl)):0;
+    const worst=losses.length?Math.min(...losses.map((t:Trade)=>t.pnl)):0;
+    const report=`📊 KYMIA AI WEEKLY REPORT\n\nTrades: ${cl.length} | Win Rate: ${wr}%\nTotal P&L: ${totalPnL>=0?"+":""}$${Math.abs(totalPnL).toFixed(0)}\nBest trade: +$${best.toFixed(0)}${worst<0?`\nWorst trade: $${worst.toFixed(0)}`:""}\n\nPowered by KYMIA — 18 AI agents trading 24/7 🤖\n#KYMIA #AITrading #CryptoTrading\ntry.kymia.ai`;
+    navigator.clipboard?.writeText(report);
+    log("USER","📊 Weekly report copied to clipboard — paste to X/Twitter",K.c);
+  };
+
   const handleStart=()=>{
     setRunning(r=>{
       const next=!r;
@@ -2870,6 +2965,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
           </div>
           {(()=>{const nextM=MISSIONS.find(m=>!completedMissions.includes(m.id));if(!nextM)return null;const mp=Math.min(100,((port.equity-CAP)/CAP)/nextM.target*100);return(<div style={{display:"flex",alignItems:"center",gap:5,padding:"2px 8px",background:nextM.color+"10",border:`1px solid ${nextM.color}25`,borderRadius:2}}><span style={{fontSize:9,color:nextM.color}}>{nextM.icon}</span><div style={{width:52,height:3,background:"#06090F",borderRadius:2}}><div style={{height:"100%",borderRadius:2,background:nextM.color,width:mp+"%",transition:"width .5s",boxShadow:`0 0 6px ${nextM.color}`}}/></div><span style={{fontSize:8,color:"#2A5070"}}>{mp.toFixed(0)}%</span></div>);})()}
           {running&&<div style={{display:"flex",alignItems:"center",gap:4,padding:"2px 7px",background:K.g+"10",border:"1px solid "+K.g+"25",borderRadius:2}}><div style={{width:5,height:5,borderRadius:"50%",background:K.g,animation:"pu 1s infinite"}}/><span style={{fontSize:7,color:K.g,letterSpacing:".1em"}}>24/7</span></div>}
+          {marketRegime&&(()=>{const rc2=marketRegime.regime==="BULL_TREND"?K.g:marketRegime.regime==="BEAR_TREND"?K.r:K.gold;return(<div style={{display:"flex",alignItems:"center",gap:4,padding:"2px 8px",background:rc2+"18",border:"1px solid "+rc2+"40",borderRadius:2}}><div style={{width:5,height:5,borderRadius:"50%",background:rc2,animation:"pu 2s infinite"}}/><span style={{fontSize:8,color:rc2,fontWeight:700,letterSpacing:".08em"}}>{marketRegime.regime.replace("_"," ")}</span></div>);})()}
           {aiData&&<span style={{padding:"2px 7px",background:rc+"20",color:rc,border:"1px solid "+rc+"40",fontSize:9,borderRadius:2}}>{String(aiData.regime||"")}</span>}
         </div>
         <div style={{display:"flex",alignItems:"center",gap:8}}>
@@ -3482,6 +3578,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
                   <p style={{fontSize:11,color:K.hi,lineHeight:1.5,fontStyle:"italic"}}>&quot;{String(dnaData.aiVerdict||"")}&quot;</p>
                 </div>
                 <button className="btn" onClick={()=>{const txt=`My KYMIA DNA: ${dnaData.traderTitle} | ${dnaData.tier} | Score:${dnaData.score}/100 | "${dnaData.aiVerdict}"`;navigator.clipboard?.writeText(txt);}} style={{background:K.pu+"20",color:K.pu,border:"1px solid "+K.pu+"50",padding:"8px 20px",fontSize:10,width:"100%"}}>[ SHARE YOUR DNA ]</button>
+                <button className="btn" onClick={generateWeeklyReport} style={{background:K.c+"12",color:K.c,border:"1px solid "+K.c+"40",padding:"8px 20px",fontSize:10,width:"100%",marginTop:6}}>[ 📊 WEEKLY X REPORT ]</button>
               </div>
             )}
           </div>
@@ -3489,6 +3586,9 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
       )}
 
       {tab==="onchain"&&<OnChainTab/>}
+
+      {/* Viral Win Card */}
+      {viralCard&&<ViralCardModal sym={viralCard.sym} pnl={viralCard.pnl} pct={viralCard.pct} onClose={()=>setViralCard(null)}/>}
 
       {/* Performance Card Modal */}
       {modal==="share"&&<PerformanceCard trades={trades} totalPnL={totalPnL} onClose={()=>setModal(null)}/>}
