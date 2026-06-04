@@ -1,5 +1,6 @@
 "use client";
 import { useState, useEffect, useRef, useCallback, useLayoutEffect } from "react";
+import { useSearchParams } from "next/navigation";
 import { motion, useAnimationControls } from "framer-motion";
 import * as THREE from "three";
 
@@ -1894,7 +1895,19 @@ const get4HTrend=async(sym:string):Promise<"BULL"|"BEAR"|"NEUTRAL">=>{
   }catch{return"NEUTRAL";}
 };
 
+const PLAN_LIMITS={
+  sandbox:{maxDailyTrades:Infinity,liveTrading:false,perfFee:0},
+  alpha:{maxDailyTrades:5,liveTrading:true,bonusOnStreak:true,perfFee:0},
+  performance:{maxDailyTrades:10,liveTrading:true,perfFee:0.10},
+  institutional:{maxDailyTrades:Infinity,liveTrading:true,perfFee:0},
+} as const;
+type PlanKey=keyof typeof PLAN_LIMITS;
+
 export default function KYMIA({isLive=false}:{isLive?:boolean}){
+  const searchParams=useSearchParams();
+  const plan=(searchParams.get("plan")||"sandbox") as PlanKey;
+  const planLimits=PLAN_LIMITS[plan]??PLAN_LIMITS.sandbox;
+
   const prices=usePrices();
   const pricesRef=useRef(prices);
   useEffect(()=>{pricesRef.current=prices;},[prices]);
@@ -3074,6 +3087,10 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
           <a href={isLive?"/nexus?mode=demo":"/nexus?mode=live"} style={{padding:"3px 9px",fontSize:9,background:"transparent",color:K.dim,border:"1px solid #0A1D33",borderRadius:2,textDecoration:"none",cursor:"pointer",letterSpacing:".06em"}}>
             {isLive?"→ DEMO":"→ LIVE"}
           </a>
+          {(()=>{
+            const pc=plan==="alpha"?K.c:plan==="performance"?K.gold:plan==="institutional"?K.pu:K.g;
+            return(<div style={{padding:"2px 9px",background:`${pc}12`,border:`1px solid ${pc}35`,borderRadius:2,fontSize:8,color:pc,letterSpacing:".12em",fontWeight:700}}>◈ {plan.toUpperCase()}</div>);
+          })()}
           <div style={{display:"flex",alignItems:"center",gap:4,padding:"2px 7px",background:K.c+"10",border:"1px solid "+K.c+"25",borderRadius:2}}>
             <span style={{fontSize:9,fontWeight:700,color:K.c}}>{SYM_COUNT}</span>
             <span style={{fontSize:7,color:K.dim,letterSpacing:".08em"}}>MARKETS</span>

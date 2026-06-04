@@ -587,7 +587,7 @@ function Nav() {
     <div style={{position:"fixed",top:0,left:0,right:0,zIndex:900,height:52,display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 32px",background:"rgba(4,6,13,0.92)",backdropFilter:"blur(16px)",borderBottom:"1px solid rgba(0,242,254,0.08)",fontFamily:F,transform:show?"translateY(0)":"translateY(-100%)",transition:"transform .3s ease"}}>
       <a href="/" style={{fontSize:15,fontWeight:900,color:K.c,textDecoration:"none",letterSpacing:".2em",textShadow:`0 0 16px ${K.c}`}}>◈ KYMIA</a>
       <div style={{display:"flex",gap:28,fontSize:10,color:K.dim,letterSpacing:".1em"}}>
-        {[["HOW IT WORKS","#how"],["DATA","#data"],["PERFORMANCE","#perf"],["CRISIS","#crisis"]].map(([l,h])=>(
+        {[["HOW IT WORKS","#how"],["DATA","#data"],["PERFORMANCE","#perf"],["PRICING","/pricing"],["CRISIS","#crisis"]].map(([l,h])=>(
           <a key={l} href={h} style={{color:K.dim,textDecoration:"none",transition:"color .2s"}}
             onMouseEnter={e=>(e.currentTarget.style.color=K.c)} onMouseLeave={e=>(e.currentTarget.style.color=K.dim)}>{l}</a>
         ))}
@@ -1589,6 +1589,35 @@ function DisclaimerSection() {
 }
 
 // ── Footer ────────────────────────────────────────────────────────────────────
+function PricingPreview() {
+  const MINI_PLANS=[
+    {name:"SANDBOX",price:"Free",col:K.g,cta:"Start Now",link:"/nexus?mode=demo"},
+    {name:"ALPHA",price:"$39.99/mo",col:K.c,cta:"7 Days Free",link:"/nexus?mode=live&plan=alpha",popular:true},
+    {name:"PERFORMANCE",price:"10% wins",col:K.gold,cta:"7 Days Free",link:"/nexus?mode=live&plan=performance"},
+    {name:"INSTITUTIONAL",price:"$499/mo",col:"#BD00FF",cta:"Contact Us",link:"mailto:contact@kymia.ai"},
+  ];
+  return(
+    <section style={{padding:"80px 40px",background:"rgba(6,10,18,0.4)",borderTop:"1px solid rgba(0,242,254,0.06)"}}>
+      <div style={{maxWidth:920,margin:"0 auto",textAlign:"center"}}>
+        <div style={{fontSize:10,color:K.c,letterSpacing:".4em",marginBottom:12,fontFamily:F}}>◈ PRICING</div>
+        <h2 style={{fontSize:34,fontWeight:900,color:"white",margin:"0 0 12px",fontFamily:F,lineHeight:1.2}}>Free to start. Fair to scale.</h2>
+        <p style={{fontSize:14,color:K.dim,lineHeight:1.85,marginBottom:40}}>Sandbox is always free. Pay only when you go live.</p>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:32}}>
+          {MINI_PLANS.map((p,i)=>(
+            <div key={i} style={{padding:"22px 16px",background:p.popular?"rgba(0,242,254,0.06)":"rgba(6,10,18,0.8)",border:`1px solid ${p.popular?"rgba(0,242,254,0.3)":p.col+"25"}`,borderRadius:10,textAlign:"center",boxShadow:p.popular?"0 0 32px rgba(0,242,254,0.08)":"none",position:"relative"}}>
+              {p.popular&&<div style={{position:"absolute",top:-11,left:"50%",transform:"translateX(-50%)",padding:"3px 14px",background:"linear-gradient(90deg,#00F2FE,#0051FF)",borderRadius:20,fontSize:8,color:"white",fontWeight:700,letterSpacing:".12em",whiteSpace:"nowrap"}}>MOST POPULAR</div>}
+              <div style={{fontSize:11,color:p.col,fontWeight:700,letterSpacing:".15em",marginBottom:8,fontFamily:F}}>{p.name}</div>
+              <div style={{fontSize:17,fontWeight:900,color:"white",marginBottom:14,fontFamily:F}}>{p.price}</div>
+              <a href={p.link} style={{display:"block",padding:"9px",background:`${p.col}15`,border:`1px solid ${p.col}35`,borderRadius:5,fontSize:10,color:p.col,textDecoration:"none",fontFamily:F,fontWeight:700,transition:"all .2s"}}>{p.cta}</a>
+            </div>
+          ))}
+        </div>
+        <a href="/pricing" style={{fontSize:12,color:K.dim,fontFamily:F,textDecoration:"none",borderBottom:"1px solid #0A1D33",paddingBottom:2}}>View full comparison table →</a>
+      </div>
+    </section>
+  );
+}
+
 function Footer() {
   return (
     <footer style={{background:'rgba(4,6,13,0.98)',borderTop:'1px solid rgba(0,242,254,0.08)',padding:'60px 40px 32px'}}>
@@ -2081,6 +2110,7 @@ export default function LandingPage() {
         </Fade>
       </section>
 
+      <PricingPreview/>
       <DisclaimerSection/>
       <Footer/>
 
