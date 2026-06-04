@@ -1810,6 +1810,174 @@ function MemeConfirmModal({token,onConfirm,onReject}:{token:MemeToken;onConfirm:
   );
 }
 
+// ── Onboarding Wizard ────────────────────────────────────────────────────────
+const SWARM_PROFILES=[
+  {id:"safe",name:"SAFE",col:"#00FF88",icon:"🛡",desc:"Conservative approach. Lower returns, lower risk.",details:["Max position: 5%","SL: -1.5%","TP: +3%","Confidence: >80%","No memecoins"],leverage:"2x max",expectedReturn:"+5-15%/mo",riskLevel:1,maxPosPct:0.05,slPct:0.015,tpPct:0.03,minConf:80},
+  {id:"balanced",name:"BALANCED",col:"#00F2FE",icon:"⚖",desc:"Optimal risk/reward. The recommended profile.",details:["Max position: 8%","SL: -2.5%","TP: +5.5%","Confidence: >72%","Memecoin alerts (limited)"],leverage:"3x max",expectedReturn:"+15-40%/mo",riskLevel:2,recommended:true,maxPosPct:0.08,slPct:0.025,tpPct:0.055,minConf:72},
+  {id:"aggressive",name:"AGGRESSIVE",col:"#FF3366",icon:"⚡",desc:"Maximum alpha. High risk, high reward.",details:["Max position: 15%","SL: -3.5%","TP: +8%","Confidence: >60%","Full memecoin access"],leverage:"5x max",expectedReturn:"+40-100%/mo",riskLevel:3,warning:"High risk of significant losses",maxPosPct:0.15,slPct:0.035,tpPct:0.08,minConf:60},
+] as const;
+type SwarmProfile=typeof SWARM_PROFILES[number];
+type SwarmConfig={profile:string;leverage:number;performanceFee:number;maxDrawdown:number;profileData:SwarmProfile};
+
+function OnboardingWizard({onComplete,isLive}:{onComplete:(c:SwarmConfig)=>void;isLive:boolean}){
+  const [step,setStep]=useState(1);
+  const [profileId,setProfileId]=useState<string>("balanced");
+  const [leverage,setLeverage]=useState(3);
+  const [maxDrawdown,setMaxDrawdown]=useState(15);
+  const [performanceFee,setPerformanceFee]=useState(10);
+  const prof=SWARM_PROFILES.find(p=>p.id===profileId)||SWARM_PROFILES[1];
+  const maxLev=profileId==="safe"?2:profileId==="balanced"?5:10;
+
+  const done=()=>onComplete({profile:profileId,leverage,performanceFee,maxDrawdown,profileData:prof});
+
+  return(
+    <div style={{position:"fixed",inset:0,zIndex:900,background:"rgba(2,4,10,0.97)",backdropFilter:"blur(20px)",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+      <div style={{background:"#060A12",border:"1px solid rgba(0,242,254,0.15)",borderRadius:16,padding:36,width:"100%",maxWidth:520,maxHeight:"90vh",overflowY:"auto",boxShadow:"0 24px 80px rgba(0,0,0,0.6)"}}>
+        <style>{`input[type=range]{height:4px;outline:none;border-radius:2px}input[type=range]::-webkit-slider-thumb{width:16px;height:16px;border-radius:50%;cursor:pointer}`}</style>
+        {/* Progress dots */}
+        <div style={{display:"flex",gap:8,justifyContent:"center",marginBottom:28}}>
+          {[1,2,3].map(i=>(
+            <div key={i} style={{width:i===step?24:8,height:8,borderRadius:4,transition:"all .3s",background:i<=step?"rgba(0,242,254,0.8)":"#0A1D33",boxShadow:i===step?"0 0 8px rgba(0,242,254,0.5)":"none"}}/>
+          ))}
+        </div>
+
+        {/* STEP 1 */}
+        {step===1&&(
+          <div>
+            <div style={{textAlign:"center",marginBottom:28}}>
+              <div style={{fontSize:10,color:"#00F2FE",letterSpacing:".4em",marginBottom:10}}>STEP 1 OF 3</div>
+              <h2 style={{fontSize:22,fontWeight:900,color:"white",margin:"0 0 8px"}}>Choose your swarm profile</h2>
+              <p style={{fontSize:12,color:"#2A5070",lineHeight:1.7}}>This determines how aggressively KYMIA deploys capital.</p>
+            </div>
+            <div style={{display:"flex",flexDirection:"column",gap:10}}>
+              {SWARM_PROFILES.map(p=>(
+                <div key={p.id} onClick={()=>setProfileId(p.id)} style={{padding:"16px 18px",background:profileId===p.id?`${p.col}12`:"rgba(6,10,18,0.8)",border:`2px solid ${profileId===p.id?p.col+"60":"rgba(0,242,254,0.06)"}`,borderRadius:8,cursor:"pointer",transition:"all .2s",position:"relative"}}>
+                  {"recommended" in p&&p.recommended&&<div style={{position:"absolute",top:-10,right:12,padding:"2px 10px",background:p.col,borderRadius:10,fontSize:8,color:"#04060D",fontWeight:700,letterSpacing:".1em"}}>RECOMMENDED</div>}
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
+                    <div style={{display:"flex",alignItems:"center",gap:10}}>
+                      <span style={{fontSize:18}}>{p.icon}</span>
+                      <span style={{fontSize:15,fontWeight:900,color:p.col,letterSpacing:".1em"}}>{p.name}</span>
+                    </div>
+                    <div style={{textAlign:"right"}}>
+                      <div style={{fontSize:11,color:p.col,fontWeight:700}}>{p.expectedReturn}</div>
+                      <div style={{fontSize:9,color:"#2A5070"}}>{p.leverage}</div>
+                    </div>
+                  </div>
+                  <div style={{fontSize:11,color:"#2A5070",marginBottom:8}}>{p.desc}</div>
+                  <div style={{display:"flex",gap:3}}>
+                    {[1,2,3].map(i=><div key={i} style={{flex:1,height:3,borderRadius:2,background:i<=p.riskLevel?p.col:"#06090F",boxShadow:i<=p.riskLevel?`0 0 5px ${p.col}`:"none"}}/>)}
+                  </div>
+                  {"warning" in p&&p.warning&&<div style={{marginTop:8,fontSize:9,color:"#FF3366",fontStyle:"italic"}}>⚠ {p.warning}</div>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* STEP 2 */}
+        {step===2&&(
+          <div>
+            <div style={{textAlign:"center",marginBottom:28}}>
+              <div style={{fontSize:10,color:"#00F2FE",letterSpacing:".4em",marginBottom:10}}>STEP 2 OF 3</div>
+              <h2 style={{fontSize:22,fontWeight:900,color:"white",margin:"0 0 8px"}}>Set your risk parameters</h2>
+              <p style={{fontSize:12,color:"#2A5070",lineHeight:1.7}}>KYMIA will never exceed these limits, regardless of conditions.</p>
+            </div>
+            <div style={{padding:"20px",marginBottom:14,background:"rgba(6,10,18,0.8)",border:"1px solid rgba(0,242,254,0.1)",borderRadius:8}}>
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}>
+                <div>
+                  <div style={{fontSize:12,fontWeight:700,color:"white"}}>Dynamic Leverage</div>
+                  <div style={{fontSize:10,color:"#2A5070"}}>AEGIS auto-reduces in high volatility</div>
+                </div>
+                <div style={{fontSize:30,fontWeight:900,color:"#00F2FE",fontFamily:"monospace",textShadow:"0 0 16px #00F2FE"}}>{leverage}x</div>
+              </div>
+              <input type="range" min={1} max={maxLev} value={leverage} onChange={e=>setLeverage(parseInt(e.target.value))} style={{width:"100%",accentColor:"#00F2FE",cursor:"pointer"}}/>
+              <div style={{display:"flex",justifyContent:"space-between",fontSize:9,color:"#2A5070",marginTop:4}}>
+                <span>1x (No leverage)</span><span>{maxLev}x (Max for {prof.name})</span>
+              </div>
+              <div style={{marginTop:12,padding:"9px 12px",background:"rgba(0,242,254,0.05)",border:"1px solid rgba(0,242,254,0.1)",borderRadius:4,fontSize:10,color:"#2A5070"}}>
+                ◈ {leverage}x on $10K demo = ${(10000*leverage).toLocaleString()} max exposure. AEGIS reduces in volatility.
+              </div>
+            </div>
+            <div style={{padding:"20px",background:"rgba(6,10,18,0.8)",border:"1px solid rgba(255,51,102,0.1)",borderRadius:8}}>
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}>
+                <div>
+                  <div style={{fontSize:12,fontWeight:700,color:"white"}}>Max Drawdown Limit</div>
+                  <div style={{fontSize:10,color:"#2A5070"}}>Auto-stops all trading if this is hit</div>
+                </div>
+                <div style={{fontSize:30,fontWeight:900,color:"#FF3366",fontFamily:"monospace"}}>-{maxDrawdown}%</div>
+              </div>
+              <input type="range" min={5} max={30} value={maxDrawdown} onChange={e=>setMaxDrawdown(parseInt(e.target.value))} style={{width:"100%",accentColor:"#FF3366",cursor:"pointer"}}/>
+              <div style={{display:"flex",justifyContent:"space-between",fontSize:9,color:"#2A5070",marginTop:4}}>
+                <span>-5% (Very tight)</span><span>-30% (Wide)</span>
+              </div>
+              <div style={{marginTop:12,padding:"9px 12px",background:"rgba(255,51,102,0.04)",border:"1px solid rgba(255,51,102,0.1)",borderRadius:4,fontSize:10,color:"#FF3366"}}>
+                ⛔ Portfolio drops -{maxDrawdown}% from peak → all trading stops. Your review required.
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* STEP 3 */}
+        {step===3&&(
+          <div>
+            <div style={{textAlign:"center",marginBottom:28}}>
+              <div style={{fontSize:10,color:"#00F2FE",letterSpacing:".4em",marginBottom:10}}>STEP 3 OF 3</div>
+              <h2 style={{fontSize:22,fontWeight:900,color:"white",margin:"0 0 8px"}}>{isLive?"Set performance fee":"Review & Launch"}</h2>
+              <p style={{fontSize:12,color:"#2A5070",lineHeight:1.7}}>{isLive?"You choose how much KYMIA earns when it wins.":"Your swarm is configured. Ready to launch."}</p>
+            </div>
+            {isLive&&(
+              <div style={{padding:"22px",marginBottom:16,background:"rgba(255,215,0,0.05)",border:"1px solid rgba(255,215,0,0.2)",borderRadius:10}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+                  <div>
+                    <div style={{fontSize:13,fontWeight:700,color:"#FFD700"}}>Performance Fee</div>
+                    <div style={{fontSize:10,color:"#2A5070"}}>KYMIA earns this % on winning trades only</div>
+                  </div>
+                  <div style={{fontSize:38,fontWeight:900,color:"#FFD700",fontFamily:"monospace",textShadow:"0 0 20px #FFD700"}}>{performanceFee}%</div>
+                </div>
+                <input type="range" min={5} max={15} value={performanceFee} onChange={e=>setPerformanceFee(parseInt(e.target.value))} style={{width:"100%",accentColor:"#FFD700",cursor:"pointer"}}/>
+                <div style={{display:"flex",justifyContent:"space-between",fontSize:9,color:"#2A5070",marginTop:4,marginBottom:14}}>
+                  <span>5% (Standard priority)</span><span>15% (Priority execution)</span>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}}>
+                  {([{sc:"Trade wins +$100",you:`$${100-performanceFee}`,ky:`$${performanceFee}`,col:"#00FF88"},{sc:"Trade loses -$50",you:"-$50",ky:"$0",col:"#FF3366"}]).map((s,i)=>(
+                    <div key={i} style={{padding:"12px 14px",background:"rgba(4,6,13,0.8)",border:`1px solid ${s.col}20`,borderRadius:6}}>
+                      <div style={{fontSize:9,color:"#2A5070",marginBottom:8}}>{s.sc}</div>
+                      <div style={{display:"flex",justifyContent:"space-between",fontSize:11}}>
+                        <span><span style={{color:"#2A5070"}}>You: </span><span style={{color:s.col,fontWeight:700}}>{s.you}</span></span>
+                        <span><span style={{color:"#2A5070"}}>KYMIA: </span><span style={{color:"#FFD700",fontWeight:700}}>{s.ky}</span></span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div style={{padding:"9px 12px",background:"rgba(255,215,0,0.04)",border:"1px solid rgba(255,215,0,0.1)",borderRadius:4,fontSize:10,color:"#FFD700"}}>⚡ Higher fee = higher execution priority.</div>
+              </div>
+            )}
+            {/* Summary */}
+            <div style={{padding:"16px",marginBottom:16,background:"rgba(6,10,18,0.9)",border:"1px solid rgba(0,242,254,0.1)",borderRadius:8}}>
+              <div style={{fontSize:10,color:"#00F2FE",letterSpacing:".2em",marginBottom:14}}>◈ YOUR SWARM CONFIGURATION</div>
+              {([{l:"Profile",v:profileId.toUpperCase(),c:prof.col},{l:"Max Leverage",v:`${leverage}x`,c:"#00F2FE"},{l:"Max Drawdown",v:`-${maxDrawdown}%`,c:"#FF3366"},...(isLive?[{l:"Performance Fee",v:`${performanceFee}%`,c:"#FFD700"}]:[])]).map((r,i)=>(
+                <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"1px solid #06090F"}}>
+                  <span style={{fontSize:11,color:"#2A5070"}}>{r.l}</span>
+                  <span style={{fontSize:11,color:r.c,fontWeight:700,fontFamily:"monospace"}}>{r.v}</span>
+                </div>
+              ))}
+            </div>
+            {isLive&&<div style={{padding:"12px 16px",marginBottom:12,background:"rgba(0,255,136,0.04)",border:"1px solid rgba(0,255,136,0.15)",borderRadius:6,textAlign:"center",fontSize:12,color:"#00FF88",fontStyle:"italic",lineHeight:1.8}}>"No win, no fee.<br/>Our interests are perfectly aligned with yours."</div>}
+          </div>
+        )}
+
+        {/* Navigation */}
+        <div style={{display:"flex",gap:10,marginTop:24}}>
+          {step>1&&<button onClick={()=>setStep(s=>s-1)} style={{flex:1,padding:"12px",background:"transparent",border:"1px solid #0A1D33",borderRadius:6,color:"#2A5070",fontFamily:"monospace",fontSize:11,cursor:"pointer"}}>← Back</button>}
+          <button onClick={()=>step<3?setStep(s=>s+1):done()} style={{flex:2,padding:"13px",background:step===3?"rgba(0,255,136,0.15)":"rgba(0,242,254,0.12)",border:`2px solid ${step===3?"rgba(0,255,136,0.4)":"rgba(0,242,254,0.3)"}`,borderRadius:6,color:step===3?"#00FF88":"#00F2FE",fontFamily:"monospace",fontSize:12,fontWeight:700,cursor:"pointer",letterSpacing:".1em",boxShadow:step===3?"0 0 20px rgba(0,255,136,0.12)":"none"}}>
+            {step===3?"◈ LAUNCH SWARM →":"Continue →"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Market Regime Engine ─────────────────────────────────────────────────────
 type MarketRegime="BULL_TREND"|"BEAR_TREND"|"SIDEWAYS"|"VOLATILE";
 type RegimeState={regime:MarketRegime;confidence:number;reason:string};
@@ -1959,6 +2127,11 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   const [viralCard,setViralCard]=useState<{sym:string;pnl:number;pct:number}|null>(null);
   const [blacklist,setBlacklist]=useState<Record<string,number>>({});
   const [symLosses,setSymLosses]=useState<Record<string,number>>({});
+  const [swarmConfig,setSwarmConfig]=useState<SwarmConfig|null>(null);
+  const [showOnboarding,setShowOnboarding]=useState(false);
+  const [kymiaTotalFee,setKymiaTotalFee]=useState(0);
+  const swarmConfigRef=useRef<SwarmConfig|null>(null);
+  useEffect(()=>{swarmConfigRef.current=swarmConfig;},[swarmConfig]);
   const blacklistRef=useRef<Record<string,number>>({});
   const symLossesRef=useRef<Record<string,number>>({});
   useEffect(()=>{blacklistRef.current=blacklist;},[blacklist]);
@@ -2407,6 +2580,17 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[]);
 
+  // ── Drawdown guard — respects swarmConfig.maxDrawdown ───────────────────────
+  useEffect(()=>{
+    if(!running||!swarmConfig)return;
+    const drawdown=((port.peak-port.equity)/port.peak)*100;
+    if(drawdown>=swarmConfig.maxDrawdown){
+      setRunning(false);
+      log("AEGIS",`🛑 Max drawdown -${drawdown.toFixed(1)}% reached. Trading paused — review required.`,K.r);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[port.equity,running]);
+
   // ── Correlation Flow Tracker (BTC moves → alt prediction) ────────────────
   useEffect(()=>{
     if(!running)return;
@@ -2557,6 +2741,12 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
     setWinCards(prev=>[...prev.slice(-1),card]);
     setTrades(t=>[{id:card.id,sym,side:"SELL",qty:0,price,pnl,conf:80,t:card.t,ms:Date.now(),agent,reason:reason||agent},...t.slice(0,99)]);
     if(pnl>=50)setTimeout(()=>setViralCard({sym,pnl,pct}),800);
+    // Performance fee (LIVE mode, winning trades only)
+    if(isLive&&pnl>0&&swarmConfigRef.current){
+      const fee=pnl*(swarmConfigRef.current.performanceFee/100);
+      setKymiaTotalFee(f=>f+fee);
+      log("KYMIA",`◈ Performance fee: $${fee.toFixed(2)} (${swarmConfigRef.current.performanceFee}% on +$${pnl.toFixed(0)})`,K.gold);
+    }
     // Blacklist tracking
     if(pnl<0){
       const losses=(symLossesRef.current[sym]||0)+1;
@@ -2635,7 +2825,8 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
     },8000);
     const iv=setInterval(()=>{(async()=>{
       const cs=agStRef.current["consensus"];
-      if(!cs?.on||!cs.conf||cs.conf<75)return;
+      const profMinConf=swarmConfigRef.current?.profileData?.minConf??75;
+      if(!cs?.on||!cs.conf||cs.conf<profMinConf)return;
       // Pick volatile non-stable token
       const allKeys=Object.keys(SYMS);
       const pool=allKeys.filter(sym=>{
@@ -2717,8 +2908,11 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
         }
         if(traderIsPaused){log("AEGIS","[AEGIS] In pause window — skipping "+sym,K.gold);return;}
 
-        // Dynamic size by weighted confidence
-        const alloc=Math.min(getPositionSize(Math.round(weightedConf),equity),prt.cash*0.9);
+        // Dynamic size by weighted confidence + profile cap
+        const profMaxPct=swarmConfigRef.current?.profileData?.maxPosPct??MAX_TRADE_SIZE_PCT;
+        const leverageMult=swarmConfigRef.current?.leverage??1;
+        const rawAlloc=Math.min(getPositionSize(Math.round(weightedConf),equity),equity*profMaxPct*leverageMult);
+        const alloc=Math.min(rawAlloc,prt.cash*0.9);
         const qty=alloc/p.price;
         log("AEGIS",`◉ Exp: ${(exposurePct*100).toFixed(0)}% · ${Object.keys(prt.pos).length}pos · +${(alloc/equity*100).toFixed(0)}% alloc · ${Math.round(weightedConf)}% wConf`,K.dim);
         setTraderConsecLosses(traderCheck.consecLosses);
@@ -2967,11 +3161,21 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
   };
 
   const handleStart=()=>{
-    setRunning(r=>{
-      const next=!r;
-      log("SYS",next?"▶ KYMIA ACTIVATED — 18 agents online":"⏹ SYSTEM HALTED",next?K.g:K.r);
-      return next;
-    });
+    if(!running){
+      if(!swarmConfig){setShowOnboarding(true);}
+      else{setRunning(true);log("SYS","▶ KYMIA ACTIVATED — 18 agents online",K.g);}
+    }else{
+      setRunning(false);
+      log("SYS","⏹ SYSTEM HALTED",K.r);
+    }
+  };
+
+  const handleOnboardingComplete=(config:SwarmConfig)=>{
+    setSwarmConfig(config);
+    swarmConfigRef.current=config;
+    setShowOnboarding(false);
+    setRunning(true);
+    log("KYMIA",`◈ Swarm configured: ${config.profile.toUpperCase()} | ${config.leverage}x leverage | -${config.maxDrawdown}% max DD`,K.c);
   };
 
   const beatStart=(sym:string,side:string)=>{
@@ -3091,6 +3295,14 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
             const pc=plan==="alpha"?K.c:plan==="performance"?K.gold:plan==="institutional"?K.pu:K.g;
             return(<div style={{padding:"2px 9px",background:`${pc}12`,border:`1px solid ${pc}35`,borderRadius:2,fontSize:8,color:pc,letterSpacing:".12em",fontWeight:700}}>◈ {plan.toUpperCase()}</div>);
           })()}
+          {swarmConfig&&(
+            <div style={{display:"flex",gap:6,alignItems:"center",padding:"3px 10px",background:"rgba(0,242,254,0.06)",border:"1px solid rgba(0,242,254,0.15)",borderRadius:20}}>
+              <span style={{fontSize:9,color:swarmConfig.profile==="safe"?K.g:swarmConfig.profile==="aggressive"?K.r:K.c,fontFamily:"monospace",fontWeight:700,letterSpacing:".1em"}}>{swarmConfig.profile.toUpperCase()}</span>
+              <span style={{fontSize:8,color:K.dim}}>{swarmConfig.leverage}x</span>
+              {isLive&&<span style={{fontSize:8,color:K.gold}}>{swarmConfig.performanceFee}% fee</span>}
+            </div>
+          )}
+          <button onClick={()=>setShowOnboarding(true)} style={{fontSize:8,color:K.dim,background:"none",border:"none",cursor:"pointer",fontFamily:"monospace",letterSpacing:".06em"}}>⚙ {swarmConfig?"Reconfigure":"Configure"}</button>
           <div style={{display:"flex",alignItems:"center",gap:4,padding:"2px 7px",background:K.c+"10",border:"1px solid "+K.c+"25",borderRadius:2}}>
             <span style={{fontSize:9,fontWeight:700,color:K.c}}>{SYM_COUNT}</span>
             <span style={{fontSize:7,color:K.dim,letterSpacing:".08em"}}>MARKETS</span>
@@ -3270,7 +3482,17 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
                 const mp=nextM?Math.min(100,pct/(nextM.target*100)*100):100;
                 return(<>
                   <div style={{fontSize:19,fontWeight:900,color:pnlCol,textShadow:`0 0 12px ${pnlCol}`,marginBottom:2,fontFamily:"monospace"}}>{pnl>=0?"+":""}{fU(pnl)}</div>
-                  <div style={{fontSize:8,color:"#2A5070",marginBottom:8}}>{fP(pct)} since start · WR {f2(wr,0)}% · {signalCount} signals</div>
+                  <div style={{fontSize:8,color:"#2A5070",marginBottom:4}}>{fP(pct)} since start · WR {f2(wr,0)}% · {signalCount} signals</div>
+                  {isLive&&kymiaTotalFee>0&&(
+                    <div style={{padding:"7px 9px",marginBottom:8,background:"rgba(255,215,0,0.06)",border:"1px solid rgba(255,215,0,0.15)",borderRadius:4}}>
+                      <div style={{fontSize:7,color:K.dim}}>KYMIA EARNED THIS SESSION</div>
+                      <div style={{fontSize:14,color:K.gold,fontWeight:700,fontFamily:"monospace"}}>${kymiaTotalFee.toFixed(2)}</div>
+                      <div style={{fontSize:7,color:K.dim,marginTop:1}}>Performance fee · {swarmConfig?.performanceFee??10}% on wins</div>
+                    </div>
+                  )}
+                  {!isLive&&kymiaTotalFee>0&&(
+                    <div style={{fontSize:8,color:K.dim,marginBottom:8,fontStyle:"italic"}}>Demo: virtual fee ~${kymiaTotalFee.toFixed(2)} at 10%</div>
+                  )}
                   {nextM&&(<>
                     <div style={{display:"flex",justifyContent:"space-between",fontSize:8,marginBottom:3}}>
                       <span style={{color:nextM.color}}>{nextM.icon} {nextM.name}</span>
@@ -3746,6 +3968,9 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
       )}
 
       {tab==="onchain"&&<OnChainTab/>}
+
+      {/* Onboarding wizard */}
+      {showOnboarding&&<OnboardingWizard isLive={isLive} onComplete={handleOnboardingComplete}/>}
 
       {/* Viral Win Card */}
       {viralCard&&<ViralCardModal sym={viralCard.sym} pnl={viralCard.pnl} pct={viralCard.pct} onClose={()=>setViralCard(null)}/>}

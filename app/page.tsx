@@ -2088,8 +2088,14 @@ export default function LandingPage() {
           <div style={{fontSize:52,fontWeight:900,color:"#FFFFFF",marginBottom:6,position:"relative",lineHeight:1.2}}>The future of trading</div>
           <div style={{fontSize:52,fontWeight:900,color:K.c,marginBottom:52,textShadow:`0 0 40px ${K.c}60`,position:"relative",lineHeight:1.2}}>is autonomous.</div>
         </Fade>
+        <Fade delay={.12}>
+          <p style={{fontSize:14,color:K.dim,lineHeight:1.85,marginBottom:28,position:"relative"}}>
+            Configure your 18-agent swarm. Set your risk profile.<br/>
+            <span style={{color:K.hi}}>Pay only when KYMIA wins for you.</span>
+          </p>
+        </Fade>
         <Fade delay={.18}>
-          <div style={{display:"flex",gap:16,justifyContent:"center",marginBottom:12,flexWrap:"wrap",position:"relative"}}>
+          <div style={{display:"flex",gap:16,justifyContent:"center",marginBottom:16,flexWrap:"wrap",position:"relative"}}>
             {[
               {href:"/nexus?mode=demo",txt:"Watch AI Trade Live →",sub:"Free · No signup · $10K virtual capital",col:K.g,bg:"rgba(0,255,136,0.12)",brd:"2px solid rgba(0,255,136,0.5)",glow:"rgba(0,255,136,0.3)"},
               {href:"/nexus?mode=live",txt:"⚡ Connect Phantom → Real Trading",sub:"Non-custodial · Your keys · Real Solana",col:K.c,bg:"rgba(0,242,254,0.12)",brd:"2px solid rgba(0,242,254,0.5)",glow:"rgba(0,242,254,0.3)"},
@@ -2100,6 +2106,12 @@ export default function LandingPage() {
                   onMouseLeave={e=>(e.currentTarget.style.boxShadow="")}>{b.txt}</a>
                 <div style={{fontSize:9,color:K.dim,marginTop:7,letterSpacing:".1em"}}>{b.sub}</div>
               </div>
+            ))}
+          </div>
+          {/* Profile pills */}
+          <div style={{display:"flex",gap:8,justifyContent:"center",marginBottom:8}}>
+            {(["🛡 SAFE","⚖ BALANCED","⚡ AGGRESSIVE"] as const).map((p,i)=>(
+              <div key={i} style={{padding:"4px 12px",background:"rgba(0,242,254,0.07)",border:"1px solid rgba(0,242,254,0.13)",borderRadius:20,fontSize:9,color:([K.g,K.c,K.r] as const)[i],fontFamily:F}}>{p}</div>
             ))}
           </div>
         </Fade>
