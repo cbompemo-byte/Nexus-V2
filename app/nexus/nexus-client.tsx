@@ -114,13 +114,17 @@ function applyTraderRules(
   return{allow:true,frac,isPeak:peak,consecLosses,triggerPause,triggerCircuit:false};
 }
 
-// ── Portfolio exposure helpers (Bug 4) ────────────────────────────────────────
-const getMaxPositions=(equity:number):number=>{
-  if(equity<8000)return 2;
-  if(equity<9000)return 3;
-  if(equity<11000)return 4;
-  return 5;
+// ── Profile rule enforcer ─────────────────────────────────────────────────────
+const getProfileRules=(profile:string)=>{
+  const rules={
+    safe:{allocPct:0.05,stopLoss:0.015,takeProfit:0.030,minConfidence:80,allowMemecoins:false,maxPositions:6},
+    balanced:{allocPct:0.08,stopLoss:0.025,takeProfit:0.055,minConfidence:72,allowMemecoins:true,maxPositions:10},
+    aggressive:{allocPct:0.15,stopLoss:0.035,takeProfit:0.080,minConfidence:60,allowMemecoins:true,maxPositions:999},
+  };
+  return rules[profile as keyof typeof rules]||rules.balanced;
 };
+
+// ── Portfolio exposure helpers ────────────────────────────────────────────────
 const getTotalExposure=(pos:Record<string,Position>,px:{[k:string]:PriceData}):number=>
   Object.entries(pos).reduce((t,[sym,p])=>t+p.qty*(px[sym]?.price||p.avg),0);
 
@@ -1276,8 +1280,8 @@ function SwarmGraph({st,debate,disabled,swarmRef,flashingAgent,highConviction,co
           return(
             <g key={id} filter={active?"url(#faceglow)":undefined} opacity={dis?.18:1} style={{cursor:"pointer",animation:isFlashing?"nodeFlash 1.2s ease-out":isHighConvActive?"breathe 1.4s ease-in-out infinite":undefined}} onMouseEnter={()=>setHov(id)} onMouseLeave={()=>setHov(null)}>
               <CyberFace cx={n.pos.x} cy={n.pos.y} size={r*2} col={col} active={active} conflict={conflict}/>
-              <text x={n.pos.x} y={n.pos.y+r+11} textAnchor="middle" fontSize={id==="consensus"?8:6} fontFamily="monospace" fill={dis?K.dim:active?col:K.tx} fontWeight="700">{s}</text>
-              {ag.conf!==null&&!dis&&<text x={n.pos.x} y={n.pos.y+r+20} textAnchor="middle" fontSize="7" fontFamily="monospace" fill={col} opacity=".8">{ag.conf}%</text>}
+              <text x={n.pos.x} y={n.pos.y+r+12} textAnchor="middle" fontSize={id==="consensus"?11:10} fontFamily="monospace" fill={dis?K.dim:active?col:K.tx} fontWeight="700">{s}</text>
+              {ag.conf!==null&&!dis&&<text x={n.pos.x} y={n.pos.y+r+23} textAnchor="middle" fontSize="10" fontFamily="monospace" fill={col} opacity=".8">{ag.conf}%</text>}
             </g>
           );
         })}
@@ -1327,8 +1331,8 @@ function DecisionZone({agSt,running,onExecute}:{agSt:{[k:string]:AgentState},run
         {/* Vote bar + counters */}
         <div style={{flex:1}}>
           <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
-            <span style={{fontSize:7,color:K.dim,letterSpacing:".1em"}}>◈ DECISION ZONE</span>
-            <div style={{display:"flex",gap:8,fontSize:8}}>
+            <span style={{fontSize:9,color:K.dim,letterSpacing:".1em"}}>◈ DECISION ZONE</span>
+            <div style={{display:"flex",gap:8,fontSize:9}}>
               {([["▲",K.g,buy],["▼",K.r,sell],["◆",K.gold,hold]] as Array<[string,string,number]>).map(([l,c,v])=>(
                 <span key={l} style={{color:c}}>{l} {v}</span>
               ))}
@@ -1340,7 +1344,7 @@ function DecisionZone({agSt,running,onExecute}:{agSt:{[k:string]:AgentState},run
             <div style={{width:sP+"%",background:`linear-gradient(90deg,${K.r}80,${K.r})`,transition:"width .5s",boxShadow:sP>72?`0 0 8px ${K.r}60`:undefined}}/>
             <div style={{width:Math.round(hold/total*100)+"%",background:`linear-gradient(90deg,${K.gold}80,${K.gold})`,transition:"width .5s"}}/>
           </div>
-          {highConv&&<div style={{fontSize:7,color:col,letterSpacing:".14em",animation:"glow 1.5s infinite",marginBottom:3}}>⚡ HIGH CONVICTION — {active.length} AGENTS ALIGNED</div>}
+          {highConv&&<div style={{fontSize:9,color:col,letterSpacing:".14em",animation:"glow 1.5s infinite",marginBottom:3}}>⚡ HIGH CONVICTION — {active.length} AGENTS ALIGNED</div>}
           {showExec&&(
             <div style={{display:"flex",gap:5}}>
               <button className="btn" onClick={()=>onExecute(topSym?AGENTS.find(a=>a.id===topSym[0])?.id||"SOL":"SOL",dom as "BUY"|"SELL")} style={{background:col+"20",color:col,border:"1px solid "+col+"50",padding:"3px 12px",fontSize:8,flex:1}}>⚡ EXECUTE {dom}</button>
@@ -2130,6 +2134,9 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   const [swarmConfig,setSwarmConfig]=useState<SwarmConfig|null>(null);
   const [showOnboarding,setShowOnboarding]=useState(false);
   const [kymiaTotalFee,setKymiaTotalFee]=useState(0);
+  const [sessionWins,setSessionWins]=useState(0);
+  const [sessionFees,setSessionFees]=useState(0);
+  const [sessionNetPnl,setSessionNetPnl]=useState(0);
   const swarmConfigRef=useRef<SwarmConfig|null>(null);
   useEffect(()=>{swarmConfigRef.current=swarmConfig;},[swarmConfig]);
   const blacklistRef=useRef<Record<string,number>>({});
@@ -2741,11 +2748,16 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
     setWinCards(prev=>[...prev.slice(-1),card]);
     setTrades(t=>[{id:card.id,sym,side:"SELL",qty:0,price,pnl,conf:80,t:card.t,ms:Date.now(),agent,reason:reason||agent},...t.slice(0,99)]);
     if(pnl>=50)setTimeout(()=>setViralCard({sym,pnl,pct}),800);
-    // Performance fee (LIVE mode, winning trades only)
-    if(isLive&&pnl>0&&swarmConfigRef.current){
-      const fee=pnl*(swarmConfigRef.current.performanceFee/100);
+    // Track session net P&L always
+    setSessionNetPnl(n=>n+pnl);
+    if(pnl>0){setSessionWins(w=>w+1);}
+    // Performance fee (always track so dashboard shows it in demo too)
+    if(pnl>0&&swarmConfigRef.current){
+      const feePct=isLive?(swarmConfigRef.current.performanceFee/100):0.10;
+      const fee=pnl*feePct;
       setKymiaTotalFee(f=>f+fee);
-      log("KYMIA",`◈ Performance fee: $${fee.toFixed(2)} (${swarmConfigRef.current.performanceFee}% on +$${pnl.toFixed(0)})`,K.gold);
+      setSessionFees(f=>f+fee);
+      if(isLive)log("KYMIA",`◈ Performance fee: $${fee.toFixed(2)} (${swarmConfigRef.current.performanceFee}% on +$${pnl.toFixed(0)})`,K.gold);
     }
     // Blacklist tracking
     if(pnl<0){
@@ -2827,6 +2839,10 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
       const cs=agStRef.current["consensus"];
       const profMinConf=swarmConfigRef.current?.profileData?.minConf??75;
       if(!cs?.on||!cs.conf||cs.conf<profMinConf)return;
+      // Profile rules enforcement
+      const profRules=getProfileRules(swarmConfigRef.current?.profile??"balanced");
+      const currentPosCount=Object.keys(portRef.current.pos).length;
+      if(currentPosCount>=profRules.maxPositions){log("AEGIS",`◉ Profile max ${profRules.maxPositions} positions reached — skip`,K.dim);return;}
       // Pick volatile non-stable token
       const allKeys=Object.keys(SYMS);
       const pool=allKeys.filter(sym=>{
@@ -2908,9 +2924,15 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
         }
         if(traderIsPaused){log("AEGIS","[AEGIS] In pause window — skipping "+sym,K.gold);return;}
 
-        // Dynamic size by weighted confidence + profile cap
+        // Dynamic size by weighted confidence + profile cap + AEGIS volatility cap
         const profMaxPct=swarmConfigRef.current?.profileData?.maxPosPct??MAX_TRADE_SIZE_PCT;
-        const leverageMult=swarmConfigRef.current?.leverage??1;
+        const baseLeverage=swarmConfigRef.current?.leverage??1;
+        // AEGIS: cap leverage when market is volatile (avg|change|>5% → max 2x, >3% → max 70%)
+        const allVols=Object.values(pricesRef.current).map(p=>Math.abs((p as PriceData).change||0));
+        const avgVol=allVols.length>0?allVols.reduce((a,b)=>a+b,0)/allVols.length:0;
+        const effectiveLeverage=avgVol>5?Math.min(baseLeverage,2):avgVol>3?Math.min(baseLeverage,baseLeverage*0.7):baseLeverage;
+        if(effectiveLeverage<baseLeverage)log("AEGIS",`[AEGIS] Vol ${avgVol.toFixed(1)}% — leverage capped ${baseLeverage}x→${effectiveLeverage.toFixed(1)}x`,K.gold);
+        const leverageMult=effectiveLeverage;
         const rawAlloc=Math.min(getPositionSize(Math.round(weightedConf),equity),equity*profMaxPct*leverageMult);
         const alloc=Math.min(rawAlloc,prt.cash*0.9);
         const qty=alloc/p.price;
@@ -3284,7 +3306,12 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
           </div>
           <span style={{fontSize:9,color:"#102030",letterSpacing:".1em"}}>QUANT AI · v2.0</span>
           {!isLive?(
-            <div style={{padding:"3px 10px",background:"rgba(0,255,136,0.12)",border:"1px solid rgba(0,255,136,0.3)",borderRadius:3,fontSize:9,color:K.g,letterSpacing:".1em"}}>◈ DEMO · $10K VIRTUAL</div>
+            <>
+              <div style={{padding:"3px 10px",background:"rgba(0,255,136,0.12)",border:"1px solid rgba(0,255,136,0.3)",borderRadius:3,fontSize:9,color:K.g,letterSpacing:".1em"}}>◈ DEMO · $10K VIRTUAL</div>
+              <a href="/nexus?mode=live" style={{display:"flex",alignItems:"center",gap:5,padding:"3px 10px",background:"rgba(255,51,102,0.12)",border:"1px solid rgba(255,51,102,0.35)",borderRadius:3,textDecoration:"none",fontSize:9,color:K.r,letterSpacing:".08em",animation:"pu 2s infinite"}}>
+                ⚡ GO LIVE → Connect Phantom
+              </a>
+            </>
           ):(
             <div style={{padding:"3px 10px",background:"rgba(255,51,102,0.12)",border:"1px solid rgba(255,51,102,0.4)",borderRadius:3,fontSize:9,color:K.r,letterSpacing:".1em",animation:"pu 1s infinite"}}>⚡ LIVE · REAL FUNDS</div>
           )}
@@ -3344,14 +3371,14 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
           {([{l:"EQUITY",v:"$"+f2(port.equity),col:totalPnL>=0?K.g:K.r},{l:"P&L",v:fU(totalPnL)+" ("+fP(pct)+")",col:totalPnL>=0?K.g:K.r},{l:"DD",v:"-"+f2(dd)+"%",col:dd>5?K.r:K.gold}]).map((x,i)=>(
             <div key={i} style={{textAlign:"right"}}>
               <div style={{fontSize:8,color:"#102030"}}>{x.l}</div>
-              <div style={{fontSize:12,fontWeight:600,display:"flex",justifyContent:"flex-end"}}>
+              <div style={{fontSize:14,fontWeight:600,display:"flex",justifyContent:"flex-end"}}>
                 <Odometer value={x.v} col={x.col} style={{textShadow:i<2?`0 0 8px ${x.col}60`:undefined}}/>
               </div>
             </div>
           ))}
           <div style={{display:"flex",alignItems:"center",gap:5,padding:"2px 8px",background:"#060A12",border:"1px solid #0A1D33",borderRadius:2}}>
-            <span style={{fontSize:9,fontWeight:700,color:K.gold}}>{trades.filter(t=>t.pnl!==0).length}</span>
-            <span style={{fontSize:7,color:K.dim,letterSpacing:".06em"}}>TRADES</span>
+            <span style={{fontSize:11,fontWeight:700,color:K.gold}}>{trades.filter(t=>t.pnl!==0).length}</span>
+            <span style={{fontSize:8,color:K.dim,letterSpacing:".06em"}}>TRADES</span>
           </div>
           <div style={{display:"flex",gap:5}}>
             <button className="btn" onClick={()=>setModal("share")} style={{background:"#0A1428",color:K.gold,border:"1px solid "+K.gold+"50"}}>◈ SHARE</button>
@@ -3445,13 +3472,13 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
                     return(
                       <div key={sym} className="tr" style={{display:"grid",gridTemplateColumns:"8px 36px 1fr 38px 26px",alignItems:"center",gap:4,padding:"0 8px",height:32,borderBottom:"1px solid #050810",borderLeft:"2px solid "+(pos?(isShortPos?K.r:K.c):mktTab==="RADAR"?K.gold+"60":"transparent"),cursor:"pointer"}} onClick={()=>{const tr=trades.find(t=>t.sym===sym&&t.side==="BUY");if(pos)setChartTrade({trade:tr||null,position:pos,agentSignals:tr?.agentSignals});}}>
                         <div style={{width:6,height:6,borderRadius:"50%",background:up?K.g:K.r,flexShrink:0,boxShadow:"0 0 4px "+(up?K.g:K.r)}}/>
-                        <div style={{fontSize:9,fontWeight:700,color:K.hi,letterSpacing:".03em",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{sym}</div>
+                        <div style={{fontSize:10,fontWeight:700,color:K.hi,letterSpacing:".03em",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{sym}</div>
                         <div style={{minWidth:0}}>
-                          <div style={{fontSize:9,color:up?K.g:K.r}}>{fPrice(d.price)}</div>
+                          <div style={{fontSize:14,color:up?K.g:K.r}}>{fPrice(d.price)}</div>
                           {d.source&&<div style={{fontSize:6,color:K.dim,letterSpacing:".06em"}}>{d.source}</div>}
                         </div>
-                        <div style={{fontSize:8,color:up?K.g:K.r,textAlign:"right",whiteSpace:"nowrap"}}>{up?"+":""}{d.change.toFixed(1)}%</div>
-                        <div style={{fontSize:7,textAlign:"center",padding:"1px 3px",borderRadius:2,background:rsiCol+"18",color:rsiCol}}>{Math.round(rsi)}</div>
+                        <div style={{fontSize:11,color:up?K.g:K.r,textAlign:"right",whiteSpace:"nowrap"}}>{up?"+":""}{d.change.toFixed(1)}%</div>
+                        <div style={{fontSize:10,textAlign:"center",padding:"1px 3px",borderRadius:2,background:rsiCol+"18",color:rsiCol}}>{Math.round(rsi)}</div>
                       </div>
                     );
                   });
@@ -3481,17 +3508,28 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
                 const pnlCol=pnl>=0?K.g:K.r;
                 const mp=nextM?Math.min(100,pct/(nextM.target*100)*100):100;
                 return(<>
-                  <div style={{fontSize:19,fontWeight:900,color:pnlCol,textShadow:`0 0 12px ${pnlCol}`,marginBottom:2,fontFamily:"monospace"}}>{pnl>=0?"+":""}{fU(pnl)}</div>
-                  <div style={{fontSize:8,color:"#2A5070",marginBottom:4}}>{fP(pct)} since start · WR {f2(wr,0)}% · {signalCount} signals</div>
-                  {isLive&&kymiaTotalFee>0&&(
-                    <div style={{padding:"7px 9px",marginBottom:8,background:"rgba(255,215,0,0.06)",border:"1px solid rgba(255,215,0,0.15)",borderRadius:4}}>
-                      <div style={{fontSize:7,color:K.dim}}>KYMIA EARNED THIS SESSION</div>
-                      <div style={{fontSize:14,color:K.gold,fontWeight:700,fontFamily:"monospace"}}>${kymiaTotalFee.toFixed(2)}</div>
-                      <div style={{fontSize:7,color:K.dim,marginTop:1}}>Performance fee · {swarmConfig?.performanceFee??10}% on wins</div>
+                  <div style={{fontSize:28,fontWeight:900,color:pnlCol,textShadow:`0 0 16px ${pnlCol}`,marginBottom:2,fontFamily:"monospace"}}>{pnl>=0?"+":""}{fU(pnl)}</div>
+                  <div style={{fontSize:12,color:"#2A5070",marginBottom:4}}>{fP(pct)} since start · WR {f2(wr,0)}% · {signalCount} signals</div>
+                  {sessionNetPnl!==0&&(
+                    <div style={{padding:"8px 10px",marginBottom:8,background:"rgba(0,242,254,0.05)",border:"1px solid rgba(0,242,254,0.15)",borderRadius:4}}>
+                      <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                        <span style={{fontSize:9,color:K.dim}}>YOUR SESSION P&L</span>
+                        <span style={{fontSize:14,fontWeight:900,color:sessionNetPnl>=0?K.g:K.r,fontFamily:"monospace"}}>{sessionNetPnl>=0?"+":""}{fU(sessionNetPnl)}</span>
+                      </div>
+                      <div style={{display:"flex",justifyContent:"space-between",fontSize:8,color:K.dim,marginBottom:3}}>
+                        <span>✓ {sessionWins} wins</span>
+                        <span style={{color:K.gold}}>KYMIA fee: ${sessionFees.toFixed(2)}</span>
+                      </div>
+                      <div style={{height:2,background:"#06090F",borderRadius:1}}>
+                        <div style={{height:"100%",borderRadius:1,background:sessionNetPnl>=0?K.g:K.r,width:Math.min(100,Math.abs(sessionNetPnl)/100*100)+"%",transition:"width .5s"}}/>
+                      </div>
                     </div>
                   )}
-                  {!isLive&&kymiaTotalFee>0&&(
-                    <div style={{fontSize:8,color:K.dim,marginBottom:8,fontStyle:"italic"}}>Demo: virtual fee ~${kymiaTotalFee.toFixed(2)} at 10%</div>
+                  {!isLive&&(
+                    <a href="/nexus?mode=live" style={{display:"block",padding:"8px 10px",marginBottom:8,background:"rgba(255,51,102,0.08)",border:"1px solid rgba(255,51,102,0.25)",borderRadius:4,textDecoration:"none",textAlign:"center"}}>
+                      <div style={{fontSize:9,color:K.r,fontWeight:700,letterSpacing:".08em"}}>Trading with virtual $10K?</div>
+                      <div style={{fontSize:11,color:K.r,fontWeight:900,marginTop:2}}>⚡ Switch to LIVE MODE →</div>
+                    </a>
                   )}
                   {nextM&&(<>
                     <div style={{display:"flex",justifyContent:"space-between",fontSize:8,marginBottom:3}}>
