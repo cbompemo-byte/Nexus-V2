@@ -499,46 +499,65 @@ function TradingViewChart({sym,entryPrice,sl,tp,trailPrice,interval}:{sym:string
     script.type="text/javascript";
     script.async=true;
     script.innerHTML=JSON.stringify({
-      autosize:true,
-      symbol:tvSym,
-      interval,
-      timezone:"Etc/UTC",
-      theme:"dark",
-      style:"1",
-      locale:"en",
-      backgroundColor:"rgba(4,6,13,1)",
-      gridColor:"rgba(10,29,51,0.6)",
-      hide_top_toolbar:false,
-      hide_legend:false,
-      save_image:false,
-      withdateranges:true,
-      hide_side_toolbar:false,
-      allow_symbol_change:false,
-      support_host:"https://www.tradingview.com",
-      studies:["RSI@tv-basicstudies","MAExp@tv-basicstudies","MACD@tv-basicstudies","BB@tv-basicstudies","Volume@tv-basicstudies"],
-      studies_overrides:{
-        "rsi.plot.color":"#BD00FF","rsi.plot.linewidth":2,
-        "rsi.upper band.color":"#FF336650","rsi.lower band.color":"#00FF8850",
-        "macd.macd.color":"#00F2FE","macd.signal.color":"#FFD700",
-        "macd.positive.color":"#00FF8870","macd.negative.color":"#FF336670",
-        "bollinger bands.upper.color":"#00F2FE50","bollinger bands.lower.color":"#00F2FE50","bollinger bands.median.color":"#FFD70050",
-        "moving average exponential.length":9,"moving average exponential.source":"close",
+      autosize: true,
+      symbol: tvSym,
+      interval: interval,
+      timezone: 'Etc/UTC',
+      theme: 'dark',
+      style: '1',
+      locale: 'en',
+      backgroundColor: 'rgba(4, 6, 13, 1)',
+      gridColor: 'rgba(10, 29, 51, 0.5)',
+      overrides: {
+        "paneProperties.background": "#04060D",
+        "paneProperties.backgroundType": "solid",
+        "paneProperties.backgroundGradientStartColor": "#04060D",
+        "paneProperties.backgroundGradientEndColor": "#04060D",
+        "paneProperties.vertGridProperties.color": "#0A1D33",
+        "paneProperties.horzGridProperties.color": "#0A1D33",
+        "scalesProperties.textColor": "#4A7090",
+        "scalesProperties.lineColor": "#0A1D33",
+        "scalesProperties.backgroundColor": "#040810",
+        "mainSeriesProperties.candleStyle.upColor": "#00FF88",
+        "mainSeriesProperties.candleStyle.downColor": "#FF3366",
+        "mainSeriesProperties.candleStyle.borderUpColor": "#00FF88",
+        "mainSeriesProperties.candleStyle.borderDownColor": "#FF3366",
+        "mainSeriesProperties.candleStyle.wickUpColor": "#00FF8860",
+        "mainSeriesProperties.candleStyle.wickDownColor": "#FF336660",
+        "mainSeriesProperties.candleStyle.barColorsOnPrevClose": false,
+        "volume.volume.color.0": "#FF336640",
+        "volume.volume.color.1": "#00FF8840",
+        "volume.volume.transparency": 50,
+        "moving average exponential.Plot.color": "#00F2FE",
+        "moving average exponential.Plot.linewidth": 2,
       },
-      disabled_features:["use_localstorage_for_settings","header_symbol_search","header_compare"],
-      enabled_features:["study_templates","side_toolbar_in_fullscreen_mode"],
-      overrides:{
-        "paneProperties.background":"#04060D","paneProperties.backgroundType":"solid",
-        "paneProperties.backgroundGradientStartColor":"#04060D","paneProperties.backgroundGradientEndColor":"#04060D",
-        "paneProperties.vertGridProperties.color":"#0A1D33","paneProperties.vertGridProperties.style":1,
-        "paneProperties.horzGridProperties.color":"#0A1D33","paneProperties.horzGridProperties.style":1,
-        "scalesProperties.textColor":"#2A5070","scalesProperties.lineColor":"#0A1D33","scalesProperties.fontSize":11,
-        "mainSeriesProperties.candleStyle.upColor":"#00FF88","mainSeriesProperties.candleStyle.downColor":"#FF3366",
-        "mainSeriesProperties.candleStyle.borderUpColor":"#00FF88","mainSeriesProperties.candleStyle.borderDownColor":"#FF3366",
-        "mainSeriesProperties.candleStyle.wickUpColor":"#00FF8870","mainSeriesProperties.candleStyle.wickDownColor":"#FF336670",
-        "mainSeriesProperties.candleStyle.barColorsOnPrevClose":false,
-        "volume.volume.color.0":"#FF336640","volume.volume.color.1":"#00FF8840",
-        "moving average exponential.Plot.color":"#00F2FE","moving average exponential.Plot.linewidth":2,
+      studies_overrides: {
+        "relative strength index.plot.color": "#BD00FF",
+        "relative strength index.plot.linewidth": 2,
+        "relative strength index.upper band.color": "#FF336640",
+        "relative strength index.upper band.value": 70,
+        "relative strength index.lower band.color": "#00FF8840",
+        "relative strength index.lower band.value": 30,
+        "relative strength index.hlines background.color": "#FF336615",
+        "MACD.macd.color": "#00F2FE",
+        "MACD.signal.color": "#FFD700",
+        "MACD.histogram.color": "#00FF8860",
+        "MACD.positive bar.color": "#00FF8860",
+        "MACD.negative bar.color": "#FF336660",
+        "volume.volume ma.color": "#00F2FE",
       },
+      disabled_features: [
+        "use_localstorage_for_settings",
+        "header_symbol_search",
+        "header_compare",
+        "header_undo_redo",
+        "symbol_info",
+      ],
+      enabled_features: [
+        "study_templates",
+        "side_toolbar_in_fullscreen_mode",
+        "hide_last_na_study_output",
+      ],
     });
     containerRef.current.appendChild(script);
     return()=>{if(containerRef.current)containerRef.current.innerHTML="";};
@@ -546,28 +565,33 @@ function TradingViewChart({sym,entryPrice,sl,tp,trailPrice,interval}:{sym:string
 
   return(
     <div style={{position:"relative",width:"100%",height:420}}>
+      <style>{`.tradingview-widget-container iframe{background:#04060D!important;color-scheme:dark!important}.tradingview-widget-container{background:#04060D!important}`}</style>
       <div className="tradingview-widget-container" ref={containerRef} style={{width:"100%",height:"100%"}}/>
-      {/* KYMIA overlay — Entry/SL/TP badges */}
-      <div style={{position:"absolute",top:8,left:8,display:"flex",flexDirection:"column",gap:4,pointerEvents:"none",zIndex:10}}>
-        <div style={{display:"flex",alignItems:"center",gap:6,padding:"4px 10px",background:"rgba(0,242,254,0.15)",border:"1px solid #00F2FE60",borderRadius:3,backdropFilter:"blur(8px)"}}>
-          <div style={{width:8,height:1.5,background:"#00F2FE"}}/>
-          <span style={{fontSize:10,color:"#00F2FE",fontWeight:700,fontFamily:"monospace"}}>ENTRY ${entryPrice?.toFixed(2)}</span>
-        </div>
-        <div style={{display:"flex",alignItems:"center",gap:6,padding:"4px 10px",background:"rgba(0,255,136,0.12)",border:"1px solid #00FF8850",borderRadius:3,backdropFilter:"blur(8px)"}}>
-          <div style={{width:8,height:1.5,background:"#00FF88"}}/>
-          <span style={{fontSize:10,color:"#00FF88",fontWeight:700,fontFamily:"monospace"}}>TP ${tp?.toFixed(2)}</span>
-        </div>
-        <div style={{display:"flex",alignItems:"center",gap:6,padding:"4px 10px",background:"rgba(255,51,102,0.12)",border:"1px solid #FF336650",borderRadius:3,backdropFilter:"blur(8px)"}}>
-          <div style={{width:8,height:1.5,background:"#FF3366"}}/>
-          <span style={{fontSize:10,color:"#FF3366",fontWeight:700,fontFamily:"monospace"}}>SL ${sl?.toFixed(2)}</span>
-        </div>
-        {trailPrice&&(
-          <div style={{display:"flex",alignItems:"center",gap:6,padding:"4px 10px",background:"rgba(255,215,0,0.12)",border:"1px solid #FFD70050",borderRadius:3,backdropFilter:"blur(8px)"}}>
-            <div style={{width:8,height:1.5,background:"#FFD700"}}/>
-            <span style={{fontSize:10,color:"#FFD700",fontWeight:700,fontFamily:"monospace"}}>TRAIL ${trailPrice?.toFixed(2)}</span>
-          </div>
-        )}
-      </div>
+      {/* KYMIA overlay — Entry/SL/TP dashed line + badge combos */}
+      {entryPrice>0&&(
+        <>
+          <div style={{position:"absolute",left:0,right:80,top:"35%",height:1,background:"rgba(0,242,254,0.3)",borderTop:"1px dashed #00F2FE",pointerEvents:"none",zIndex:10}}/>
+          <div style={{position:"absolute",left:8,top:"calc(35% - 12px)",padding:"3px 10px",background:"rgba(4,6,13,0.95)",border:"1px solid #00F2FE",borderRadius:3,fontSize:10,color:"#00F2FE",fontWeight:700,fontFamily:"monospace",zIndex:11}}>── ENTRY {f2(entryPrice)}</div>
+        </>
+      )}
+      {tp>0&&(
+        <>
+          <div style={{position:"absolute",left:0,right:80,top:"20%",height:1,background:"rgba(0,255,136,0.3)",borderTop:"1px dashed #00FF88",pointerEvents:"none",zIndex:10}}/>
+          <div style={{position:"absolute",left:8,top:"calc(20% - 12px)",padding:"3px 10px",background:"rgba(4,6,13,0.95)",border:"1px solid #00FF88",borderRadius:3,fontSize:10,color:"#00FF88",fontWeight:700,fontFamily:"monospace",zIndex:11}}>── TP {f2(tp)}</div>
+        </>
+      )}
+      {sl>0&&(
+        <>
+          <div style={{position:"absolute",left:0,right:80,top:"65%",height:1,background:"rgba(255,51,102,0.3)",borderTop:"1px dashed #FF3366",pointerEvents:"none",zIndex:10}}/>
+          <div style={{position:"absolute",left:8,top:"calc(65% - 12px)",padding:"3px 10px",background:"rgba(4,6,13,0.95)",border:"1px solid #FF3366",borderRadius:3,fontSize:10,color:"#FF3366",fontWeight:700,fontFamily:"monospace",zIndex:11}}>── SL {f2(sl)}</div>
+        </>
+      )}
+      {trailPrice&&(
+        <>
+          <div style={{position:"absolute",left:0,right:80,top:"45%",height:1,background:"rgba(255,215,0,0.3)",borderTop:"1px dashed #FFD700",pointerEvents:"none",zIndex:10}}/>
+          <div style={{position:"absolute",left:8,top:"calc(45% - 12px)",padding:"3px 10px",background:"rgba(4,6,13,0.95)",border:"1px solid #FFD700",borderRadius:3,fontSize:10,color:"#FFD700",fontWeight:700,fontFamily:"monospace",zIndex:11}}>── TRAIL {f2(trailPrice)}</div>
+        </>
+      )}
       {/* Agent legend — top right */}
       <div style={{position:"absolute",top:8,right:8,display:"flex",flexDirection:"column",gap:3,pointerEvents:"none",zIndex:10}}>
         <div style={{padding:"4px 8px",background:"rgba(4,6,13,0.85)",border:"1px solid #0A1D33",borderRadius:3,backdropFilter:"blur(8px)",fontSize:9,color:"#2A5070",fontFamily:"monospace"}}>◈ INDICATORS USED BY AGENTS</div>
@@ -2075,6 +2099,68 @@ const PLAN_LIMITS={
 } as const;
 type PlanKey=keyof typeof PLAN_LIMITS;
 
+// ── MiniSwarm: small agent graph shown in right panel when chart is open ──────
+const MiniSwarm = ({agSt, act, dis, sig}: {agSt:Record<string,any>, act:string[], dis:Set<string>, sig?:string}) => {
+  const CX = 90, CY = 70;
+  const MINI_AGENTS = [
+    {id:'cnsns', x:CX, y:CY},
+    {id:'lens',  x:CX-55, y:CY-35},
+    {id:'radar', x:CX-20, y:CY-55},
+    {id:'surge', x:CX+20, y:CY-55},
+    {id:'atlas', x:CX+55, y:CY-35},
+    {id:'echo',  x:CX+65, y:CY+10},
+    {id:'levia', x:CX+40, y:CY+50},
+    {id:'razor', x:CX-40, y:CY+50},
+    {id:'aegis', x:CX-65, y:CY+10},
+  ];
+  return (
+    <div style={{padding:'6px',borderBottom:'1px solid #0A1D33',background:'#040810'}}>
+      <div style={{fontSize:8,color:'#2A5070',letterSpacing:'.2em',padding:'0 4px',marginBottom:4}}>◈ SWARM ACTIVE</div>
+      <svg width="180" height="140" style={{display:'block',margin:'0 auto'}}>
+        <defs>
+          <filter id="msg2">
+            <feGaussianBlur stdDeviation="2" result="b"/>
+            <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+          </filter>
+        </defs>
+        {MINI_AGENTS.filter(a=>a.id!=='cnsns').map(a=>{
+          const agId=a.id==='levia'?'leviathan':a.id;
+          const isOn=act.includes(agId)&&!dis.has(agId);
+          const ag=agSt[agId];
+          const col=ag?.sig==='BUY'?'#00FF88':ag?.sig==='SELL'?'#FF3366':'#00F2FE';
+          return isOn?(
+            <line key={a.id} x1={a.x} y1={a.y} x2={CX} y2={CY} stroke={col} strokeWidth="1" opacity="0.4" filter="url(#msg2)"/>
+          ):(
+            <line key={a.id} x1={a.x} y1={a.y} x2={CX} y2={CY} stroke="#0A1D33" strokeWidth="0.5" opacity="0.3"/>
+          );
+        })}
+        {MINI_AGENTS.map(a=>{
+          const agId=a.id==='levia'?'leviathan':a.id==='cnsns'?'consensus':a.id;
+          const isCenter=a.id==='cnsns';
+          const isOn=isCenter||(act.includes(agId)&&!dis.has(agId));
+          const ag=agSt[agId];
+          const col=isCenter?'#00F2FE':ag?.sig==='BUY'?'#00FF88':ag?.sig==='SELL'?'#FF3366':'#00F2FE';
+          const r=isCenter?14:10;
+          return (
+            <g key={a.id} filter={isOn?'url(#msg2)':undefined} opacity={isOn?1:0.3}>
+              <circle cx={a.x} cy={a.y} r={r} fill="#050A14" stroke={col} strokeWidth={isOn?1.5:0.5}/>
+              <circle cx={a.x-3} cy={a.y-2} r={isOn?2:1.5} fill={col} opacity={isOn?0.9:0.4}/>
+              <circle cx={a.x+3} cy={a.y-2} r={isOn?2:1.5} fill={col} opacity={isOn?0.9:0.4}/>
+              {isOn&&ag?.sig&&ag.sig!=='HOLD'&&(
+                <circle cx={a.x} cy={a.y-r-3} r={2.5} fill={col} opacity={0.9}/>
+              )}
+              <text x={a.x} y={a.y+r+8} textAnchor="middle" fontSize="6" fill={col} fontFamily="monospace" opacity={isOn?1:0.4}>
+                {a.id.slice(0,4).toUpperCase()}
+              </text>
+            </g>
+          );
+        })}
+        <circle cx={CX} cy={CY} r={18} fill="none" stroke="#00F2FE" strokeWidth="0.5" opacity="0.2" strokeDasharray="3 5"/>
+      </svg>
+    </div>
+  );
+};
+
 export default function KYMIA({isLive=false}:{isLive?:boolean}){
   const searchParams=useSearchParams();
   const plan=(searchParams.get("plan")||"sandbox") as PlanKey;
@@ -3235,7 +3321,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
   };
 
   return(
-<div style={{fontFamily:"'JetBrains Mono','Courier New',monospace",background:K.bg,color:K.hi,height:"100vh",display:"grid",gridTemplateRows:"52px 1fr 112px 160px",gridTemplateColumns:chartOpen?"240px 1fr 200px":"240px 1fr 280px",overflow:"hidden",transition:"grid-template-columns .4s ease"}}>
+<div style={{fontFamily:"'JetBrains Mono','Courier New',monospace",background:K.bg,color:K.hi,height:"100vh",display:"grid",gridTemplateRows:"52px 1fr 110px 160px",gridTemplateColumns:chartOpen?"240px 1fr 200px":"240px 1fr 280px",overflow:"hidden",transition:"grid-template-columns .4s ease"}}>
       <style>{`
         *{box-sizing:border-box;margin:0;padding:0}
         ::-webkit-scrollbar{width:3px}::-webkit-scrollbar-track{background:#020508}::-webkit-scrollbar-thumb{background:#0A1D33;border-radius:2px}
@@ -3434,6 +3520,14 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
 
       {/* ══ ROW 2 RIGHT: SIGNALS / HISTORY ══ */}
       <div className="panel" style={{gridColumn:3,gridRow:2,borderLeft:"1px solid "+K.brd,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+        {/* MiniSwarm — always visible when chart is open */}
+        {chartOpen&&(
+          <MiniSwarm
+            agSt={agSt}
+            act={Object.entries(agSt).filter(([,a])=>a.on).map(([id])=>id)}
+            dis={disabled}
+          />
+        )}
         {/* Tabs */}
         <div style={{display:"flex",borderBottom:"1px solid "+K.brd}}>
           {(["signals","history"] as const).map(t=>(
@@ -3550,8 +3644,8 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
       </div>
 
       {/* ══ ROW 4: LOG PANEL ══ */}
-      <div style={{gridColumn:"1/-1",gridRow:4,borderTop:"1px solid "+K.brd,display:"flex",flexDirection:"column",overflow:"hidden",background:"#010407"}}>
-        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"3px 12px",borderBottom:"1px solid "+K.brd+"44"}}>
+      <div style={{gridColumn:"1/-1",gridRow:4,borderTop:"1px solid "+K.brd,height:"100%",overflow:"hidden",display:"flex",flexDirection:"column",background:"#010407"}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"3px 12px",borderBottom:"1px solid "+K.brd+"44",flexShrink:0}}>
           <span style={{fontSize:9,color:K.dim,letterSpacing:1}}>LIVE REASONING</span>
           <span style={{fontSize:8,color:K.dim+"66"}}>{logs.length} entries</span>
         </div>
