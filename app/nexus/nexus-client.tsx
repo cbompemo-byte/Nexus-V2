@@ -2161,6 +2161,64 @@ const MiniSwarm = ({agSt, act, dis, sig}: {agSt:Record<string,any>, act:string[]
   );
 };
 
+const LeftGlobe = () => (
+  <div style={{width:220,height:220,position:'relative',flexShrink:0,overflow:'hidden'}}>
+    <svg width="220" height="220" viewBox="0 0 220 220" style={{display:'block'}}>
+      <defs>
+        <radialGradient id="globeGrad" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stopColor="#051020" stopOpacity="1"/>
+          <stop offset="100%" stopColor="#04060D" stopOpacity="1"/>
+        </radialGradient>
+        <filter id="glow">
+          <feGaussianBlur stdDeviation="1.5" result="blur"/>
+          <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+        </filter>
+        <clipPath id="globeClip"><circle cx="110" cy="110" r="90"/></clipPath>
+      </defs>
+      {/* Globe background */}
+      <circle cx="110" cy="110" r="90" fill="url(#globeGrad)" stroke="#00F2FE" strokeWidth="0.5" opacity="0.6"/>
+      {/* Latitude lines */}
+      {[-60,-30,0,30,60].map(lat=>{
+        const ry=90*Math.cos(lat*Math.PI/180);
+        const y=110-90*Math.sin(lat*Math.PI/180);
+        return <ellipse key={lat} cx="110" cy={y} rx={ry} ry={ry*0.15} fill="none" stroke="#00F2FE" strokeWidth="0.3" opacity="0.2" clipPath="url(#globeClip)"/>;
+      })}
+      {/* Longitude lines */}
+      {[0,30,60,90,120,150].map(lon=>{
+        const rx=90*Math.sin(lon*Math.PI/180);
+        return <ellipse key={lon} cx="110" cy="110" rx={rx} ry="90" fill="none" stroke="#00F2FE" strokeWidth="0.3" opacity="0.15" clipPath="url(#globeClip)"/>;
+      })}
+      {/* City dots */}
+      {[
+        {x:85,y:75,name:'NYC',col:'#00FF88'},
+        {x:107,y:68,name:'LON',col:'#00F2FE'},
+        {x:163,y:78,name:'TYO',col:'#BD00FF'},
+        {x:155,y:95,name:'SGP',col:'#FFD700'},
+        {x:120,y:82,name:'DXB',col:'#00F2FE'},
+        {x:158,y:82,name:'HKG',col:'#00FF88'},
+      ].map(c=>(
+        <g key={c.name} filter="url(#glow)">
+          <circle cx={c.x} cy={c.y} r="3" fill={c.col} opacity="0.9"/>
+          <circle cx={c.x} cy={c.y} r="6" fill="none" stroke={c.col} strokeWidth="0.5" opacity="0.4"/>
+          <text x={c.x+5} y={c.y-4} fontSize="5" fill={c.col} fontFamily="monospace" opacity="0.7">{c.name}</text>
+        </g>
+      ))}
+      {/* Trade arcs */}
+      <path d="M85,75 Q110,50 155,95" fill="none" stroke="#00FF88" strokeWidth="0.8" opacity="0.3" strokeDasharray="3 4"/>
+      <path d="M107,68 Q140,55 158,82" fill="none" stroke="#00F2FE" strokeWidth="0.8" opacity="0.3" strokeDasharray="3 4"/>
+      {/* Center eye */}
+      <circle cx="110" cy="110" r="8" fill="#04060D" stroke="#00F2FE" strokeWidth="1" opacity="0.8"/>
+      <circle cx="110" cy="110" r="4" fill="#00F2FE" opacity="0.6"/>
+      <circle cx="110" cy="110" r="1.5" fill="#fff" opacity="0.9"/>
+      {/* Outer ring */}
+      <circle cx="110" cy="110" r="92" fill="none" stroke="#00F2FE" strokeWidth="0.3" opacity="0.15" strokeDasharray="4 8"/>
+      {/* Money labels */}
+      <text x="60" y="100" fontSize="8" fill="#00FF88" fontFamily="monospace" opacity="0.7">+$47</text>
+      <text x="145" y="130" fontSize="8" fill="#FF3366" fontFamily="monospace" opacity="0.7">-$12</text>
+    </svg>
+  </div>
+);
+
 export default function KYMIA({isLive=false}:{isLive?:boolean}){
   const searchParams=useSearchParams();
   const plan=(searchParams.get("plan")||"sandbox") as PlanKey;
@@ -3321,7 +3379,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
   };
 
   return(
-<div style={{fontFamily:"'JetBrains Mono','Courier New',monospace",background:K.bg,color:K.hi,height:"100vh",display:"grid",gridTemplateRows:"52px 1fr 110px 160px",gridTemplateColumns:chartOpen?"240px 1fr 200px":"240px 1fr 280px",overflow:"hidden",transition:"grid-template-columns .4s ease"}}>
+<div style={{fontFamily:"'JetBrains Mono','Courier New',monospace",display:'grid',gridTemplateRows:'48px 1fr 100px 140px',gridTemplateColumns:chartOpen?'220px 1fr 180px':'220px 1fr 260px',height:'100vh',maxHeight:'100vh',overflow:'hidden',background:'#04060D',color:K.hi,transition:'grid-template-columns .4s ease'}}>
       <style>{`
         *{box-sizing:border-box;margin:0;padding:0}
         ::-webkit-scrollbar{width:3px}::-webkit-scrollbar-track{background:#020508}::-webkit-scrollbar-thumb{background:#0A1D33;border-radius:2px}
@@ -3339,7 +3397,9 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
         @keyframes whalePulse{0%{transform:scale(0);opacity:.72}100%{transform:scale(1);opacity:0}}
         @keyframes odometerRoll{from{transform:translateY(-100%);opacity:0}to{transform:translateY(0);opacity:1}}
         @keyframes glitch{0%{transform:translateX(0)}25%{transform:translateX(-2px) skewX(2deg)}75%{transform:translateX(2px) skewX(-2deg)}100%{transform:translateX(0)}}
-        @keyframes logSlideIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+        @keyframes logSlideIn{from{opacity:0;transform:translateX(-8px)}to{opacity:1;transform:translateX(0)}}
+        @keyframes matrixFall{from{transform:translateY(-20px)}to{transform:translateY(160px)}}
+        @keyframes profitPulse{0%,100%{box-shadow:inset 0 0 20px rgba(0,255,136,0.08)}50%{box-shadow:inset 0 0 40px rgba(0,255,136,0.15)}}
         @keyframes convPulse{0%,100%{box-shadow:0 0 0 rgba(0,242,254,0);border-color:rgba(0,242,254,.15)}50%{box-shadow:0 0 28px rgba(0,242,254,.25),inset 0 0 18px rgba(0,242,254,.07);border-color:rgba(0,242,254,.55)}}
         @keyframes convBuyPulse{0%,100%{box-shadow:0 0 0 rgba(0,255,136,0);border-color:rgba(0,255,136,.15)}50%{box-shadow:0 0 28px rgba(0,255,136,.25),inset 0 0 18px rgba(0,255,136,.07);border-color:rgba(0,255,136,.55)}}
         @keyframes nodeFlash{0%{filter:brightness(1)}25%{filter:brightness(3) saturate(2)}75%{filter:brightness(2)}100%{filter:brightness(1)}}
@@ -3382,7 +3442,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
 {booting&&<BootSequence onDone={()=>{setBooting(false);setTimeout(()=>{setRunning(true);log("SYS","▶ AUTO-START — 18 agents online",K.g);},800);}}/>}
 
       {/* ══ ROW 1: HEADER ══ */}
-      <div style={{gridColumn:"1/-1",display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 16px",borderBottom:"1px solid "+K.brd,background:blackSwan?"#090203":"#040810",zIndex:10}}>
+      <div style={{gridColumn:"1/-1",height:'100%',overflow:'hidden',display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 16px",borderBottom:"1px solid "+K.brd,background:blackSwan?"#090203":"#040810",zIndex:10}}>
         <div style={{display:"flex",alignItems:"center",gap:12}}>
           <span style={{fontSize:13,fontWeight:700,letterSpacing:2,color:K.hi}}>NEXUS</span>
           <span style={{fontSize:10,color:K.dim,letterSpacing:1}}>v2.0</span>
@@ -3393,10 +3453,23 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
             <button key={m} className="btn" onClick={()=>setTradingMode(m)} style={{background:tradingMode===m?K.c+"22":"transparent",color:tradingMode===m?K.c:K.dim,border:"1px solid "+(tradingMode===m?K.c:K.brd),fontSize:9,padding:"2px 8px",borderRadius:3,cursor:"pointer",textTransform:"uppercase",letterSpacing:1}}>{m}</button>
           ))}
         </div>
+        {/* Live price ticker center */}
+        <div style={{display:"flex",gap:12,alignItems:"center",fontSize:9,fontFamily:"monospace",color:K.dim}}>
+          {(['SOL','BTC','ETH'] as const).map(sym=>{
+            const pd=prices[sym];
+            const p=pd?.price||0;
+            const up=(pd?.trend==='up');
+            return(
+              <span key={sym} style={{color:up?K.g:K.r,whiteSpace:'nowrap'}}>
+                {sym} {fPrice(p)} {up?'▲':'▼'}
+              </span>
+            );
+          })}
+        </div>
         <div style={{display:"flex",alignItems:"center",gap:16}}>
           <div style={{textAlign:"right"}}>
             <div style={{fontSize:9,color:K.dim,letterSpacing:1}}>EQUITY</div>
-            <div style={{fontSize:14,fontWeight:700,color:port.equity>=CAP?K.g:K.hi}}>${f2(port.equity)}</div>
+            <div style={{fontSize:18,fontWeight:900,color:port.equity>=CAP?K.g:K.r}}>${f2(port.equity)}</div>
           </div>
           <div style={{textAlign:"right"}}>
             <div style={{fontSize:9,color:K.dim}}>P&L</div>
@@ -3410,7 +3483,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
       </div>
 
       {/* ══ ROW 2 LEFT: MARKET PANEL ══ */}
-      <div className="panel" style={{gridColumn:1,gridRow:2,overflowY:"auto",borderRight:"1px solid "+K.brd,padding:"8px 0"}}>
+      <div className="panel" style={{gridColumn:1,gridRow:2,height:'100%',overflow:'hidden',overflowY:"auto",borderRight:"1px solid "+K.brd,padding:"8px 0",display:"flex",flexDirection:"column"}}>
         {/* Pair selector */}
         <div style={{padding:"0 10px 8px",borderBottom:"1px solid "+K.brd+"44"}}>
           <div style={{fontSize:9,color:K.dim,letterSpacing:1,marginBottom:4}}>MARKET</div>
@@ -3459,6 +3532,8 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
             );
           })()}
         </div>
+        {/* Globe */}
+        <LeftGlobe />
         {/* Markets list */}
         <div style={{padding:"8px 10px",borderBottom:"1px solid "+K.brd+"44"}}>
           <div style={{fontSize:9,color:K.dim,letterSpacing:1,marginBottom:4}}>WATCHLIST</div>
@@ -3501,7 +3576,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
       </div>
 
       {/* ══ ROW 2 CENTER: CHART / SWARM ══ */}
-      <div style={{gridColumn:2,gridRow:2,position:"relative",overflow:"hidden",background:K.bg}}>
+      <div style={{gridColumn:2,gridRow:2,height:'100%',overflow:"hidden",position:"relative",background:K.bg}}>
         {chartOpen&&selectedTrade?(
           <div style={{width:"100%",height:"100%",animation:"slideInChart .35s ease"}}>
             <TradingViewChart sym={selectedTrade.sym} entryPrice={selectedTrade.pos?.avg||selectedTrade.price||0} sl={(selectedTrade.pos?.avg||selectedTrade.price||0)*0.97} tp={(selectedTrade.pos?.avg||selectedTrade.price||0)*1.06} trailPrice={null} interval="1"/>
@@ -3519,7 +3594,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
       </div>
 
       {/* ══ ROW 2 RIGHT: SIGNALS / HISTORY ══ */}
-      <div className="panel" style={{gridColumn:3,gridRow:2,borderLeft:"1px solid "+K.brd,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+      <div className="panel" style={{gridColumn:3,gridRow:2,height:'100%',overflow:"hidden",borderLeft:"1px solid "+K.brd,display:"flex",flexDirection:"column"}}>
         {/* MiniSwarm — always visible when chart is open */}
         {chartOpen&&(
           <MiniSwarm
@@ -3606,7 +3681,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
       </div>
 
       {/* ══ ROW 3: POSITIONS BAR ══ */}
-      <div style={{gridColumn:"1/-1",gridRow:3,borderTop:"1px solid "+K.brd,display:"flex",alignItems:"center",gap:8,padding:"0 12px",overflowX:"auto",background:"#020508"}}>
+      <div style={{gridColumn:"1/-1",gridRow:3,height:'100%',overflow:'hidden',borderTop:"1px solid "+K.brd,display:"flex",alignItems:"center",gap:8,padding:"0 12px",overflowX:"auto",background:"#020508"}}>
         <span style={{fontSize:9,color:K.dim,letterSpacing:1,whiteSpace:"nowrap",minWidth:"fit-content"}}>POSITIONS</span>
         {Object.entries(port.pos).length===0?(
           <span style={{fontSize:9,color:K.dim+"66",fontStyle:"italic"}}>No open positions</span>
@@ -3617,7 +3692,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
             const pnlPct=pos.avg>0?(cur-pos.avg)/pos.avg*100*(pos.side==="SHORT"?-1:1):0;
             const pnlUsd=pnlPct/100*pos.qty*pos.avg;
             return(
-              <div key={sym} onClick={()=>{setSelectedTrade({sym:sym.replace("USDT","").replace("USD",""),pos,price:cur,side:pos.side||"LONG"});setChartOpen(true);}} style={{minWidth:120,background:pnlUsd>=0?K.g+"0a":K.r+"0a",border:"1px solid "+(pnlUsd>=0?K.g+"44":K.r+"44"),borderRadius:4,padding:"6px 8px",cursor:"pointer",flexShrink:0,transition:"border-color .2s"}}>
+              <div key={sym} onClick={()=>{setSelectedTrade({sym:sym.replace("USDT","").replace("USD",""),pos,price:cur,side:pos.side||"LONG"});setChartOpen(true);}} style={{minWidth:120,maxHeight:84,background:pnlUsd>=0?K.g+"0a":K.r+"0a",border:"1px solid "+(pnlUsd>=0?K.g+"44":K.r+"44"),borderRadius:4,padding:"6px 10px",cursor:"pointer",flexShrink:0,transition:"border-color .2s",boxShadow:pnlUsd>=0?'inset 0 0 20px rgba(0,255,136,0.08),0 0 0 1px rgba(0,255,136,0.15)':'inset 0 0 20px rgba(255,51,102,0.06),0 0 0 1px rgba(255,51,102,0.1)',animation:pnlUsd>=0?'profitPulse 2s ease-in-out infinite':undefined}}>
                 <div style={{display:"flex",justifyContent:"space-between",marginBottom:2}}>
                   <span style={{fontSize:9,fontWeight:700,color:K.hi}}>{sym.replace("USDT","").replace("USD","")}</span>
                   <span style={{fontSize:8,color:pos.side==="SHORT"?K.r:K.g}}>{pos.side||"LONG"}</span>
@@ -3644,17 +3719,39 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
       </div>
 
       {/* ══ ROW 4: LOG PANEL ══ */}
-      <div style={{gridColumn:"1/-1",gridRow:4,borderTop:"1px solid "+K.brd,height:"100%",overflow:"hidden",display:"flex",flexDirection:"column",background:"#010407"}}>
+      <div style={{gridColumn:"1/-1",gridRow:4,height:'100%',overflow:"hidden",borderTop:"1px solid "+K.brd,display:"flex",flexDirection:"column",background:"#010407",position:"relative"}}>
+        {/* Matrix rain overlay */}
+        <div style={{position:'absolute',right:0,top:0,bottom:0,width:60,overflow:'hidden',opacity:0.06,pointerEvents:'none'}}>
+          {['01','10','11','00','10','01'].map((ch,i)=>(
+            <div key={i} style={{position:'absolute',left:i*10,top:0,color:'#00FF88',fontSize:9,fontFamily:'monospace',animation:`matrixFall ${1.5+i*0.3}s linear infinite`,animationDelay:`${i*0.4}s`}}>{ch}</div>
+          ))}
+        </div>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"3px 12px",borderBottom:"1px solid "+K.brd+"44",flexShrink:0}}>
           <span style={{fontSize:9,color:K.dim,letterSpacing:1}}>LIVE REASONING</span>
           <span style={{fontSize:8,color:K.dim+"66"}}>{logs.length} entries</span>
         </div>
+        {/* Live stats bar */}
+        <div style={{display:'flex',gap:16,padding:'3px 12px',borderBottom:'1px solid #0A1D33',background:'rgba(4,6,13,0.9)',alignItems:'center',flexShrink:0}}>
+          <div style={{display:'flex',gap:4,alignItems:'center'}}>
+            <span style={{fontSize:7,color:'#2A5070'}}>WIN RATE</span>
+            <span style={{fontSize:10,color:'#00FF88',fontWeight:700,fontFamily:'monospace'}}>{cl.length>0?Math.round(cl.filter((t:Trade)=>t.pnl>0).length/cl.length*100):0}%</span>
+          </div>
+          <div style={{display:'flex',gap:4,alignItems:'center'}}>
+            <div style={{width:4,height:4,borderRadius:'50%',background:'#00F2FE',animation:'pu 1s infinite'}}/>
+            <span style={{fontSize:7,color:'#2A5070'}}>REGIME</span>
+            <span style={{fontSize:9,color:'#FFD700',fontWeight:700,fontFamily:'monospace'}}>{marketRegime?.regime||'SCANNING'}</span>
+          </div>
+          <div style={{marginLeft:'auto',display:'flex',gap:4,alignItems:'center'}}>
+            <span style={{fontSize:7,color:'#2A5070'}}>POSITIONS</span>
+            <span style={{fontSize:10,color:'#00F2FE',fontWeight:700,fontFamily:'monospace'}}>{Object.keys(port.pos).length}</span>
+          </div>
+        </div>
         <div style={{flex:1,overflowY:"auto",padding:"4px 12px",display:"flex",flexDirection:"column",gap:1}} ref={logRef}>
           {logs.slice(-60).map((l,i)=>(
-            <div key={i} className="log-entry" style={{display:"flex",gap:8,alignItems:"baseline",padding:"1px 0"}}>
-              <span style={{fontSize:8,color:K.dim,whiteSpace:"nowrap",minWidth:48}}>{l.t}</span>
-              <span style={{fontSize:8,color:l.col||K.hi,fontWeight:l.ag==="SYS"?700:400}}>[{l.ag}]</span>
-              <span style={{fontSize:8,color:K.hi+"cc",lineHeight:1.3}}>{l.msg}</span>
+            <div key={i} className="log-entry" style={{display:"flex",gap:8,alignItems:"baseline",padding:"2px 4px",borderLeft:`2px solid ${l.col||K.hi}44`,marginBottom:1,borderRadius:'0 2px 2px 0'}}>
+              <span style={{fontSize:8,color:K.dim,whiteSpace:"nowrap",minWidth:48,flexShrink:0}}>{l.t}</span>
+              <span style={{fontSize:9,color:l.col||K.hi,fontWeight:700,flexShrink:0}}>[{l.ag}]</span>
+              <span style={{fontSize:9,color:K.hi+"cc",lineHeight:1.3}}>{l.msg}</span>
             </div>
           ))}
         </div>
