@@ -557,6 +557,7 @@ function TradingViewChart({sym,entryPrice,sl,tp,trailPrice,interval}:{sym:string
 
   return(
     <div style={{position:"relative",width:"100%",height:"100%",minHeight:320,background:'#04060D'}}>
+      <style>{`.tradingview-widget-container,.tradingview-widget-container__widget,.tradingview-widget-container iframe{width:100%!important;height:100%!important;background:#04060D!important}`}</style>
       <div className="tradingview-widget-container" ref={containerRef} style={{width:"100%",height:"100%",background:'#04060D'}}/>
       {/* Dark overlay covers the white flash while TradingView iframe loads */}
       {loading&&(
