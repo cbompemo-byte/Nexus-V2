@@ -489,16 +489,19 @@ const TV_SYMBOLS:{[k:string]:string}={
 
 function TradingViewChart({sym,entryPrice,sl,tp,trailPrice,interval}:{sym:string,entryPrice:number,sl:number,tp:number,trailPrice:number|null,interval:string}){
   const containerRef=useRef<HTMLDivElement>(null);
+  const [loading,setLoading]=useState(true);
   const tvSym=TV_SYMBOLS[sym]||`BINANCE:${sym}USDT`;
 
   useEffect(()=>{
     if(!containerRef.current)return;
+    setLoading(true);
     containerRef.current.innerHTML="";
     const script=document.createElement("script");
     script.src="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js";
     script.type="text/javascript";
     script.async=true;
-    script.innerHTML=JSON.stringify({
+    // textContent is required for dynamically-created scripts — innerHTML won't execute
+    script.textContent=JSON.stringify({
       autosize: true,
       symbol: tvSym,
       interval: interval,
@@ -547,13 +550,21 @@ function TradingViewChart({sym,entryPrice,sl,tp,trailPrice,interval}:{sym:string
       ],
     });
     containerRef.current.appendChild(script);
-    return()=>{if(containerRef.current)containerRef.current.innerHTML="";};
+    // Hide loading overlay after chart has had time to render dark
+    const t=setTimeout(()=>setLoading(false),2200);
+    return()=>{if(containerRef.current)containerRef.current.innerHTML="";clearTimeout(t);};
   },[tvSym,interval]);
 
   return(
-    <div style={{position:"relative",width:"100%",height:420,background:'#04060D'}}>
-      <style>{`.tradingview-widget-container iframe{background:#04060D!important;color-scheme:dark!important}.tradingview-widget-container{background:#04060D!important}iframe[id*="tradingview"]{background:#04060D!important}.tradingview-widget-container__widget{background:#04060D!important}`}</style>
+    <div style={{position:"relative",width:"100%",height:"100%",minHeight:320,background:'#04060D'}}>
       <div className="tradingview-widget-container" ref={containerRef} style={{width:"100%",height:"100%",background:'#04060D'}}/>
+      {/* Dark overlay covers the white flash while TradingView iframe loads */}
+      {loading&&(
+        <div style={{position:"absolute",inset:0,background:"#04060D",zIndex:20,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:10,pointerEvents:"none"}}>
+          <div style={{width:32,height:32,border:"2px solid #00F2FE",borderTopColor:"transparent",borderRadius:"50%",animation:"spin .8s linear infinite"}}/>
+          <div style={{fontSize:9,color:"#2A5070",letterSpacing:".2em",fontFamily:"monospace"}}>LOADING CHART · {tvSym}</div>
+        </div>
+      )}
       {/* KYMIA overlay — Entry/SL/TP dashed line + badge combos */}
       {entryPrice>0&&(
         <>
@@ -3648,6 +3659,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
         @keyframes glitch{0%{transform:translateX(0)}25%{transform:translateX(-2px) skewX(2deg)}75%{transform:translateX(2px) skewX(-2deg)}100%{transform:translateX(0)}}
         @keyframes logSlideIn{from{opacity:0;transform:translateX(-8px)}to{opacity:1;transform:translateX(0)}}
         @keyframes matrixFall{from{transform:translateY(-20px)}to{transform:translateY(160px)}}
+        @keyframes spin{to{transform:rotate(360deg)}}
         @keyframes profitPulse{0%,100%{box-shadow:inset 0 0 20px rgba(0,255,136,0.08)}50%{box-shadow:inset 0 0 40px rgba(0,255,136,0.15)}}
         @keyframes convPulse{0%,100%{box-shadow:0 0 0 rgba(0,242,254,0);border-color:rgba(0,242,254,.15)}50%{box-shadow:0 0 28px rgba(0,242,254,.25),inset 0 0 18px rgba(0,242,254,.07);border-color:rgba(0,242,254,.55)}}
         @keyframes convBuyPulse{0%,100%{box-shadow:0 0 0 rgba(0,255,136,0);border-color:rgba(0,255,136,.15)}50%{box-shadow:0 0 28px rgba(0,255,136,.25),inset 0 0 18px rgba(0,255,136,.07);border-color:rgba(0,255,136,.55)}}
