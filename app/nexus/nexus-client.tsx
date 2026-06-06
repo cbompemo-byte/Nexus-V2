@@ -517,17 +517,23 @@ function TradingViewChart({sym,entryPrice,sl,tp,trailPrice,interval}:{sym:string
       overrides: {
         "paneProperties.background": "#04060D",
         "paneProperties.backgroundType": "solid",
-        "paneProperties.vertGridProperties.color": "#0A1D33",
-        "paneProperties.horzGridProperties.color": "#0A1D33",
+        "paneProperties.backgroundGradientStartColor": "#040D1A",
+        "paneProperties.backgroundGradientEndColor": "#04060D",
+        "paneProperties.vertGridProperties.color": "#081422",
+        "paneProperties.horzGridProperties.color": "#081422",
+        "paneProperties.vertGridProperties.style": 1,
+        "paneProperties.horzGridProperties.style": 1,
         "scalesProperties.textColor": "#4A7090",
         "scalesProperties.lineColor": "#0A1D33",
         "scalesProperties.backgroundColor": "#04060D",
+        "paneProperties.legendProperties.backgroundTransparency": 100,
         "mainSeriesProperties.candleStyle.upColor": "#00FF88",
         "mainSeriesProperties.candleStyle.downColor": "#FF3366",
         "mainSeriesProperties.candleStyle.borderUpColor": "#00FF88",
         "mainSeriesProperties.candleStyle.borderDownColor": "#FF3366",
-        "mainSeriesProperties.candleStyle.wickUpColor": "#00FF8860",
-        "mainSeriesProperties.candleStyle.wickDownColor": "#FF336660",
+        "mainSeriesProperties.candleStyle.wickUpColor": "#00FF8850",
+        "mainSeriesProperties.candleStyle.wickDownColor": "#FF336650",
+        "mainSeriesProperties.priceAxisProperties.autoScale": true,
       },
       studies_overrides: {
         "relative strength index.plot.color": "#BD00FF",
@@ -551,7 +557,7 @@ function TradingViewChart({sym,entryPrice,sl,tp,trailPrice,interval}:{sym:string
     });
     containerRef.current.appendChild(script);
     // Hide loading overlay after chart has had time to render dark
-    const t=setTimeout(()=>setLoading(false),2200);
+    const t=setTimeout(()=>setLoading(false),3000);
     return()=>{if(containerRef.current)containerRef.current.innerHTML="";clearTimeout(t);};
   },[tvSym,interval]);
 
@@ -561,7 +567,7 @@ function TradingViewChart({sym,entryPrice,sl,tp,trailPrice,interval}:{sym:string
       <div className="tradingview-widget-container" ref={containerRef} style={{width:"100%",height:"100%",background:'#04060D'}}/>
       {/* Dark overlay covers the white flash while TradingView iframe loads */}
       {loading&&(
-        <div style={{position:"absolute",inset:0,background:"#04060D",zIndex:20,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:10,pointerEvents:"none"}}>
+        <div style={{position:"absolute",inset:0,background:"#04060D",zIndex:20,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:10,pointerEvents:"none",transition:"opacity 0.5s",opacity:1}}>
           <div style={{width:32,height:32,border:"2px solid #00F2FE",borderTopColor:"transparent",borderRadius:"50%",animation:"spin .8s linear infinite"}}/>
           <div style={{fontSize:9,color:"#2A5070",letterSpacing:".2em",fontFamily:"monospace"}}>LOADING CHART · {tvSym}</div>
         </div>
@@ -2447,6 +2453,128 @@ function MiniGlobePanel({px, port: _port, sig}: {px: Record<string,any>, port: a
   );
 }
 
+const ALL_AGENTS_LIST = [
+  {id:'levia',  name:'LEVIA',   specialty:'Whale'},
+  {id:'lens',   name:'LENS',    specialty:'RSI'},
+  {id:'surge',  name:'SURGE',   specialty:'Volume'},
+  {id:'atlas',  name:'ATLAS',   specialty:'Macro'},
+  {id:'echo',   name:'ECHO',    specialty:'Fear'},
+  {id:'radar',  name:'RADAR',   specialty:'EMA'},
+  {id:'shield', name:'SHIELD',  specialty:'OB'},
+  {id:'oracle', name:'ORACLE',  specialty:'Flow'},
+  {id:'phantom',name:'PHNTM',   specialty:'Fut'},
+  {id:'titan',  name:'TITAN',   specialty:'Regime'},
+  {id:'hydra',  name:'HYDRA',   specialty:'Liq'},
+  {id:'delta',  name:'DELTA',   specialty:'Arb'},
+  {id:'razor',  name:'RAZOR',   specialty:'MACD'},
+  {id:'vector', name:'VECTR',   specialty:'ADX'},
+  {id:'neural', name:'NEURAL',  specialty:'AI'},
+  {id:'watch',  name:'WATCH',   specialty:'Health'},
+  {id:'cnsns',  name:'CNSNS',   specialty:'Vote'},
+  {id:'aegis',  name:'AEGIS',   specialty:'Risk'},
+];
+
+const AllAgentsPanel = ({agSt, act, dis}: {agSt:Record<string,any>, act:string[], dis:Set<string>}) => (
+  <div style={{borderRight:'1px solid #0A1D33',overflow:'hidden',display:'flex',flexDirection:'column'}}>
+    <div style={{padding:'4px 10px',borderBottom:'1px solid #0A1D33',fontSize:8,color:'#2A5070',letterSpacing:'.2em',flexShrink:0,display:'flex',justifyContent:'space-between'}}>
+      <span>◈ 18 COGNITIVE AGENTS</span>
+      <span style={{color:'#00FF88'}}>{act.length} ACTIVE</span>
+    </div>
+    <div style={{display:'grid',gridTemplateColumns:'repeat(6,1fr)',gap:2,padding:6,flex:1,overflow:'hidden',alignContent:'start'}}>
+      {ALL_AGENTS_LIST.map(ag=>{
+        const agId=ag.id==='levia'?'leviathan':ag.id==='cnsns'?'consensus':ag.id;
+        const state=agSt[agId];
+        const isActive=act.includes(agId)&&!dis.has(agId);
+        const sig=state?.sig||'HOLD';
+        const conf=state?.conf||0;
+        const col=ag.id==='cnsns'?'#00F2FE':sig==='BUY'?'#00FF88':sig==='SELL'?'#FF3366':'#2A5070';
+        return (
+          <div key={ag.id} style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:'3px 2px',background:isActive?`${col}10`:'rgba(6,10,18,0.6)',border:`1px solid ${isActive?col+'30':'#0A1D33'}`,borderRadius:4,opacity:isActive?1:0.4,transition:'all .3s'}}>
+            <svg width="22" height="22" viewBox="0 0 24 24">
+              <ellipse cx="12" cy="10" rx="7" ry="8" fill="#050A14" stroke={col} strokeWidth={isActive?1.2:0.5}/>
+              <polygon points="6,9 8,6 10,9 8,12" fill={isActive?col+'40':'transparent'} stroke={col} strokeWidth="0.8"/>
+              <polygon points="14,9 16,6 18,9 16,12" fill={isActive?col+'40':'transparent'} stroke={col} strokeWidth="0.8"/>
+              <circle cx="8" cy="9" r="1.5" fill={col} opacity={isActive?0.9:0.3}/>
+              <circle cx="16" cy="9" r="1.5" fill={col} opacity={isActive?0.9:0.3}/>
+              <line x1="6" y1="16" x2="12" y2="20" stroke={col} strokeWidth="0.7" opacity={isActive?0.6:0.2}/>
+              <line x1="18" y1="16" x2="12" y2="20" stroke={col} strokeWidth="0.7" opacity={isActive?0.6:0.2}/>
+            </svg>
+            <div style={{fontSize:6,color:isActive?col:'#1A3050',fontFamily:'monospace',fontWeight:700,textAlign:'center',lineHeight:1.2,marginTop:1}}>{ag.name}</div>
+            {isActive&&sig!=='HOLD'&&(
+              <div style={{fontSize:5.5,color:col,fontFamily:'monospace',fontWeight:700,marginTop:1,padding:'0 2px',background:col+'15',borderRadius:2}}>{sig}</div>
+            )}
+            {isActive&&conf>0&&(
+              <div style={{width:'85%',height:2,background:'#06090F',borderRadius:1,marginTop:2}}>
+                <div style={{width:`${conf}%`,height:'100%',background:col,borderRadius:1}}/>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  </div>
+);
+
+const CardsPanel = ({trades}: {trades:any[]}) => {
+  const recent = trades.filter((t:any)=>t.pnl!==0).slice(-6);
+  return (
+    <div style={{borderRight:'1px solid #0A1D33',overflow:'hidden',display:'flex',flexDirection:'column'}}>
+      <div style={{padding:'4px 10px',borderBottom:'1px solid #0A1D33',fontSize:8,color:'#2A5070',letterSpacing:'.2em',flexShrink:0}}>◈ RECENT TRADES</div>
+      <div style={{flex:1,overflowY:'auto',display:'grid',gridTemplateColumns:'1fr 1fr',gap:4,padding:6,alignContent:'start'}}>
+        {recent.map((t:any,i:number)=>{
+          const col=t.pnl>=0?'#00FF88':'#FF3366';
+          return (
+            <div key={i} style={{padding:'5px 7px',background:`${col}08`,border:`1px solid ${col}25`,borderLeft:`3px solid ${col}`,borderRadius:4}}>
+              <div style={{display:'flex',justifyContent:'space-between',marginBottom:2}}>
+                <span style={{fontSize:7,color:col,fontWeight:700,fontFamily:'monospace'}}>{t.pnl>=0?'▲':'▼'} {t.sym}</span>
+                <span style={{fontSize:6,color:'#2A5070'}}>{(t.agent||'').slice(0,5)}</span>
+              </div>
+              <div style={{fontSize:14,fontWeight:900,color:col,fontFamily:'monospace',textShadow:`0 0 8px ${col}`}}>
+                {t.pnl>=0?'+':''}{typeof t.pnl==='number'?'$'+Math.abs(t.pnl).toFixed(2):''}
+              </div>
+            </div>
+          );
+        })}
+        {recent.length===0&&(
+          <div style={{gridColumn:'1/-1',textAlign:'center',fontSize:9,color:'#0A1D33',fontFamily:'monospace',paddingTop:20}}>Waiting for first trade...</div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const LogPanelCompact = ({logs, logRef, bP, sP, running}: {logs:any[], logRef:React.RefObject<HTMLDivElement|null>, bP:number, sP:number, running:boolean}) => (
+  <div style={{display:'flex',flexDirection:'column',overflow:'hidden'}}>
+    <div style={{padding:'4px 10px',borderBottom:'1px solid #0A1D33',fontSize:8,color:'#2A5070',letterSpacing:'.2em',flexShrink:0,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+      <div style={{display:'flex',gap:5,alignItems:'center'}}>
+        {running&&<div style={{width:4,height:4,borderRadius:'50%',background:'#00FF88',animation:'pu 1s infinite'}}/>}
+        <span>◈ LIVE REASONING</span>
+      </div>
+      <div style={{display:'flex',gap:8}}>
+        <span style={{color:'#00FF88'}}>▲{bP}%</span>
+        <span style={{color:'#FF3366'}}>▼{sP}%</span>
+      </div>
+    </div>
+    <div ref={logRef} style={{flex:1,overflowY:'auto',padding:'4px 0',scrollBehavior:'smooth'}}>
+      {logs.slice(-30).map((ln:any,i:number)=>(
+        <div key={i} style={{padding:'2px 8px',borderLeft:`2px solid ${ln.col||'#0A1D33'}`,marginBottom:1,display:'flex',gap:6,alignItems:'baseline'}}>
+          <span style={{fontSize:7,color:'#1A3050',flexShrink:0,fontFamily:'monospace'}}>{ln.t}</span>
+          <span style={{fontSize:8,color:ln.col||'#2A5070',fontWeight:700,flexShrink:0,fontFamily:'monospace'}}>[{ln.ag}]</span>
+          <span style={{fontSize:10,color:ln.col?`${ln.col}CC`:'#2A5070',fontFamily:'monospace',lineHeight:1.4}}>{ln.msg}</span>
+        </div>
+      ))}
+    </div>
+  </div>
+);
+
+const BottomSection = ({agSt, act, dis, logs, logRef, trades, bP, sP, running}: {agSt:Record<string,any>, act:string[], dis:Set<string>, logs:any[], logRef:React.RefObject<HTMLDivElement|null>, trades:any[], bP:number, sP:number, running:boolean}) => (
+  <div style={{gridColumn:'1/-1',display:'grid',gridTemplateColumns:'320px 1fr 1fr',borderTop:'2px solid #0A1D33',height:'200px',overflow:'hidden',background:'#040810'}}>
+    <AllAgentsPanel agSt={agSt} act={act} dis={dis}/>
+    <CardsPanel trades={trades}/>
+    <LogPanelCompact logs={logs} logRef={logRef} bP={bP} sP={sP} running={running}/>
+  </div>
+);
+
 const RightPanelChartMode = ({agSt, act, dis, sig, px, port: _portArg}: {agSt:Record<string,any>, act:string[], dis:Set<string>, sig?:string, px:Record<string,any>, port:any}) => (
   <div style={{display:'flex',flexDirection:'column',height:'100%',background:'#040810',borderLeft:'1px solid #0A1D33',overflow:'hidden'}}>
     <div style={{flex:'0 0 55%',borderBottom:'1px solid #0A1D33',position:'relative',overflow:'hidden',display:'flex',flexDirection:'column'}}>
@@ -3570,6 +3698,14 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
   const totalPnL=port.equity-CAP,pct=(totalPnL/CAP)*100;
   const dd=((port.peak-port.equity)/port.peak)*100;
   const cl=trades.filter(t=>t.pnl!==0);
+  // Buy/sell percent for BottomSection
+  const _actAgents=AGENTS.filter(a=>a.id!=="consensus"&&agSt[a.id]?.on&&agSt[a.id]?.sig);
+  const _buyCount=_actAgents.filter(a=>agSt[a.id].sig==="BUY").length;
+  const _sellCount=_actAgents.filter(a=>agSt[a.id].sig==="SELL").length;
+  const _totalVotes=_actAgents.length||1;
+  const bP=Math.round(_buyCount/_totalVotes*100);
+  const sP=Math.round(_sellCount/_totalVotes*100);
+  const actAgentIds=Object.entries(agSt).filter(([,a])=>a.on).map(([id])=>id);
   const wr=cl.length?cl.filter(t=>t.pnl>0).length/cl.length*100:0;
   const rc=(aiData?.regime as string||"").includes("BULL")?K.g:(aiData?.regime as string||"").includes("BEAR")?K.r:K.gold;
   const entropyCol=entropy<30?K.r:entropy>70?K.g:K.gold;
@@ -3640,7 +3776,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
   };
 
   return(
-<div style={{fontFamily:"'JetBrains Mono','Courier New',monospace",display:'grid',gridTemplateRows:'48px 1fr 100px 150px',gridTemplateColumns:chartOpen?'180px 1fr 320px':'220px 1fr 260px',position:'fixed',inset:0,overflow:'hidden',background:'#04060D',color:K.hi,transition:'grid-template-columns .4s ease'}}>
+<div style={{fontFamily:"'JetBrains Mono','Courier New',monospace",display:'grid',gridTemplateRows:chartOpen?'48px 1fr 200px 100px':'48px 1fr 100px 150px',gridTemplateColumns:chartOpen?'200px 1fr':'220px 1fr 260px',position:'fixed',inset:0,overflow:'hidden',background:'#04060D',color:K.hi,transition:'grid-template-columns .4s ease, grid-template-rows .4s ease'}}>
       <style>{`
         *{box-sizing:border-box;margin:0;padding:0}
         ::-webkit-scrollbar{width:3px}::-webkit-scrollbar-track{background:#020508}::-webkit-scrollbar-thumb{background:#0A1D33;border-radius:2px}
@@ -3838,7 +3974,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
       </div>
 
       {/* ══ ROW 2 CENTER: CHART / SWARM ══ */}
-      <div style={{gridColumn:2,gridRow:2,height:'100%',overflow:"hidden",position:"relative",background:K.bg}}>
+      <div style={{gridColumn:chartOpen?'2 / -1':2,gridRow:2,height:'100%',overflow:"hidden",position:"relative",background:K.bg}}>
         {chartOpen&&selectedTrade?(
           <div style={{width:"100%",height:"100%",animation:"slideInChart .35s ease"}}>
             <TradingViewChart sym={selectedTrade.sym} entryPrice={selectedTrade.pos?.avg||selectedTrade.price||0} sl={(selectedTrade.pos?.avg||selectedTrade.price||0)*0.97} tp={(selectedTrade.pos?.avg||selectedTrade.price||0)*1.06} trailPrice={null} interval="1"/>
@@ -3855,19 +3991,8 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
         </div>
       </div>
 
-      {/* ══ ROW 2 RIGHT: SIGNALS / HISTORY ══ */}
-      {chartOpen ? (
-        <div style={{gridColumn:3,gridRow:2,height:'100%',overflow:"hidden"}}>
-          <RightPanelChartMode
-            agSt={agSt}
-            act={Object.entries(agSt).filter(([,a])=>a.on).map(([id])=>id)}
-            dis={disabled}
-            sig={agSt["consensus"]?.sig||undefined}
-            px={prices}
-            port={port}
-          />
-        </div>
-      ) : (
+      {/* ══ ROW 2 RIGHT: SIGNALS / HISTORY (hidden when chart open) ══ */}
+      {!chartOpen && (
       <div className="panel" style={{gridColumn:3,gridRow:2,height:'100%',overflow:"hidden",borderLeft:"1px solid "+K.brd,display:"flex",flexDirection:"column"}}>
         {/* Tabs */}
         <div style={{display:"flex",borderBottom:"1px solid "+K.brd}}>
@@ -3947,7 +4072,20 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
       </div>
       )}
 
-      {/* ══ ROW 3: POSITIONS BAR ══ */}
+      {/* ══ ROW 3: BOTTOM SECTION (chart open) or POSITIONS BAR (chart closed) ══ */}
+      {chartOpen ? (
+        <BottomSection
+          agSt={agSt}
+          act={actAgentIds}
+          dis={disabled}
+          logs={logs}
+          logRef={logRef}
+          trades={trades}
+          bP={bP}
+          sP={sP}
+          running={running}
+        />
+      ) : (
       <div style={{gridColumn:"1/-1",gridRow:3,height:'100%',overflow:'hidden',borderTop:"1px solid "+K.brd,display:"flex",alignItems:"center",gap:8,padding:"0 12px",overflowX:"auto",background:"#020508"}}>
         <span style={{fontSize:9,color:K.dim,letterSpacing:1,whiteSpace:"nowrap",minWidth:"fit-content"}}>POSITIONS</span>
         {Object.entries(port.pos).length===0?(
@@ -3984,8 +4122,47 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
           </div>
         </div>
       </div>
+      )}
 
-      {/* ══ ROW 4: LOG PANEL ══ */}
+      {/* ══ ROW 4: POSITIONS BAR (chart open) or LOG PANEL (chart closed) ══ */}
+      {chartOpen ? (
+      <div style={{gridColumn:"1/-1",gridRow:4,height:'100%',overflow:'hidden',borderTop:"1px solid "+K.brd,display:"flex",alignItems:"center",gap:8,padding:"0 12px",overflowX:"auto",background:"#020508"}}>
+        <span style={{fontSize:9,color:K.dim,letterSpacing:1,whiteSpace:"nowrap",minWidth:"fit-content"}}>POSITIONS</span>
+        {Object.entries(port.pos).length===0?(
+          <span style={{fontSize:9,color:K.dim+"66",fontStyle:"italic"}}>No open positions</span>
+        ):(
+          Object.entries(port.pos).map(([sym,pos])=>{
+            const pd=prices[sym]||null;
+            const cur=(pd as PriceData)?.price||pos.avg;
+            const pnlPct=pos.avg>0?(cur-pos.avg)/pos.avg*100*(pos.side==="SHORT"?-1:1):0;
+            const pnlUsd=pnlPct/100*pos.qty*pos.avg;
+            return(
+              <div key={sym} onClick={()=>{setSelectedTrade({sym:sym.replace("USDT","").replace("USD",""),pos,price:cur,side:pos.side||"LONG"});setChartOpen(true);}} style={{minWidth:120,maxHeight:84,background:pnlUsd>=0?K.g+"0a":K.r+"0a",border:"1px solid "+(pnlUsd>=0?K.g+"44":K.r+"44"),borderRadius:4,padding:"6px 10px",cursor:"pointer",flexShrink:0,transition:"border-color .2s",boxShadow:pnlUsd>=0?'inset 0 0 20px rgba(0,255,136,0.08),0 0 0 1px rgba(0,255,136,0.15)':'inset 0 0 20px rgba(255,51,102,0.06),0 0 0 1px rgba(255,51,102,0.1)',animation:pnlUsd>=0?'profitPulse 2s ease-in-out infinite':undefined}}>
+                <div style={{display:"flex",justifyContent:"space-between",marginBottom:2}}>
+                  <span style={{fontSize:9,fontWeight:700,color:K.hi}}>{sym.replace("USDT","").replace("USD","")}</span>
+                  <span style={{fontSize:8,color:pos.side==="SHORT"?K.r:K.g}}>{pos.side||"LONG"}</span>
+                </div>
+                <div style={{display:"flex",justifyContent:"space-between"}}>
+                  <span style={{fontSize:8,color:K.dim}}>{f2(pos.qty)} u</span>
+                  <span style={{fontSize:9,fontWeight:600,color:pnlUsd>=0?K.g:K.r}}>{pnlUsd>=0?"+":""}{f2(pnlUsd)}</span>
+                </div>
+                <div style={{fontSize:7,color:K.dim,marginTop:2}}>@{f2(pos.avg)} → {f2(cur)}</div>
+              </div>
+            );
+          })
+        )}
+        <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:12,paddingLeft:8,borderLeft:"1px solid "+K.brd}}>
+          <div style={{textAlign:"right"}}>
+            <div style={{fontSize:8,color:K.dim}}>UNREALIZED</div>
+            <div style={{fontSize:11,color:totalPnL>=0?K.g:K.r}}>{totalPnL>=0?"+":""}{f2(totalPnL)}</div>
+          </div>
+          <div style={{textAlign:"right"}}>
+            <div style={{fontSize:8,color:K.dim}}>CASH</div>
+            <div style={{fontSize:11,color:K.hi}}>${f2(port.cash)}</div>
+          </div>
+        </div>
+      </div>
+      ) : (
       <div style={{gridColumn:"1/-1",gridRow:4,height:'150px',overflow:"hidden",borderTop:"1px solid "+K.brd,display:"flex",flexDirection:"column",background:"#010407",position:"relative"}}>
         {/* Matrix rain overlay */}
         <div style={{position:'absolute',right:0,top:0,bottom:0,width:60,overflow:'hidden',opacity:0.06,pointerEvents:'none'}}>
@@ -4023,6 +4200,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
           ))}
         </div>
       </div>
+      )}
 
       {/* ══ OVERLAYS ══ */}
       {showOnboarding&&<OnboardingWizard onComplete={handleOnboardingComplete} isLive={isLive}/>}
