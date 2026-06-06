@@ -118,7 +118,7 @@ function applyTraderRules(
 const getProfileRules=(profile:string)=>{
   const rules={
     safe:{allocPct:0.05,stopLoss:0.015,takeProfit:0.030,minConfidence:80,allowMemecoins:false,maxPositions:6},
-    balanced:{allocPct:0.08,stopLoss:0.025,takeProfit:0.055,minConfidence:72,allowMemecoins:true,maxPositions:10},
+    balanced:{allocPct:0.08,stopLoss:0.025,takeProfit:0.055,minConfidence:75,allowMemecoins:true,maxPositions:10},
     aggressive:{allocPct:0.15,stopLoss:0.035,takeProfit:0.080,minConfidence:60,allowMemecoins:true,maxPositions:999},
   };
   return rules[profile as keyof typeof rules]||rules.balanced;
@@ -506,57 +506,44 @@ function TradingViewChart({sym,entryPrice,sl,tp,trailPrice,interval}:{sym:string
       theme: 'dark',
       style: '1',
       locale: 'en',
-      backgroundColor: 'rgba(4, 6, 13, 1)',
-      gridColor: 'rgba(10, 29, 51, 0.5)',
+      backgroundColor: 'rgba(4,6,13,1)',
+      gridColor: 'rgba(10,29,51,0.4)',
+      hide_top_toolbar: false,
+      withdateranges: true,
+      save_image: false,
       overrides: {
         "paneProperties.background": "#04060D",
         "paneProperties.backgroundType": "solid",
-        "paneProperties.backgroundGradientStartColor": "#04060D",
-        "paneProperties.backgroundGradientEndColor": "#04060D",
         "paneProperties.vertGridProperties.color": "#0A1D33",
         "paneProperties.horzGridProperties.color": "#0A1D33",
         "scalesProperties.textColor": "#4A7090",
         "scalesProperties.lineColor": "#0A1D33",
-        "scalesProperties.backgroundColor": "#040810",
+        "scalesProperties.backgroundColor": "#04060D",
         "mainSeriesProperties.candleStyle.upColor": "#00FF88",
         "mainSeriesProperties.candleStyle.downColor": "#FF3366",
         "mainSeriesProperties.candleStyle.borderUpColor": "#00FF88",
         "mainSeriesProperties.candleStyle.borderDownColor": "#FF3366",
         "mainSeriesProperties.candleStyle.wickUpColor": "#00FF8860",
         "mainSeriesProperties.candleStyle.wickDownColor": "#FF336660",
-        "mainSeriesProperties.candleStyle.barColorsOnPrevClose": false,
-        "volume.volume.color.0": "#FF336640",
-        "volume.volume.color.1": "#00FF8840",
-        "volume.volume.transparency": 50,
-        "moving average exponential.Plot.color": "#00F2FE",
-        "moving average exponential.Plot.linewidth": 2,
       },
       studies_overrides: {
         "relative strength index.plot.color": "#BD00FF",
         "relative strength index.plot.linewidth": 2,
-        "relative strength index.upper band.color": "#FF336640",
-        "relative strength index.upper band.value": 70,
-        "relative strength index.lower band.color": "#00FF8840",
-        "relative strength index.lower band.value": 30,
-        "relative strength index.hlines background.color": "#FF336615",
         "MACD.macd.color": "#00F2FE",
         "MACD.signal.color": "#FFD700",
-        "MACD.histogram.color": "#00FF8860",
-        "MACD.positive bar.color": "#00FF8860",
-        "MACD.negative bar.color": "#FF336660",
-        "volume.volume ma.color": "#00F2FE",
+        "moving average exponential.Plot.color": "#00F2FE",
+        "moving average exponential.Plot.linewidth": 2,
       },
+      studies: [
+        "RSI@tv-basicstudies",
+        "MAExp@tv-basicstudies",
+        "MACD@tv-basicstudies",
+        "Volume@tv-basicstudies",
+      ],
       disabled_features: [
         "use_localstorage_for_settings",
         "header_symbol_search",
         "header_compare",
-        "header_undo_redo",
-        "symbol_info",
-      ],
-      enabled_features: [
-        "study_templates",
-        "side_toolbar_in_fullscreen_mode",
-        "hide_last_na_study_output",
       ],
     });
     containerRef.current.appendChild(script);
@@ -564,9 +551,9 @@ function TradingViewChart({sym,entryPrice,sl,tp,trailPrice,interval}:{sym:string
   },[tvSym,interval]);
 
   return(
-    <div style={{position:"relative",width:"100%",height:420}}>
-      <style>{`.tradingview-widget-container iframe{background:#04060D!important;color-scheme:dark!important}.tradingview-widget-container{background:#04060D!important}`}</style>
-      <div className="tradingview-widget-container" ref={containerRef} style={{width:"100%",height:"100%"}}/>
+    <div style={{position:"relative",width:"100%",height:420,background:'#04060D'}}>
+      <style>{`.tradingview-widget-container iframe{background:#04060D!important;color-scheme:dark!important}.tradingview-widget-container{background:#04060D!important}iframe[id*="tradingview"]{background:#04060D!important}.tradingview-widget-container__widget{background:#04060D!important}`}</style>
+      <div className="tradingview-widget-container" ref={containerRef} style={{width:"100%",height:"100%",background:'#04060D'}}/>
       {/* KYMIA overlay — Entry/SL/TP dashed line + badge combos */}
       {entryPrice>0&&(
         <>
@@ -1841,7 +1828,7 @@ function MemeConfirmModal({token,onConfirm,onReject}:{token:MemeToken;onConfirm:
 // ── Onboarding Wizard ────────────────────────────────────────────────────────
 const SWARM_PROFILES=[
   {id:"safe",name:"SAFE",col:"#00FF88",icon:"🛡",desc:"Conservative approach. Lower returns, lower risk.",details:["Max position: 5%","SL: -1.5%","TP: +3%","Confidence: >80%","No memecoins"],leverage:"2x max",expectedReturn:"+5-15%/mo",riskLevel:1,maxPosPct:0.05,slPct:0.015,tpPct:0.03,minConf:80},
-  {id:"balanced",name:"BALANCED",col:"#00F2FE",icon:"⚖",desc:"Optimal risk/reward. The recommended profile.",details:["Max position: 8%","SL: -2.5%","TP: +5.5%","Confidence: >72%","Memecoin alerts (limited)"],leverage:"3x max",expectedReturn:"+15-40%/mo",riskLevel:2,recommended:true,maxPosPct:0.08,slPct:0.025,tpPct:0.055,minConf:72},
+  {id:"balanced",name:"BALANCED",col:"#00F2FE",icon:"⚖",desc:"Optimal risk/reward. The recommended profile.",details:["Max position: 8%","SL: -2.5%","TP: +5.5%","Confidence: >75%","Memecoin alerts (limited)"],leverage:"3x max",expectedReturn:"+15-40%/mo",riskLevel:2,recommended:true,maxPosPct:0.08,slPct:0.025,tpPct:0.055,minConf:75},
   {id:"aggressive",name:"AGGRESSIVE",col:"#FF3366",icon:"⚡",desc:"Maximum alpha. High risk, high reward.",details:["Max position: 15%","SL: -3.5%","TP: +8%","Confidence: >60%","Full memecoin access"],leverage:"5x max",expectedReturn:"+40-100%/mo",riskLevel:3,warning:"High risk of significant losses",maxPosPct:0.15,slPct:0.035,tpPct:0.08,minConf:60},
 ] as const;
 type SwarmProfile=typeof SWARM_PROFILES[number];
@@ -2216,6 +2203,252 @@ const LeftGlobe = () => (
       <text x="60" y="100" fontSize="8" fill="#00FF88" fontFamily="monospace" opacity="0.7">+$47</text>
       <text x="145" y="130" fontSize="8" fill="#FF3366" fontFamily="monospace" opacity="0.7">-$12</text>
     </svg>
+  </div>
+);
+
+// ── MiniSwarmGraph skull helpers ────────────────────────────────────────────
+const getSkullFace = (x: number, y: number, size: number, col: string, active: boolean) => (
+  <g>
+    <ellipse cx={x} cy={y-size*0.05} rx={size*0.55} ry={size*0.62} fill="#050A14" stroke={col} strokeWidth={active?1.4:0.6} opacity={active?1:0.35}/>
+    <polygon points={`${x-size*0.25},${y-size*0.1} ${x-size*0.12},${y-size*0.28} ${x},${y-size*0.1} ${x-size*0.12},${y+size*0.08}`} fill={active?col+'30':'transparent'} stroke={col} strokeWidth={active?1:0.5} opacity={active?1:0.3}/>
+    <circle cx={x-size*0.12} cy={y-size*0.1} r={size*0.1} fill={col} opacity={active?0.95:0.3}/>
+    <polygon points={`${x},${y-size*0.1} ${x+size*0.12},${y-size*0.28} ${x+size*0.25},${y-size*0.1} ${x+size*0.12},${y+size*0.08}`} fill={active?col+'30':'transparent'} stroke={col} strokeWidth={active?1:0.5} opacity={active?1:0.3}/>
+    <circle cx={x+size*0.12} cy={y-size*0.1} r={size*0.1} fill={col} opacity={active?0.95:0.3}/>
+    <polygon points={`${x},${y+size*0.12} ${x-size*0.09},${y+size*0.32} ${x+size*0.09},${y+size*0.32}`} fill="none" stroke={col} strokeWidth={0.7} opacity={active?0.6:0.2}/>
+    <line x1={x-size*0.45} y1={y+size*0.2} x2={x} y2={y+size*0.55} stroke={col} strokeWidth={0.8} opacity={active?0.65:0.2}/>
+    <line x1={x+size*0.45} y1={y+size*0.2} x2={x} y2={y+size*0.55} stroke={col} strokeWidth={0.8} opacity={active?0.65:0.2}/>
+  </g>
+);
+
+const getSwarmArcPath = (p1: {x:number,y:number}, p2: {x:number,y:number}) => {
+  const mx=(p1.x+p2.x)/2, my=(p1.y+p2.y)/2;
+  const dx=p2.x-p1.x, dy=p2.y-p1.y;
+  const len=Math.sqrt(dx*dx+dy*dy)||1;
+  const off=Math.max(10,len*0.25);
+  return `M${p1.x},${p1.y} Q${mx-(dy/len)*off},${my+(dx/len)*off} ${p2.x},${p2.y}`;
+};
+
+function MiniSwarmGraph({agSt, act, dis}: {agSt:Record<string,any>, act:string[], dis:Set<string>}) {
+  const W=300, H=200, CX=W/2, CY=H/2;
+  const nodes = [
+    {id:'cnsns', x:CX,    y:CY,    size:22},
+    {id:'aegis', x:CX,    y:CY-65, size:15},
+    {id:'oracle',x:CX+55, y:CY-42, size:15},
+    {id:'lens',  x:CX+68, y:CY+18, size:15},
+    {id:'radar', x:CX+42, y:CY+58, size:15},
+    {id:'titan', x:CX-42, y:CY+58, size:15},
+    {id:'echo',  x:CX-68, y:CY+18, size:15},
+    {id:'levia', x:CX-55, y:CY-42, size:15},
+    {id:'surge', x:CX,    y:CY-90, size:12},
+    {id:'atlas', x:CX+80, y:CY-65, size:12},
+    {id:'hydra', x:CX+95, y:CY+10, size:12},
+    {id:'razor', x:CX+60, y:CY+78, size:12},
+    {id:'vector',x:CX-60, y:CY+78, size:12},
+    {id:'shield',x:CX-95, y:CY+10, size:12},
+    {id:'delta', x:CX-80, y:CY-65, size:12},
+  ];
+  const center = nodes[0];
+  return (
+    <svg width="100%" height="100%" viewBox={`0 0 ${W} ${H}`} style={{display:'block'}}>
+      <defs>
+        <radialGradient id="swarmAura" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stopColor="#00F2FE" stopOpacity="0.15"/>
+          <stop offset="100%" stopColor="#00F2FE" stopOpacity="0"/>
+        </radialGradient>
+        <filter id="swarmGlow"><feGaussianBlur stdDeviation="2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+      </defs>
+      {/* Center aura */}
+      <ellipse cx={CX} cy={CY} rx={30} ry={30} fill="url(#swarmAura)"/>
+      {/* Orbital rings */}
+      <ellipse cx={CX} cy={CY} rx={65} ry={65} fill="none" stroke="#00F2FE" strokeWidth="0.4" opacity="0.15" strokeDasharray="3 6"/>
+      <ellipse cx={CX} cy={CY} rx={90} ry={90} fill="none" stroke="#00F2FE" strokeWidth="0.3" opacity="0.1" strokeDasharray="2 8"/>
+      {/* Arcs from each node to center */}
+      {nodes.filter(n=>n.id!=='cnsns').map(n=>{
+        const agId = n.id==='levia'?'leviathan':n.id;
+        const isActive = act.includes(agId) && !dis.has(agId);
+        const ag = agSt[agId];
+        const col = ag?.sig==='BUY'?'#00FF88':ag?.sig==='SELL'?'#FF3366':'#00F2FE';
+        const arcPath = getSwarmArcPath({x:n.x,y:n.y},{x:center.x,y:center.y});
+        const arcId = `sarc-${n.id}`;
+        if (!isActive) return (
+          <path key={n.id} d={arcPath} fill="none" stroke="#0A1D33" strokeWidth="0.8" strokeDasharray="3 5" opacity="0.5"/>
+        );
+        return (
+          <g key={n.id}>
+            <path id={arcId} d={arcPath} fill="none" stroke={col} strokeWidth="1.5" opacity="0.7" filter="url(#swarmGlow)"/>
+            <path d={arcPath} fill="none" stroke={col} strokeWidth="5" opacity="0.08"/>
+            <circle r="2.5" fill="white" opacity="0.9" filter="url(#swarmGlow)">
+              <animateMotion dur="0.9s" repeatCount="indefinite">
+                <mpath href={`#${arcId}`}/>
+              </animateMotion>
+            </circle>
+          </g>
+        );
+      })}
+      {/* Skull nodes */}
+      {nodes.map(n=>{
+        const agId = n.id==='levia'?'leviathan':n.id==='cnsns'?'consensus':n.id;
+        const isCenter = n.id==='cnsns';
+        const isActive = isCenter || (act.includes(agId) && !dis.has(agId));
+        const ag = agSt[agId];
+        const col = isCenter?'#00F2FE':ag?.sig==='BUY'?'#00FF88':ag?.sig==='SELL'?'#FF3366':'#00F2FE';
+        return (
+          <g key={n.id} filter={isActive?'url(#swarmGlow)':undefined} opacity={isActive?1:0.25}>
+            {getSkullFace(n.x, n.y, n.size, col, isActive)}
+            <text x={n.x} y={n.y+n.size*0.75+8} textAnchor="middle" fontSize="5.5" fill={col} fontFamily="monospace" opacity={isActive?1:0.5}>
+              {n.id.slice(0,5).toUpperCase()}
+            </text>
+            {isActive && ag?.sig && ag.sig!=='HOLD' && (
+              <circle cx={n.x} cy={n.y-n.size*0.7} r="2.5" fill={col} opacity="0.9"/>
+            )}
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+function MiniGlobePanel({px, port: _port, sig}: {px: Record<string,any>, port: any, sig?: string}) {
+  const [rot, setRot] = useState(0);
+  const [arcs, setArcs] = useState<Array<{id:string,from:{x:number,y:number},to:{x:number,y:number},col:string}>>([]);
+  const [labels, setLabels] = useState<Array<{id:string,x:number,y:number,val:string,col:string,born:number}>>([]);
+
+  useEffect(()=>{
+    const iv = setInterval(()=>setRot(r=>r+0.8), 60);
+    return ()=>clearInterval(iv);
+  },[]);
+
+  useEffect(()=>{
+    const iv = setInterval(()=>{
+      const cols = ['#00FF88','#FF3366','#00F2FE','#FFD700'];
+      const col = cols[Math.floor(Math.random()*cols.length)];
+      const isPos = col===cols[0]||col===cols[2];
+      const val = (isPos?'+':'-')+'$'+Math.floor(Math.random()*200+10);
+      setLabels(l=>[...l.slice(-4),{id:Math.random().toString(36).slice(2),x:40+Math.random()*220,y:20+Math.random()*80,val,col,born:Date.now()}]);
+      const cities = [{x:60,y:35},{x:80,y:42},{x:145,y:38},{x:138,y:55},{x:108,y:45},{x:140,y:45}];
+      const a = cities[Math.floor(Math.random()*cities.length)];
+      const b = cities[Math.floor(Math.random()*cities.length)];
+      if(a!==b) setArcs(ar=>[...ar.slice(-5),{id:Math.random().toString(36).slice(2),from:a,to:b,col}]);
+    },2000);
+    return ()=>clearInterval(iv);
+  },[]);
+
+  useEffect(()=>{
+    const iv = setInterval(()=>{const now=Date.now();setLabels(l=>l.filter(lb=>now-lb.born<3000));},200);
+    return ()=>clearInterval(iv);
+  },[]);
+
+  const W=300, H=140, CX=150, CY=65, R=55;
+  const cities = [
+    {lt:40.7,ln:280,c:'#00F2FE',name:'NYC'},
+    {lt:51.5,ln:0,  c:'#00F2FE',name:'LON'},
+    {lt:35.7,ln:140,c:'#FFD700',name:'TYO'},
+    {lt:1.35,ln:104,c:'#00FF88',name:'SGP'},
+    {lt:25.2,ln:55, c:'#FFD700',name:'DXB'},
+    {lt:22.3,ln:114,c:'#FFD700',name:'HKG'},
+  ];
+  const project = (lt:number,ln:number)=>{
+    const phi=(90-lt)*Math.PI/180;
+    const th=((ln+rot)%360)*Math.PI/180;
+    const x=CX+R*Math.sin(phi)*Math.cos(th);
+    const y=CY-R*Math.cos(phi);
+    const vis=Math.sin(phi)*Math.sin(th);
+    return {x,y,vis};
+  };
+
+  const solP = px['SOL']?.price;
+  const btcP = px['BTC']?.price;
+  const ethP = px['ETH']?.price;
+
+  return (
+    <div style={{display:'flex',flexDirection:'column',height:'100%'}}>
+      <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} style={{display:'block',flexShrink:0}}>
+        <defs>
+          <radialGradient id="mgGlobe" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stopColor="#051020" stopOpacity="1"/>
+            <stop offset="100%" stopColor="#04060D" stopOpacity="1"/>
+          </radialGradient>
+          <filter id="mgGlow"><feGaussianBlur stdDeviation="1.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+          <clipPath id="mgClip"><circle cx={CX} cy={CY} r={R}/></clipPath>
+        </defs>
+        <circle cx={CX} cy={CY} r={R} fill="url(#mgGlobe)" stroke="#00F2FE" strokeWidth="0.4" opacity="0.6"/>
+        {/* Latitude lines */}
+        {[-45,-20,0,20,45].map(lat=>{
+          const ry=R*Math.cos(lat*Math.PI/180);
+          const y=CY-R*Math.sin(lat*Math.PI/180);
+          return <ellipse key={lat} cx={CX} cy={y} rx={ry} ry={ry*0.15} fill="none" stroke="#00F2FE" strokeWidth="0.25" opacity="0.18" clipPath="url(#mgClip)"/>;
+        })}
+        {/* Longitude lines */}
+        {[0,40,80,120,160].map(lon=>{
+          const rx=R*Math.sin(((lon+rot)%180)*Math.PI/180);
+          return <ellipse key={lon} cx={CX} cy={CY} rx={Math.abs(rx)} ry={R} fill="none" stroke="#00F2FE" strokeWidth="0.2" opacity="0.12" clipPath="url(#mgClip)"/>;
+        })}
+        {/* Trade arcs */}
+        {arcs.map(a=>{
+          const arcId=`mgarc-${a.id}`;
+          const mx=(a.from.x+a.to.x)/2, my=Math.min(a.from.y,a.to.y)-15;
+          const d=`M${a.from.x},${a.from.y} Q${mx},${my} ${a.to.x},${a.to.y}`;
+          return (
+            <g key={a.id}>
+              <path id={arcId} d={d} fill="none" stroke={a.col} strokeWidth="0.7" opacity="0.4" strokeDasharray="3 4"/>
+              <circle r="2" fill={a.col} opacity="0.85">
+                <animateMotion dur="1.8s" repeatCount="1"><mpath href={`#${arcId}`}/></animateMotion>
+              </circle>
+            </g>
+          );
+        })}
+        {/* City dots */}
+        {cities.map(c=>{
+          const pt=project(c.lt,c.ln);
+          if(pt.vis<-0.2) return null;
+          const op=Math.max(0.3,0.5+pt.vis*0.5);
+          return (
+            <g key={c.name} filter="url(#mgGlow)" opacity={op}>
+              <circle cx={pt.x} cy={pt.y} r="2.5" fill={c.c} opacity="0.9"/>
+              <circle cx={pt.x} cy={pt.y} r="5" fill="none" stroke={c.c} strokeWidth="0.4" opacity="0.35"/>
+            </g>
+          );
+        })}
+        {/* AI eye at center */}
+        <circle cx={CX} cy={CY} r="6" fill="#04060D" stroke="#00F2FE" strokeWidth="0.8" opacity="0.8"/>
+        <circle cx={CX} cy={CY} r="3" fill="#00F2FE" opacity="0.6"/>
+        <circle cx={CX} cy={CY} r="1.2" fill="#fff" opacity="0.9"/>
+        {/* Floating $ labels */}
+        {labels.map(lb=>(
+          <text key={lb.id} x={lb.x} y={lb.y} fontSize="7" fill={lb.col} fontFamily="monospace" opacity="0.8" style={{animation:'moneyFloat 3s ease-out forwards'}}>{lb.val}</text>
+        ))}
+        {/* Signal direction */}
+        {sig && sig!=='HOLD' && (
+          <text x={CX} y={CY+R+14} textAnchor="middle" fontSize="7.5" fill={sig==='BUY'?'#00FF88':'#FF3366'} fontFamily="monospace" fontWeight="700">◈ {sig} SIGNAL</text>
+        )}
+      </svg>
+      {/* Price strip */}
+      <div style={{display:'flex',justifyContent:'space-around',padding:'4px 8px',borderTop:'1px solid #0A1D33',background:'rgba(4,6,13,0.9)',flexShrink:0}}>
+        {([['SOL',solP,'#00F2FE'],['BTC',btcP,'#FFD700'],['ETH',ethP,'#627EEA']] as [string,number|undefined,string][]).map(([sym,p,col])=>(
+          <div key={sym} style={{textAlign:'center'}}>
+            <div style={{fontSize:6,color:'#2A5070'}}>{sym}</div>
+            <div style={{fontSize:8,color:col,fontWeight:700,fontFamily:'monospace'}}>{p?fPrice(p):'—'}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+const RightPanelChartMode = ({agSt, act, dis, sig, px, port: _portArg}: {agSt:Record<string,any>, act:string[], dis:Set<string>, sig?:string, px:Record<string,any>, port:any}) => (
+  <div style={{display:'flex',flexDirection:'column',height:'100%',background:'#040810',borderLeft:'1px solid #0A1D33',overflow:'hidden'}}>
+    <div style={{flex:'0 0 55%',borderBottom:'1px solid #0A1D33',position:'relative',overflow:'hidden',display:'flex',flexDirection:'column'}}>
+      <div style={{fontSize:8,color:'#2A5070',letterSpacing:'.2em',padding:'6px 10px',borderBottom:'1px solid #0A1D33',flexShrink:0}}>◈ SWARM ACTIVE · {act.length}/18</div>
+      <div style={{flex:1,overflow:'hidden'}}>
+        <MiniSwarmGraph agSt={agSt} act={act} dis={dis}/>
+      </div>
+    </div>
+    <div style={{flex:'0 0 45%',overflow:'hidden',display:'flex',flexDirection:'column'}}>
+      <div style={{fontSize:8,color:'#2A5070',letterSpacing:'.2em',padding:'6px 10px',borderBottom:'1px solid #0A1D33',flexShrink:0}}>◈ GLOBAL MACRO SPHERE</div>
+      <div style={{flex:1,overflow:'hidden'}}>
+        <MiniGlobePanel px={px} port={_portArg} sig={sig}/>
+      </div>
+    </div>
   </div>
 );
 
@@ -3033,6 +3266,22 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
       const btcBearish=btcChange<=-TRADER_RULES.macroBtcThreshold;
       const btcBullish=btcChange>=TRADER_RULES.macroBtcThreshold;
 
+      // FIX 4A: Tighter BTC macro filter (±2%)
+      const side4A=(cs.sig==="BUY"||sig.isBuy)?"BUY":(cs.sig==="SELL"||sig.isSell)?"SELL":null;
+      if(side4A==="BUY"&&btcChange<-2){
+        log("AEGIS",`⛔ BTC macro negative (${btcChange.toFixed(1)}%) → no LONG`,K.r);return;
+      }
+      if(side4A==="SELL"&&btcChange>2){
+        log("AEGIS",`⛔ BTC macro positive (${btcChange.toFixed(1)}%) → no SHORT`,K.r);return;
+      }
+
+      // FIX 4C: RSI guard from lens agent
+      const lensRSI=(agStRef.current as any)?.lens?.lastRSI;
+      if(lensRSI!==undefined){
+        if(side4A==="BUY"&&lensRSI>60){log("AEGIS",`⛔ RSI ${lensRSI.toFixed(0)} overbought → skip LONG`,K.dim);return;}
+        if(side4A==="SELL"&&lensRSI<40){log("AEGIS",`⛔ RSI ${lensRSI.toFixed(0)} oversold → skip SHORT`,K.dim);return;}
+      }
+
       if((cs.sig==="BUY"||sig.isBuy)&&!prt.pos[sym]&&prt.cash>500&&canOpen){
         if(btcBearish&&p.rsi>=25){log("ATLAS","[ATLAS] ⚠ BTC macro bearish ("+fP(btcChange)+") — LONG "+sym+" blocked",K.gold);return;}
         if(btcBearish&&p.rsi<25)log("ATLAS","[ATLAS] RSI<25 exception — LONG despite BTC bearish",K.gold);
@@ -3379,7 +3628,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
   };
 
   return(
-<div style={{fontFamily:"'JetBrains Mono','Courier New',monospace",display:'grid',gridTemplateRows:'48px 1fr 100px 140px',gridTemplateColumns:chartOpen?'220px 1fr 180px':'220px 1fr 260px',height:'100vh',maxHeight:'100vh',overflow:'hidden',background:'#04060D',color:K.hi,transition:'grid-template-columns .4s ease'}}>
+<div style={{fontFamily:"'JetBrains Mono','Courier New',monospace",display:'grid',gridTemplateRows:'48px 1fr 100px 150px',gridTemplateColumns:chartOpen?'180px 1fr 320px':'220px 1fr 260px',position:'fixed',inset:0,overflow:'hidden',background:'#04060D',color:K.hi,transition:'grid-template-columns .4s ease'}}>
       <style>{`
         *{box-sizing:border-box;margin:0;padding:0}
         ::-webkit-scrollbar{width:3px}::-webkit-scrollbar-track{background:#020508}::-webkit-scrollbar-thumb{background:#0A1D33;border-radius:2px}
@@ -3594,15 +3843,19 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
       </div>
 
       {/* ══ ROW 2 RIGHT: SIGNALS / HISTORY ══ */}
-      <div className="panel" style={{gridColumn:3,gridRow:2,height:'100%',overflow:"hidden",borderLeft:"1px solid "+K.brd,display:"flex",flexDirection:"column"}}>
-        {/* MiniSwarm — always visible when chart is open */}
-        {chartOpen&&(
-          <MiniSwarm
+      {chartOpen ? (
+        <div style={{gridColumn:3,gridRow:2,height:'100%',overflow:"hidden"}}>
+          <RightPanelChartMode
             agSt={agSt}
             act={Object.entries(agSt).filter(([,a])=>a.on).map(([id])=>id)}
             dis={disabled}
+            sig={agSt["consensus"]?.sig||undefined}
+            px={prices}
+            port={port}
           />
-        )}
+        </div>
+      ) : (
+      <div className="panel" style={{gridColumn:3,gridRow:2,height:'100%',overflow:"hidden",borderLeft:"1px solid "+K.brd,display:"flex",flexDirection:"column"}}>
         {/* Tabs */}
         <div style={{display:"flex",borderBottom:"1px solid "+K.brd}}>
           {(["signals","history"] as const).map(t=>(
@@ -3679,6 +3932,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
           </div>
         </div>
       </div>
+      )}
 
       {/* ══ ROW 3: POSITIONS BAR ══ */}
       <div style={{gridColumn:"1/-1",gridRow:3,height:'100%',overflow:'hidden',borderTop:"1px solid "+K.brd,display:"flex",alignItems:"center",gap:8,padding:"0 12px",overflowX:"auto",background:"#020508"}}>
@@ -3719,7 +3973,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
       </div>
 
       {/* ══ ROW 4: LOG PANEL ══ */}
-      <div style={{gridColumn:"1/-1",gridRow:4,height:'100%',overflow:"hidden",borderTop:"1px solid "+K.brd,display:"flex",flexDirection:"column",background:"#010407",position:"relative"}}>
+      <div style={{gridColumn:"1/-1",gridRow:4,height:'150px',overflow:"hidden",borderTop:"1px solid "+K.brd,display:"flex",flexDirection:"column",background:"#010407",position:"relative"}}>
         {/* Matrix rain overlay */}
         <div style={{position:'absolute',right:0,top:0,bottom:0,width:60,overflow:'hidden',opacity:0.06,pointerEvents:'none'}}>
           {['01','10','11','00','10','01'].map((ch,i)=>(
