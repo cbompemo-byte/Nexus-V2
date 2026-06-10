@@ -1,6 +1,5 @@
 "use client";
 import { useState, useEffect, useRef, useCallback, useLayoutEffect } from "react";
-import { useSearchParams } from "next/navigation";
 import { motion, useAnimationControls } from "framer-motion";
 import * as THREE from "three";
 
@@ -46,7 +45,7 @@ const getStop=(pos:{avg:number,peak?:number},cur:number):number=>{
   if(pct>=5)return(pos.peak||cur)*0.99;
   if(pct>=3)return(pos.peak||cur)*0.985;
   if(pct>=1.5)return pos.avg;
-  return pos.avg*0.982; // tightened: -1.8% (was -2.5%)
+  return pos.avg*0.975;
 };
 const CORRELATED:{[k:string]:string[]}={
   SOL:["JUP","RAY","ORCA","JTO","DRIFT"],BTC:["ETH"],ETH:["BTC"],
@@ -63,8 +62,8 @@ const MISSIONS=[
 // ── Experienced Trader Rules ──────────────────────────────────────────────────
 const TRADER_RULES={
   peakHoursUTC:[[7,9],[13,17]] as [number,number][],
-  offPeakMinConf:75,          // raised from 72 → 75
-  peakMinConf:75,             // raised from 55 → 75 (was too loose)
+  offPeakMinConf:72,
+  peakMinConf:55,
   peakConfBoost:15,           // +15% confidence during peak hours
   loss2SizeMultiplier:0.60,   // 2 losses → -40% size
   loss3SizeMultiplier:0.40,   // 3 losses → -60% size + 5min pause
@@ -74,14 +73,6 @@ const TRADER_RULES={
   scaleInInitialFrac:0.07,    // 7% first entry (replaces Kelly)
   scaleInAddFrac:0.04,        // +4% when price confirms +1%
   scaleInTriggerPct:1.0,      // add at +1% gain
-};
-const CONSENSUS_THRESHOLD=0.72;
-const MIN_AGENTS_AGREE=3;
-
-// Agent reliability weights for confidence scoring
-const AGENT_WEIGHTS:Record<string,number>={
-  leviathan:1.2, lens:1.1, radar:1.15, phantom:1.1,
-  surge:0.9, echo:0.85, atlas:0.9,
 };
 
 function isPeakHour():boolean{
@@ -114,42 +105,15 @@ function applyTraderRules(
   return{allow:true,frac,isPeak:peak,consecLosses,triggerPause,triggerCircuit:false};
 }
 
-// ── Profile rule enforcer ─────────────────────────────────────────────────────
-const getProfileRules=(profile:string)=>{
-  const rules={
-    safe:{allocPct:0.05,stopLoss:0.015,takeProfit:0.030,minConfidence:80,allowMemecoins:false,maxPositions:6},
-    balanced:{allocPct:0.08,stopLoss:0.025,takeProfit:0.055,minConfidence:75,allowMemecoins:true,maxPositions:10},
-    aggressive:{allocPct:0.15,stopLoss:0.035,takeProfit:0.080,minConfidence:60,allowMemecoins:true,maxPositions:999},
-  };
-  return rules[profile as keyof typeof rules]||rules.balanced;
+// ── Portfolio exposure helpers (Bug 4) ────────────────────────────────────────
+const getMaxPositions=(equity:number):number=>{
+  if(equity<8000)return 2;
+  if(equity<9000)return 3;
+  if(equity<11000)return 4;
+  return 5;
 };
-
-// ── Portfolio exposure helpers ────────────────────────────────────────────────
 const getTotalExposure=(pos:Record<string,Position>,px:{[k:string]:PriceData}):number=>
   Object.entries(pos).reduce((t,[sym,p])=>t+p.qty*(px[sym]?.price||p.avg),0);
-
-// ── Exposure-based limits ────────────────────────────────────────────────────
-const MAX_TOTAL_EXPOSURE=0.65;
-const MIN_TRADE_SIZE_PCT=0.04;
-const MAX_TRADE_SIZE_PCT=0.12;
-
-const getPositionSize=(conf:number,equity:number):number=>{
-  if(conf>=90)return equity*MAX_TRADE_SIZE_PCT;
-  if(conf>=82)return equity*0.09;
-  if(conf>=75)return equity*0.07;
-  return equity*Math.max(MIN_TRADE_SIZE_PCT,0.05);
-};
-
-const calcATR=(candles:number[][],period=14):number=>{
-  if(candles.length<2)return 0;
-  const trs=candles.slice(1).map((c,i)=>{
-    const prev=candles[i];
-    const h=c[2],l=c[3],pc=prev[4];
-    return Math.max(h-l,Math.abs(h-pc),Math.abs(l-pc));
-  });
-  const sl=trs.slice(-period);
-  return sl.reduce((a,b)=>a+b,0)/sl.length;
-};
 
 function OdometerChar({ch,col}:{ch:string,col:string}){
   const prevCh=useRef(ch);
@@ -489,114 +453,85 @@ const TV_SYMBOLS:{[k:string]:string}={
 
 function TradingViewChart({sym,entryPrice,sl,tp,trailPrice,interval}:{sym:string,entryPrice:number,sl:number,tp:number,trailPrice:number|null,interval:string}){
   const containerRef=useRef<HTMLDivElement>(null);
-  const [loading,setLoading]=useState(true);
   const tvSym=TV_SYMBOLS[sym]||`BINANCE:${sym}USDT`;
 
   useEffect(()=>{
     if(!containerRef.current)return;
-    setLoading(true);
     containerRef.current.innerHTML="";
     const script=document.createElement("script");
     script.src="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js";
     script.type="text/javascript";
     script.async=true;
-    // textContent is required for dynamically-created scripts — innerHTML won't execute
-    script.textContent=JSON.stringify({
-      autosize: true,
-      symbol: tvSym,
-      interval: interval,
-      timezone: 'Etc/UTC',
-      theme: 'dark',
-      style: '1',
-      locale: 'en',
-      backgroundColor: 'rgba(4,6,13,1)',
-      gridColor: 'rgba(10,29,51,0.4)',
-      hide_top_toolbar: false,
-      withdateranges: true,
-      save_image: false,
-      overrides: {
-        "paneProperties.background": "#04060D",
-        "paneProperties.backgroundType": "solid",
-        "paneProperties.backgroundGradientStartColor": "#040D1A",
-        "paneProperties.backgroundGradientEndColor": "#04060D",
-        "paneProperties.vertGridProperties.color": "#081422",
-        "paneProperties.horzGridProperties.color": "#081422",
-        "paneProperties.vertGridProperties.style": 1,
-        "paneProperties.horzGridProperties.style": 1,
-        "scalesProperties.textColor": "#4A7090",
-        "scalesProperties.lineColor": "#0A1D33",
-        "scalesProperties.backgroundColor": "#04060D",
-        "paneProperties.legendProperties.backgroundTransparency": 100,
-        "mainSeriesProperties.candleStyle.upColor": "#00FF88",
-        "mainSeriesProperties.candleStyle.downColor": "#FF3366",
-        "mainSeriesProperties.candleStyle.borderUpColor": "#00FF88",
-        "mainSeriesProperties.candleStyle.borderDownColor": "#FF3366",
-        "mainSeriesProperties.candleStyle.wickUpColor": "#00FF8850",
-        "mainSeriesProperties.candleStyle.wickDownColor": "#FF336650",
-        "mainSeriesProperties.priceAxisProperties.autoScale": true,
+    script.innerHTML=JSON.stringify({
+      autosize:true,
+      symbol:tvSym,
+      interval,
+      timezone:"Etc/UTC",
+      theme:"dark",
+      style:"1",
+      locale:"en",
+      backgroundColor:"rgba(4,6,13,1)",
+      gridColor:"rgba(10,29,51,0.6)",
+      hide_top_toolbar:false,
+      hide_legend:false,
+      save_image:false,
+      withdateranges:true,
+      hide_side_toolbar:false,
+      allow_symbol_change:false,
+      support_host:"https://www.tradingview.com",
+      studies:["RSI@tv-basicstudies","MAExp@tv-basicstudies","MACD@tv-basicstudies","BB@tv-basicstudies","Volume@tv-basicstudies"],
+      studies_overrides:{
+        "rsi.plot.color":"#BD00FF","rsi.plot.linewidth":2,
+        "rsi.upper band.color":"#FF336650","rsi.lower band.color":"#00FF8850",
+        "macd.macd.color":"#00F2FE","macd.signal.color":"#FFD700",
+        "macd.positive.color":"#00FF8870","macd.negative.color":"#FF336670",
+        "bollinger bands.upper.color":"#00F2FE50","bollinger bands.lower.color":"#00F2FE50","bollinger bands.median.color":"#FFD70050",
+        "moving average exponential.length":9,"moving average exponential.source":"close",
       },
-      studies_overrides: {
-        "relative strength index.plot.color": "#BD00FF",
-        "relative strength index.plot.linewidth": 2,
-        "MACD.macd.color": "#00F2FE",
-        "MACD.signal.color": "#FFD700",
-        "moving average exponential.Plot.color": "#00F2FE",
-        "moving average exponential.Plot.linewidth": 2,
+      disabled_features:["use_localstorage_for_settings","header_symbol_search","header_compare"],
+      enabled_features:["study_templates","side_toolbar_in_fullscreen_mode"],
+      overrides:{
+        "paneProperties.background":"#04060D","paneProperties.backgroundType":"solid",
+        "paneProperties.backgroundGradientStartColor":"#04060D","paneProperties.backgroundGradientEndColor":"#04060D",
+        "paneProperties.vertGridProperties.color":"#0A1D33","paneProperties.vertGridProperties.style":1,
+        "paneProperties.horzGridProperties.color":"#0A1D33","paneProperties.horzGridProperties.style":1,
+        "scalesProperties.textColor":"#2A5070","scalesProperties.lineColor":"#0A1D33","scalesProperties.fontSize":11,
+        "mainSeriesProperties.candleStyle.upColor":"#00FF88","mainSeriesProperties.candleStyle.downColor":"#FF3366",
+        "mainSeriesProperties.candleStyle.borderUpColor":"#00FF88","mainSeriesProperties.candleStyle.borderDownColor":"#FF3366",
+        "mainSeriesProperties.candleStyle.wickUpColor":"#00FF8870","mainSeriesProperties.candleStyle.wickDownColor":"#FF336670",
+        "mainSeriesProperties.candleStyle.barColorsOnPrevClose":false,
+        "volume.volume.color.0":"#FF336640","volume.volume.color.1":"#00FF8840",
+        "moving average exponential.Plot.color":"#00F2FE","moving average exponential.Plot.linewidth":2,
       },
-      studies: [
-        "RSI@tv-basicstudies",
-        "MAExp@tv-basicstudies",
-        "MACD@tv-basicstudies",
-        "Volume@tv-basicstudies",
-      ],
-      disabled_features: [
-        "use_localstorage_for_settings",
-        "header_symbol_search",
-        "header_compare",
-      ],
     });
     containerRef.current.appendChild(script);
-    // Hide loading overlay after chart has had time to render dark
-    const t=setTimeout(()=>setLoading(false),3000);
-    return()=>{if(containerRef.current)containerRef.current.innerHTML="";clearTimeout(t);};
+    return()=>{if(containerRef.current)containerRef.current.innerHTML="";};
   },[tvSym,interval]);
 
   return(
-    <div style={{position:"relative",width:"100%",height:"100%",minHeight:320,background:'#04060D'}}>
-      <style>{`.tradingview-widget-container,.tradingview-widget-container__widget,.tradingview-widget-container iframe{width:100%!important;height:100%!important;background:#04060D!important}`}</style>
-      <div className="tradingview-widget-container" ref={containerRef} style={{width:"100%",height:"100%",background:'#04060D'}}/>
-      {/* Dark overlay covers the white flash while TradingView iframe loads */}
-      {loading&&(
-        <div style={{position:"absolute",inset:0,background:"#04060D",zIndex:20,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:10,pointerEvents:"none",transition:"opacity 0.5s",opacity:1}}>
-          <div style={{width:32,height:32,border:"2px solid #00F2FE",borderTopColor:"transparent",borderRadius:"50%",animation:"spin .8s linear infinite"}}/>
-          <div style={{fontSize:9,color:"#2A5070",letterSpacing:".2em",fontFamily:"monospace"}}>LOADING CHART · {tvSym}</div>
+    <div style={{position:"relative",width:"100%",height:420}}>
+      <div className="tradingview-widget-container" ref={containerRef} style={{width:"100%",height:"100%"}}/>
+      {/* KYMIA overlay — Entry/SL/TP badges */}
+      <div style={{position:"absolute",top:8,left:8,display:"flex",flexDirection:"column",gap:4,pointerEvents:"none",zIndex:10}}>
+        <div style={{display:"flex",alignItems:"center",gap:6,padding:"4px 10px",background:"rgba(0,242,254,0.15)",border:"1px solid #00F2FE60",borderRadius:3,backdropFilter:"blur(8px)"}}>
+          <div style={{width:8,height:1.5,background:"#00F2FE"}}/>
+          <span style={{fontSize:10,color:"#00F2FE",fontWeight:700,fontFamily:"monospace"}}>ENTRY ${entryPrice?.toFixed(2)}</span>
         </div>
-      )}
-      {/* KYMIA overlay — Entry/SL/TP dashed line + badge combos */}
-      {entryPrice>0&&(
-        <>
-          <div style={{position:"absolute",left:0,right:80,top:"35%",height:1,background:"rgba(0,242,254,0.3)",borderTop:"1px dashed #00F2FE",pointerEvents:"none",zIndex:10}}/>
-          <div style={{position:"absolute",left:8,top:"calc(35% - 12px)",padding:"3px 10px",background:"rgba(4,6,13,0.95)",border:"1px solid #00F2FE",borderRadius:3,fontSize:10,color:"#00F2FE",fontWeight:700,fontFamily:"monospace",zIndex:11}}>── ENTRY {f2(entryPrice)}</div>
-        </>
-      )}
-      {tp>0&&(
-        <>
-          <div style={{position:"absolute",left:0,right:80,top:"20%",height:1,background:"rgba(0,255,136,0.3)",borderTop:"1px dashed #00FF88",pointerEvents:"none",zIndex:10}}/>
-          <div style={{position:"absolute",left:8,top:"calc(20% - 12px)",padding:"3px 10px",background:"rgba(4,6,13,0.95)",border:"1px solid #00FF88",borderRadius:3,fontSize:10,color:"#00FF88",fontWeight:700,fontFamily:"monospace",zIndex:11}}>── TP {f2(tp)}</div>
-        </>
-      )}
-      {sl>0&&(
-        <>
-          <div style={{position:"absolute",left:0,right:80,top:"65%",height:1,background:"rgba(255,51,102,0.3)",borderTop:"1px dashed #FF3366",pointerEvents:"none",zIndex:10}}/>
-          <div style={{position:"absolute",left:8,top:"calc(65% - 12px)",padding:"3px 10px",background:"rgba(4,6,13,0.95)",border:"1px solid #FF3366",borderRadius:3,fontSize:10,color:"#FF3366",fontWeight:700,fontFamily:"monospace",zIndex:11}}>── SL {f2(sl)}</div>
-        </>
-      )}
-      {trailPrice&&(
-        <>
-          <div style={{position:"absolute",left:0,right:80,top:"45%",height:1,background:"rgba(255,215,0,0.3)",borderTop:"1px dashed #FFD700",pointerEvents:"none",zIndex:10}}/>
-          <div style={{position:"absolute",left:8,top:"calc(45% - 12px)",padding:"3px 10px",background:"rgba(4,6,13,0.95)",border:"1px solid #FFD700",borderRadius:3,fontSize:10,color:"#FFD700",fontWeight:700,fontFamily:"monospace",zIndex:11}}>── TRAIL {f2(trailPrice)}</div>
-        </>
-      )}
+        <div style={{display:"flex",alignItems:"center",gap:6,padding:"4px 10px",background:"rgba(0,255,136,0.12)",border:"1px solid #00FF8850",borderRadius:3,backdropFilter:"blur(8px)"}}>
+          <div style={{width:8,height:1.5,background:"#00FF88"}}/>
+          <span style={{fontSize:10,color:"#00FF88",fontWeight:700,fontFamily:"monospace"}}>TP ${tp?.toFixed(2)}</span>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:6,padding:"4px 10px",background:"rgba(255,51,102,0.12)",border:"1px solid #FF336650",borderRadius:3,backdropFilter:"blur(8px)"}}>
+          <div style={{width:8,height:1.5,background:"#FF3366"}}/>
+          <span style={{fontSize:10,color:"#FF3366",fontWeight:700,fontFamily:"monospace"}}>SL ${sl?.toFixed(2)}</span>
+        </div>
+        {trailPrice&&(
+          <div style={{display:"flex",alignItems:"center",gap:6,padding:"4px 10px",background:"rgba(255,215,0,0.12)",border:"1px solid #FFD70050",borderRadius:3,backdropFilter:"blur(8px)"}}>
+            <div style={{width:8,height:1.5,background:"#FFD700"}}/>
+            <span style={{fontSize:10,color:"#FFD700",fontWeight:700,fontFamily:"monospace"}}>TRAIL ${trailPrice?.toFixed(2)}</span>
+          </div>
+        )}
+      </div>
       {/* Agent legend — top right */}
       <div style={{position:"absolute",top:8,right:8,display:"flex",flexDirection:"column",gap:3,pointerEvents:"none",zIndex:10}}>
         <div style={{padding:"4px 8px",background:"rgba(4,6,13,0.85)",border:"1px solid #0A1D33",borderRadius:3,backdropFilter:"blur(8px)",fontSize:9,color:"#2A5070",fontFamily:"monospace"}}>◈ INDICATORS USED BY AGENTS</div>
@@ -717,8 +652,8 @@ function TradeModal({trade,position,agentSignals,onClose,onClosePosition}:{trade
   const sym=trade?.sym||position&&Object.keys(position).length?"SOL":"SOL";
   const [chartInterval,setChartInterval]=useState("5");
   const entry=trade?.price||position?.avg||0;
-  const sl=entry*0.982;  // tightened: -1.8% (was -2.5%)
-  const tp=entry*1.065;  // widened:   +6.5% (was +5.5%) → R:R 1:3.6
+  const sl=entry*0.975;
+  const tp=entry*1.055;
   const trailPrice=position?.peak?position.peak*0.988:null;
   // For live P&L we approximate from entry; real-time updates come via pricesRef but we don't have it here — show static entry-based badge
   const curPnL:number|null=null;
@@ -1309,8 +1244,8 @@ function SwarmGraph({st,debate,disabled,swarmRef,flashingAgent,highConviction,co
           return(
             <g key={id} filter={active?"url(#faceglow)":undefined} opacity={dis?.18:1} style={{cursor:"pointer",animation:isFlashing?"nodeFlash 1.2s ease-out":isHighConvActive?"breathe 1.4s ease-in-out infinite":undefined}} onMouseEnter={()=>setHov(id)} onMouseLeave={()=>setHov(null)}>
               <CyberFace cx={n.pos.x} cy={n.pos.y} size={r*2} col={col} active={active} conflict={conflict}/>
-              <text x={n.pos.x} y={n.pos.y+r+12} textAnchor="middle" fontSize={id==="consensus"?11:10} fontFamily="monospace" fill={dis?K.dim:active?col:K.tx} fontWeight="700">{s}</text>
-              {ag.conf!==null&&!dis&&<text x={n.pos.x} y={n.pos.y+r+23} textAnchor="middle" fontSize="10" fontFamily="monospace" fill={col} opacity=".8">{ag.conf}%</text>}
+              <text x={n.pos.x} y={n.pos.y+r+11} textAnchor="middle" fontSize={id==="consensus"?8:6} fontFamily="monospace" fill={dis?K.dim:active?col:K.tx} fontWeight="700">{s}</text>
+              {ag.conf!==null&&!dis&&<text x={n.pos.x} y={n.pos.y+r+20} textAnchor="middle" fontSize="7" fontFamily="monospace" fill={col} opacity=".8">{ag.conf}%</text>}
             </g>
           );
         })}
@@ -1360,8 +1295,8 @@ function DecisionZone({agSt,running,onExecute}:{agSt:{[k:string]:AgentState},run
         {/* Vote bar + counters */}
         <div style={{flex:1}}>
           <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
-            <span style={{fontSize:9,color:K.dim,letterSpacing:".1em"}}>◈ DECISION ZONE</span>
-            <div style={{display:"flex",gap:8,fontSize:9}}>
+            <span style={{fontSize:7,color:K.dim,letterSpacing:".1em"}}>◈ DECISION ZONE</span>
+            <div style={{display:"flex",gap:8,fontSize:8}}>
               {([["▲",K.g,buy],["▼",K.r,sell],["◆",K.gold,hold]] as Array<[string,string,number]>).map(([l,c,v])=>(
                 <span key={l} style={{color:c}}>{l} {v}</span>
               ))}
@@ -1373,7 +1308,7 @@ function DecisionZone({agSt,running,onExecute}:{agSt:{[k:string]:AgentState},run
             <div style={{width:sP+"%",background:`linear-gradient(90deg,${K.r}80,${K.r})`,transition:"width .5s",boxShadow:sP>72?`0 0 8px ${K.r}60`:undefined}}/>
             <div style={{width:Math.round(hold/total*100)+"%",background:`linear-gradient(90deg,${K.gold}80,${K.gold})`,transition:"width .5s"}}/>
           </div>
-          {highConv&&<div style={{fontSize:9,color:col,letterSpacing:".14em",animation:"glow 1.5s infinite",marginBottom:3}}>⚡ HIGH CONVICTION — {active.length} AGENTS ALIGNED</div>}
+          {highConv&&<div style={{fontSize:7,color:col,letterSpacing:".14em",animation:"glow 1.5s infinite",marginBottom:3}}>⚡ HIGH CONVICTION — {active.length} AGENTS ALIGNED</div>}
           {showExec&&(
             <div style={{display:"flex",gap:5}}>
               <button className="btn" onClick={()=>onExecute(topSym?AGENTS.find(a=>a.id===topSym[0])?.id||"SOL":"SOL",dom as "BUY"|"SELL")} style={{background:col+"20",color:col,border:"1px solid "+col+"50",padding:"3px 12px",fontSize:8,flex:1}}>⚡ EXECUTE {dom}</button>
@@ -1765,482 +1700,7 @@ function PerformanceCard({trades,totalPnL,onClose}:{trades:Trade[],totalPnL:numb
   );
 }
 
-// ── Top 100 Scanner ───────────────────────────────────────────────────────────
-type Top100Coin={id:string;symbol:string;name:string;price:number;change1h:number;change24h:number;change7d:number;volume:number;marketCap:number;rank:number};
-type ScanOpportunity=Top100Coin&{score:number;reasons:string[];signal:string;confidence:number};
-
-const fetchTop100=async():Promise<Top100Coin[]>=>{
-  try{
-    const res=await fetch("https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=1&sparkline=false&price_change_percentage=1h,24h,7d");
-    const data=await res.json();
-    return data.map((c:any)=>({id:c.id,symbol:c.symbol.toUpperCase(),name:c.name,price:c.current_price,change1h:c.price_change_percentage_1h_in_currency||0,change24h:c.price_change_percentage_24h||0,change7d:c.price_change_percentage_7d_in_currency||0,volume:c.total_volume,marketCap:c.market_cap,rank:c.market_cap_rank}));
-  }catch{return [];}
-};
-
-const scanOpportunities=async():Promise<ScanOpportunity[]>=>{
-  const top100=await fetchTop100();
-  const opps:ScanOpportunity[]=[];
-  for(const coin of top100){
-    let score=0;const reasons:string[]=[];
-    if(coin.change1h>2.5){score+=30;reasons.push(`+${coin.change1h.toFixed(1)}% last hour`);}
-    if(coin.volume>coin.marketCap*0.08){score+=25;reasons.push(`Volume ${((coin.volume/coin.marketCap)*100).toFixed(0)}% of market cap`);}
-    if(coin.change7d<-10&&coin.change1h>1.5){score+=20;reasons.push("Recovery from 7d dip — reversal signal");}
-    if(coin.change1h>1&&coin.change24h>5){score+=15;reasons.push("Momentum building 1h + 24h");}
-    if(score>=50)opps.push({...coin,score,reasons,signal:score>=70?"STRONG BUY":"BUY",confidence:Math.min(95,50+score)});
-  }
-  return opps.sort((a,b)=>b.score-a.score).slice(0,10);
-};
-
-// ── Memecoin Confirm Modal ────────────────────────────────────────────────────
-type MemeToken={symbol:string;name:string;address?:string;price:number;priceChange1h:number;volume1h:number;liquidity:number;buyRatio:number;ageH:number;dexUrl?:string;rugScore:number;rugFlags:string[];txns1h:{buys:number;sells:number}};
-
-function MemeConfirmModal({token,onConfirm,onReject}:{token:MemeToken;onConfirm:()=>void;onReject:()=>void}){
-  const rugCol=token.rugScore>70?K.g:token.rugScore>40?K.gold:K.r;
-  const rugLabel=token.rugScore>70?"RELATIVELY SAFE":token.rugScore>40?"CAUTION":"HIGH RISK";
-  return(
-    <div style={{position:"fixed",inset:0,zIndex:700,background:"rgba(2,4,10,0.95)",backdropFilter:"blur(16px)",display:"flex",alignItems:"center",justifyContent:"center"}}>
-      <div style={{background:"#060A12",border:"2px solid rgba(255,215,0,0.3)",borderRadius:12,padding:28,width:420,boxShadow:"0 0 60px rgba(255,215,0,0.08)",fontFamily:"monospace"}}>
-        <div style={{fontSize:10,color:K.gold,letterSpacing:".3em",marginBottom:12}}>⚡ NEW MEMECOIN DETECTED</div>
-        <div style={{padding:"14px 16px",marginBottom:16,background:"rgba(255,215,0,0.05)",border:"1px solid rgba(255,215,0,0.15)",borderRadius:8}}>
-          <div style={{display:"flex",justifyContent:"space-between",marginBottom:12}}>
-            <div>
-              <div style={{fontSize:22,fontWeight:900,color:K.gold}}>{token.symbol}</div>
-              <div style={{fontSize:11,color:K.dim}}>{token.name}</div>
-            </div>
-            <div style={{textAlign:"right"}}>
-              <div style={{fontSize:18,fontWeight:700,color:K.g}}>+{token.priceChange1h?.toFixed(0)}%</div>
-              <div style={{fontSize:9,color:K.dim}}>last hour</div>
-            </div>
-          </div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
-            {([["AGE",`${token.ageH}h old`,K.c],["LIQUIDITY",`$${(token.liquidity/1000).toFixed(0)}K`,K.hi],["BUY PRESSURE",`${token.buyRatio}%`,K.g],["VOL 1H",`$${(token.volume1h/1000).toFixed(0)}K`,K.hi],["BUYS 1H",`${token.txns1h?.buys||0}`,K.g],["SELLS 1H",`${token.txns1h?.sells||0}`,K.r]] as [string,string,string][]).map(([l,v,c],i)=>(
-              <div key={i} style={{padding:"6px 8px",background:"#04060D",borderRadius:4}}>
-                <div style={{fontSize:7,color:K.dim}}>{l}</div>
-                <div style={{fontSize:11,color:c,fontWeight:700}}>{v}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-        <div style={{padding:"10px 14px",marginBottom:16,background:rugCol+"10",border:"1px solid "+rugCol+"30",borderRadius:6}}>
-          <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
-            <span style={{fontSize:10,color:K.dim}}>RUG SCORE</span>
-            <span style={{fontSize:12,color:rugCol,fontWeight:700}}>{token.rugScore}/100 — {rugLabel}</span>
-          </div>
-          {token.rugFlags.length>0&&<div style={{fontSize:9,color:K.r}}>⚠ {token.rugFlags.join(" · ")}</div>}
-        </div>
-        <div style={{padding:"10px 14px",marginBottom:20,background:"rgba(0,255,136,0.05)",border:"1px solid rgba(0,255,136,0.15)",borderRadius:6,fontSize:11,color:K.hi,fontStyle:"italic",lineHeight:1.6}}>
-          "LEVIATHAN + SURGE aligned: {token.buyRatio}% buy pressure with ${(token.volume1h/1000).toFixed(0)}K volume in 1H. Early momentum signal. HIGH RISK — small allocation only."
-        </div>
-        <div style={{fontSize:9,color:K.dim,marginBottom:16,textAlign:"center",lineHeight:1.6}}>
-          ⚠ Memecoins can lose 100% of value instantly.<br/>This is DEMO mode — virtual funds only.<br/>Max allocation: 3% of portfolio.
-        </div>
-        <div style={{display:"flex",gap:10}}>
-          <button onClick={onReject} style={{flex:1,padding:12,background:"transparent",color:K.dim,border:"1px solid #0A1D33",borderRadius:6,fontFamily:"monospace",fontSize:11,cursor:"pointer"}}>SKIP</button>
-          <button onClick={onConfirm} style={{flex:2,padding:12,background:"rgba(255,215,0,0.12)",color:K.gold,border:"2px solid rgba(255,215,0,0.4)",borderRadius:6,fontFamily:"monospace",fontSize:12,fontWeight:700,cursor:"pointer",boxShadow:"0 0 16px rgba(255,215,0,0.15)",letterSpacing:".08em"}}>⚡ BUY {token.symbol} — 3%</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── Onboarding Wizard ────────────────────────────────────────────────────────
-const SWARM_PROFILES=[
-  {id:"safe",name:"SAFE",col:"#00FF88",icon:"🛡",desc:"Conservative approach. Lower returns, lower risk.",details:["Max position: 5%","SL: -1.5%","TP: +3%","Confidence: >80%","No memecoins"],leverage:"2x max",expectedReturn:"+5-15%/mo",riskLevel:1,maxPosPct:0.05,slPct:0.015,tpPct:0.03,minConf:80},
-  {id:"balanced",name:"BALANCED",col:"#00F2FE",icon:"⚖",desc:"Optimal risk/reward. The recommended profile.",details:["Max position: 8%","SL: -2.5%","TP: +5.5%","Confidence: >75%","Memecoin alerts (limited)"],leverage:"3x max",expectedReturn:"+15-40%/mo",riskLevel:2,recommended:true,maxPosPct:0.08,slPct:0.025,tpPct:0.055,minConf:75},
-  {id:"aggressive",name:"AGGRESSIVE",col:"#FF3366",icon:"⚡",desc:"Maximum alpha. High risk, high reward.",details:["Max position: 15%","SL: -3.5%","TP: +8%","Confidence: >60%","Full memecoin access"],leverage:"5x max",expectedReturn:"+40-100%/mo",riskLevel:3,warning:"High risk of significant losses",maxPosPct:0.15,slPct:0.035,tpPct:0.08,minConf:60},
-] as const;
-type SwarmProfile=typeof SWARM_PROFILES[number];
-type SwarmConfig={profile:string;leverage:number;performanceFee:number;maxDrawdown:number;profileData:SwarmProfile};
-
-function OnboardingWizard({onComplete,isLive}:{onComplete:(c:SwarmConfig)=>void;isLive:boolean}){
-  const [step,setStep]=useState(1);
-  const [profileId,setProfileId]=useState<string>("balanced");
-  const [leverage,setLeverage]=useState(3);
-  const [maxDrawdown,setMaxDrawdown]=useState(15);
-  const [performanceFee,setPerformanceFee]=useState(10);
-  const prof=SWARM_PROFILES.find(p=>p.id===profileId)||SWARM_PROFILES[1];
-  const maxLev=profileId==="safe"?2:profileId==="balanced"?5:10;
-
-  const done=()=>onComplete({profile:profileId,leverage,performanceFee,maxDrawdown,profileData:prof});
-
-  return(
-    <div style={{position:"fixed",inset:0,zIndex:900,background:"rgba(2,4,10,0.97)",backdropFilter:"blur(20px)",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
-      <div style={{background:"#060A12",border:"1px solid rgba(0,242,254,0.15)",borderRadius:16,padding:36,width:"100%",maxWidth:520,maxHeight:"90vh",overflowY:"auto",boxShadow:"0 24px 80px rgba(0,0,0,0.6)"}}>
-        <style>{`input[type=range]{height:4px;outline:none;border-radius:2px}input[type=range]::-webkit-slider-thumb{width:16px;height:16px;border-radius:50%;cursor:pointer}`}</style>
-        {/* Progress dots */}
-        <div style={{display:"flex",gap:8,justifyContent:"center",marginBottom:28}}>
-          {[1,2,3].map(i=>(
-            <div key={i} style={{width:i===step?24:8,height:8,borderRadius:4,transition:"all .3s",background:i<=step?"rgba(0,242,254,0.8)":"#0A1D33",boxShadow:i===step?"0 0 8px rgba(0,242,254,0.5)":"none"}}/>
-          ))}
-        </div>
-
-        {/* STEP 1 */}
-        {step===1&&(
-          <div>
-            <div style={{textAlign:"center",marginBottom:28}}>
-              <div style={{fontSize:10,color:"#00F2FE",letterSpacing:".4em",marginBottom:10}}>STEP 1 OF 3</div>
-              <h2 style={{fontSize:22,fontWeight:900,color:"white",margin:"0 0 8px"}}>Choose your swarm profile</h2>
-              <p style={{fontSize:12,color:"#2A5070",lineHeight:1.7}}>This determines how aggressively KYMIA deploys capital.</p>
-            </div>
-            <div style={{display:"flex",flexDirection:"column",gap:10}}>
-              {SWARM_PROFILES.map(p=>(
-                <div key={p.id} onClick={()=>setProfileId(p.id)} style={{padding:"16px 18px",background:profileId===p.id?`${p.col}12`:"rgba(6,10,18,0.8)",border:`2px solid ${profileId===p.id?p.col+"60":"rgba(0,242,254,0.06)"}`,borderRadius:8,cursor:"pointer",transition:"all .2s",position:"relative"}}>
-                  {"recommended" in p&&p.recommended&&<div style={{position:"absolute",top:-10,right:12,padding:"2px 10px",background:p.col,borderRadius:10,fontSize:8,color:"#04060D",fontWeight:700,letterSpacing:".1em"}}>RECOMMENDED</div>}
-                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
-                    <div style={{display:"flex",alignItems:"center",gap:10}}>
-                      <span style={{fontSize:18}}>{p.icon}</span>
-                      <span style={{fontSize:15,fontWeight:900,color:p.col,letterSpacing:".1em"}}>{p.name}</span>
-                    </div>
-                    <div style={{textAlign:"right"}}>
-                      <div style={{fontSize:11,color:p.col,fontWeight:700}}>{p.expectedReturn}</div>
-                      <div style={{fontSize:9,color:"#2A5070"}}>{p.leverage}</div>
-                    </div>
-                  </div>
-                  <div style={{fontSize:11,color:"#2A5070",marginBottom:8}}>{p.desc}</div>
-                  <div style={{display:"flex",gap:3}}>
-                    {[1,2,3].map(i=><div key={i} style={{flex:1,height:3,borderRadius:2,background:i<=p.riskLevel?p.col:"#06090F",boxShadow:i<=p.riskLevel?`0 0 5px ${p.col}`:"none"}}/>)}
-                  </div>
-                  {"warning" in p&&p.warning&&<div style={{marginTop:8,fontSize:9,color:"#FF3366",fontStyle:"italic"}}>⚠ {p.warning}</div>}
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* STEP 2 */}
-        {step===2&&(
-          <div>
-            <div style={{textAlign:"center",marginBottom:28}}>
-              <div style={{fontSize:10,color:"#00F2FE",letterSpacing:".4em",marginBottom:10}}>STEP 2 OF 3</div>
-              <h2 style={{fontSize:22,fontWeight:900,color:"white",margin:"0 0 8px"}}>Set your risk parameters</h2>
-              <p style={{fontSize:12,color:"#2A5070",lineHeight:1.7}}>KYMIA will never exceed these limits, regardless of conditions.</p>
-            </div>
-            <div style={{padding:"20px",marginBottom:14,background:"rgba(6,10,18,0.8)",border:"1px solid rgba(0,242,254,0.1)",borderRadius:8}}>
-              <div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}>
-                <div>
-                  <div style={{fontSize:12,fontWeight:700,color:"white"}}>Dynamic Leverage</div>
-                  <div style={{fontSize:10,color:"#2A5070"}}>AEGIS auto-reduces in high volatility</div>
-                </div>
-                <div style={{fontSize:30,fontWeight:900,color:"#00F2FE",fontFamily:"monospace",textShadow:"0 0 16px #00F2FE"}}>{leverage}x</div>
-              </div>
-              <input type="range" min={1} max={maxLev} value={leverage} onChange={e=>setLeverage(parseInt(e.target.value))} style={{width:"100%",accentColor:"#00F2FE",cursor:"pointer"}}/>
-              <div style={{display:"flex",justifyContent:"space-between",fontSize:9,color:"#2A5070",marginTop:4}}>
-                <span>1x (No leverage)</span><span>{maxLev}x (Max for {prof.name})</span>
-              </div>
-              <div style={{marginTop:12,padding:"9px 12px",background:"rgba(0,242,254,0.05)",border:"1px solid rgba(0,242,254,0.1)",borderRadius:4,fontSize:10,color:"#2A5070"}}>
-                ◈ {leverage}x on $10K demo = ${(10000*leverage).toLocaleString()} max exposure. AEGIS reduces in volatility.
-              </div>
-            </div>
-            <div style={{padding:"20px",background:"rgba(6,10,18,0.8)",border:"1px solid rgba(255,51,102,0.1)",borderRadius:8}}>
-              <div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}>
-                <div>
-                  <div style={{fontSize:12,fontWeight:700,color:"white"}}>Max Drawdown Limit</div>
-                  <div style={{fontSize:10,color:"#2A5070"}}>Auto-stops all trading if this is hit</div>
-                </div>
-                <div style={{fontSize:30,fontWeight:900,color:"#FF3366",fontFamily:"monospace"}}>-{maxDrawdown}%</div>
-              </div>
-              <input type="range" min={5} max={30} value={maxDrawdown} onChange={e=>setMaxDrawdown(parseInt(e.target.value))} style={{width:"100%",accentColor:"#FF3366",cursor:"pointer"}}/>
-              <div style={{display:"flex",justifyContent:"space-between",fontSize:9,color:"#2A5070",marginTop:4}}>
-                <span>-5% (Very tight)</span><span>-30% (Wide)</span>
-              </div>
-              <div style={{marginTop:12,padding:"9px 12px",background:"rgba(255,51,102,0.04)",border:"1px solid rgba(255,51,102,0.1)",borderRadius:4,fontSize:10,color:"#FF3366"}}>
-                ⛔ Portfolio drops -{maxDrawdown}% from peak → all trading stops. Your review required.
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* STEP 3 */}
-        {step===3&&(
-          <div>
-            <div style={{textAlign:"center",marginBottom:28}}>
-              <div style={{fontSize:10,color:"#00F2FE",letterSpacing:".4em",marginBottom:10}}>STEP 3 OF 3</div>
-              <h2 style={{fontSize:22,fontWeight:900,color:"white",margin:"0 0 8px"}}>{isLive?"Set performance fee":"Review & Launch"}</h2>
-              <p style={{fontSize:12,color:"#2A5070",lineHeight:1.7}}>{isLive?"You choose how much KYMIA earns when it wins.":"Your swarm is configured. Ready to launch."}</p>
-            </div>
-            {isLive&&(
-              <div style={{padding:"22px",marginBottom:16,background:"rgba(255,215,0,0.05)",border:"1px solid rgba(255,215,0,0.2)",borderRadius:10}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
-                  <div>
-                    <div style={{fontSize:13,fontWeight:700,color:"#FFD700"}}>Performance Fee</div>
-                    <div style={{fontSize:10,color:"#2A5070"}}>KYMIA earns this % on winning trades only</div>
-                  </div>
-                  <div style={{fontSize:38,fontWeight:900,color:"#FFD700",fontFamily:"monospace",textShadow:"0 0 20px #FFD700"}}>{performanceFee}%</div>
-                </div>
-                <input type="range" min={5} max={15} value={performanceFee} onChange={e=>setPerformanceFee(parseInt(e.target.value))} style={{width:"100%",accentColor:"#FFD700",cursor:"pointer"}}/>
-                <div style={{display:"flex",justifyContent:"space-between",fontSize:9,color:"#2A5070",marginTop:4,marginBottom:14}}>
-                  <span>5% (Standard priority)</span><span>15% (Priority execution)</span>
-                </div>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}}>
-                  {([{sc:"Trade wins +$100",you:`$${100-performanceFee}`,ky:`$${performanceFee}`,col:"#00FF88"},{sc:"Trade loses -$50",you:"-$50",ky:"$0",col:"#FF3366"}]).map((s,i)=>(
-                    <div key={i} style={{padding:"12px 14px",background:"rgba(4,6,13,0.8)",border:`1px solid ${s.col}20`,borderRadius:6}}>
-                      <div style={{fontSize:9,color:"#2A5070",marginBottom:8}}>{s.sc}</div>
-                      <div style={{display:"flex",justifyContent:"space-between",fontSize:11}}>
-                        <span><span style={{color:"#2A5070"}}>You: </span><span style={{color:s.col,fontWeight:700}}>{s.you}</span></span>
-                        <span><span style={{color:"#2A5070"}}>KYMIA: </span><span style={{color:"#FFD700",fontWeight:700}}>{s.ky}</span></span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                <div style={{padding:"9px 12px",background:"rgba(255,215,0,0.04)",border:"1px solid rgba(255,215,0,0.1)",borderRadius:4,fontSize:10,color:"#FFD700"}}>⚡ Higher fee = higher execution priority.</div>
-              </div>
-            )}
-            {/* Summary */}
-            <div style={{padding:"16px",marginBottom:16,background:"rgba(6,10,18,0.9)",border:"1px solid rgba(0,242,254,0.1)",borderRadius:8}}>
-              <div style={{fontSize:10,color:"#00F2FE",letterSpacing:".2em",marginBottom:14}}>◈ YOUR SWARM CONFIGURATION</div>
-              {([{l:"Profile",v:profileId.toUpperCase(),c:prof.col},{l:"Max Leverage",v:`${leverage}x`,c:"#00F2FE"},{l:"Max Drawdown",v:`-${maxDrawdown}%`,c:"#FF3366"},...(isLive?[{l:"Performance Fee",v:`${performanceFee}%`,c:"#FFD700"}]:[])]).map((r,i)=>(
-                <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"1px solid #06090F"}}>
-                  <span style={{fontSize:11,color:"#2A5070"}}>{r.l}</span>
-                  <span style={{fontSize:11,color:r.c,fontWeight:700,fontFamily:"monospace"}}>{r.v}</span>
-                </div>
-              ))}
-            </div>
-            {isLive&&<div style={{padding:"12px 16px",marginBottom:12,background:"rgba(0,255,136,0.04)",border:"1px solid rgba(0,255,136,0.15)",borderRadius:6,textAlign:"center",fontSize:12,color:"#00FF88",fontStyle:"italic",lineHeight:1.8}}>"No win, no fee.<br/>Our interests are perfectly aligned with yours."</div>}
-          </div>
-        )}
-
-        {/* Navigation */}
-        <div style={{display:"flex",gap:10,marginTop:24}}>
-          {step>1&&<button onClick={()=>setStep(s=>s-1)} style={{flex:1,padding:"12px",background:"transparent",border:"1px solid #0A1D33",borderRadius:6,color:"#2A5070",fontFamily:"monospace",fontSize:11,cursor:"pointer"}}>← Back</button>}
-          <button onClick={()=>step<3?setStep(s=>s+1):done()} style={{flex:2,padding:"13px",background:step===3?"rgba(0,255,136,0.15)":"rgba(0,242,254,0.12)",border:`2px solid ${step===3?"rgba(0,255,136,0.4)":"rgba(0,242,254,0.3)"}`,borderRadius:6,color:step===3?"#00FF88":"#00F2FE",fontFamily:"monospace",fontSize:12,fontWeight:700,cursor:"pointer",letterSpacing:".1em",boxShadow:step===3?"0 0 20px rgba(0,255,136,0.12)":"none"}}>
-            {step===3?"◈ LAUNCH SWARM →":"Continue →"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── Market Regime Engine ─────────────────────────────────────────────────────
-type MarketRegime="BULL_TREND"|"BEAR_TREND"|"SIDEWAYS"|"VOLATILE";
-type RegimeState={regime:MarketRegime;confidence:number;reason:string};
-
-const detectMarketRegime=async():Promise<RegimeState>=>{
-  try{
-    const r=await fetch("/api/market?type=sma");
-    const d=await r.json();
-    const regime:string=d.regime??"neutral";
-    const sma50:number=d.sma50??0;
-    const sma200:number=d.sma200??1;
-    const dist=Math.abs((sma50-sma200)/sma200*100);
-    if(regime==="bull"&&dist>3)return{regime:"BULL_TREND",confidence:Math.min(95,65+dist*2),reason:`SMA50 +${dist.toFixed(1)}% above SMA200`};
-    if(regime==="bear"&&dist>3)return{regime:"BEAR_TREND",confidence:Math.min(95,65+dist*2),reason:`SMA50 ${dist.toFixed(1)}% below SMA200`};
-    if(dist<1)return{regime:"SIDEWAYS",confidence:70,reason:"SMA50/200 tightly converged"};
-    return{regime:"VOLATILE",confidence:60,reason:"Regime transitioning"};
-  }catch{return{regime:"SIDEWAYS",confidence:50,reason:"Data unavailable"};}
-};
-
-// ── Viral Card Modal ──────────────────────────────────────────────────────────
-function ViralCardModal({sym,pnl,pct,onClose}:{sym:string;pnl:number;pct:number;onClose:()=>void}){
-  const col=pnl>=0?K.g:K.r;
-  const tweet=`Just closed ${sym} for ${pnl>=0?"+":""}$${Math.abs(pnl).toFixed(0)} (${pct>=0?"+":""}${pct.toFixed(1)}%) with KYMIA AI! 🤖💰\n#KYMIA #CryptoTrading #AITrading\ntry.kymia.ai`;
-  return(
-    <div style={{position:"fixed",inset:0,zIndex:800,background:"rgba(2,4,10,0.97)",backdropFilter:"blur(20px)",display:"flex",alignItems:"center",justifyContent:"center"}} onClick={onClose}>
-      <div style={{background:"#060A12",border:`2px solid ${col}50`,borderRadius:16,padding:32,width:380,boxShadow:`0 0 80px ${col}20`,textAlign:"center",fontFamily:"monospace"}} onClick={e=>e.stopPropagation()}>
-        <div style={{fontSize:10,color:col,letterSpacing:".3em",marginBottom:16}}>⚡ WINNING TRADE CLOSED</div>
-        <div style={{fontSize:64,fontWeight:900,color:col,textShadow:`0 0 30px ${col}`,marginBottom:4}}>{pnl>=0?"+":"-"}${Math.abs(pnl).toFixed(0)}</div>
-        <div style={{fontSize:18,color:col,marginBottom:24}}>{pct>=0?"+":""}{pct.toFixed(1)}% · {sym}</div>
-        <div style={{padding:"12px 16px",background:`${col}08`,border:`1px solid ${col}25`,borderRadius:8,marginBottom:24,fontSize:10,color:K.hi,lineHeight:1.7,textAlign:"left",whiteSpace:"pre-line"}}>{tweet}</div>
-        <div style={{display:"flex",gap:10}}>
-          <button onClick={onClose} style={{flex:1,padding:12,background:"transparent",color:K.dim,border:"1px solid #0A1D33",borderRadius:6,fontFamily:"monospace",fontSize:11,cursor:"pointer"}}>CLOSE</button>
-          <button onClick={()=>{navigator.clipboard?.writeText(tweet);onClose();}} style={{flex:2,padding:12,background:`${col}15`,color:col,border:`2px solid ${col}40`,borderRadius:6,fontFamily:"monospace",fontSize:12,fontWeight:700,cursor:"pointer",letterSpacing:".08em"}}>🐦 COPY & SHARE</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── Triple Confirmation (2/3 data checks required) ───────────────────────────
-const tripleConfirm=async(sym:string,signal:string):Promise<{passed:boolean;checks:string[]}>=>{
-  const checks:string[]=[];
-  try{
-    const pair=sym==="BTC"?"BTCUSDT":sym==="ETH"?"ETHUSDT":`${sym}USDT`;
-    const [r5m,r1h]=await Promise.all([
-      fetch(`https://api.binance.com/api/v3/klines?symbol=${pair}&interval=5m&limit=15`).then(r=>r.json()).catch(()=>null),
-      fetch(`https://api.binance.com/api/v3/klines?symbol=${pair}&interval=1h&limit=22`).then(r=>r.json()).catch(()=>null),
-    ]);
-    if(Array.isArray(r5m)&&r5m.length>0){
-      const closes5m=r5m.map((c:string[])=>parseFloat(c[4]));
-      const rsi=calcRSI(closes5m,Math.min(14,closes5m.length-1));
-      if(signal==="BUY"&&rsi<68)checks.push("RSI5m OK");
-      if(signal==="SELL"&&rsi>32)checks.push("RSI5m OK");
-    }
-    if(Array.isArray(r1h)&&r1h.length>0){
-      const closes1h=r1h.map((c:string[])=>parseFloat(c[4]));
-      const ema9=calcEMAArr(closes1h,9),ema21=calcEMAArr(closes1h,21);
-      const e9=ema9[ema9.length-1],e21=ema21[ema21.length-1];
-      if(signal==="BUY"&&e9>e21)checks.push("EMA1h OK");
-      if(signal==="SELL"&&e9<e21)checks.push("EMA1h OK");
-      const vols=r1h.map((c:string[])=>parseFloat(c[5]));
-      const avgVol=vols.reduce((a:number,b:number)=>a+b,0)/vols.length;
-      if(vols[vols.length-1]>avgVol*0.8)checks.push("Volume OK");
-    }
-  }catch{return{passed:true,checks:["API fallback"]};}
-  return{passed:checks.length>=2,checks};
-};
-
-// ── 4H Trend Filter ──────────────────────────────────────────────────────────
-const get4HTrend=async(sym:string):Promise<"BULL"|"BEAR"|"NEUTRAL">=>{
-  try{
-    const pair=sym==="BTC"?"BTCUSDT":sym==="ETH"?"ETHUSDT":`${sym}USDT`;
-    const r=await fetch(`https://api.binance.com/api/v3/klines?symbol=${pair}&interval=4h&limit=10`);
-    const data=await r.json();
-    if(!Array.isArray(data)||data.length<2)return"NEUTRAL";
-    const closes=data.map((c:string[])=>parseFloat(c[4]));
-    const ema9arr=calcEMAArr(closes,9);
-    const ema=ema9arr[ema9arr.length-1];
-    const last=closes[closes.length-1];
-    if(last>ema*1.005)return"BULL";
-    if(last<ema*0.995)return"BEAR";
-    return"NEUTRAL";
-  }catch{return"NEUTRAL";}
-};
-
-const PLAN_LIMITS={
-  sandbox:{maxDailyTrades:Infinity,liveTrading:false,perfFee:0},
-  alpha:{maxDailyTrades:5,liveTrading:true,bonusOnStreak:true,perfFee:0},
-  performance:{maxDailyTrades:10,liveTrading:true,perfFee:0.10},
-  institutional:{maxDailyTrades:Infinity,liveTrading:true,perfFee:0},
-} as const;
-type PlanKey=keyof typeof PLAN_LIMITS;
-
-
-const LeftGlobe = () => (
-  <div style={{width:220,height:220,position:'relative',flexShrink:0,overflow:'hidden'}}>
-    <svg width="220" height="220" viewBox="0 0 220 220" style={{display:'block'}}>
-      <defs>
-        <radialGradient id="globeGrad" cx="50%" cy="50%" r="50%">
-          <stop offset="0%" stopColor="#051020" stopOpacity="1"/>
-          <stop offset="100%" stopColor="#04060D" stopOpacity="1"/>
-        </radialGradient>
-        <filter id="glow">
-          <feGaussianBlur stdDeviation="1.5" result="blur"/>
-          <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
-        </filter>
-        <clipPath id="globeClip"><circle cx="110" cy="110" r="90"/></clipPath>
-      </defs>
-      {/* Globe background */}
-      <circle cx="110" cy="110" r="90" fill="url(#globeGrad)" stroke="#00F2FE" strokeWidth="0.5" opacity="0.6"/>
-      {/* Latitude lines */}
-      {[-60,-30,0,30,60].map(lat=>{
-        const ry=90*Math.cos(lat*Math.PI/180);
-        const y=110-90*Math.sin(lat*Math.PI/180);
-        return <ellipse key={lat} cx="110" cy={y} rx={ry} ry={ry*0.15} fill="none" stroke="#00F2FE" strokeWidth="0.3" opacity="0.2" clipPath="url(#globeClip)"/>;
-      })}
-      {/* Longitude lines */}
-      {[0,30,60,90,120,150].map(lon=>{
-        const rx=90*Math.sin(lon*Math.PI/180);
-        return <ellipse key={lon} cx="110" cy="110" rx={rx} ry="90" fill="none" stroke="#00F2FE" strokeWidth="0.3" opacity="0.15" clipPath="url(#globeClip)"/>;
-      })}
-      {/* City dots */}
-      {[
-        {x:85,y:75,name:'NYC',col:'#00FF88'},
-        {x:107,y:68,name:'LON',col:'#00F2FE'},
-        {x:163,y:78,name:'TYO',col:'#BD00FF'},
-        {x:155,y:95,name:'SGP',col:'#FFD700'},
-        {x:120,y:82,name:'DXB',col:'#00F2FE'},
-        {x:158,y:82,name:'HKG',col:'#00FF88'},
-      ].map(c=>(
-        <g key={c.name} filter="url(#glow)">
-          <circle cx={c.x} cy={c.y} r="3" fill={c.col} opacity="0.9"/>
-          <circle cx={c.x} cy={c.y} r="6" fill="none" stroke={c.col} strokeWidth="0.5" opacity="0.4"/>
-          <text x={c.x+5} y={c.y-4} fontSize="5" fill={c.col} fontFamily="monospace" opacity="0.7">{c.name}</text>
-        </g>
-      ))}
-      {/* Trade arcs */}
-      <path d="M85,75 Q110,50 155,95" fill="none" stroke="#00FF88" strokeWidth="0.8" opacity="0.3" strokeDasharray="3 4"/>
-      <path d="M107,68 Q140,55 158,82" fill="none" stroke="#00F2FE" strokeWidth="0.8" opacity="0.3" strokeDasharray="3 4"/>
-      {/* Center eye */}
-      <circle cx="110" cy="110" r="8" fill="#04060D" stroke="#00F2FE" strokeWidth="1" opacity="0.8"/>
-      <circle cx="110" cy="110" r="4" fill="#00F2FE" opacity="0.6"/>
-      <circle cx="110" cy="110" r="1.5" fill="#fff" opacity="0.9"/>
-      {/* Outer ring */}
-      <circle cx="110" cy="110" r="92" fill="none" stroke="#00F2FE" strokeWidth="0.3" opacity="0.15" strokeDasharray="4 8"/>
-      {/* Money labels */}
-      <text x="60" y="100" fontSize="8" fill="#00FF88" fontFamily="monospace" opacity="0.7">+$47</text>
-      <text x="145" y="130" fontSize="8" fill="#FF3366" fontFamily="monospace" opacity="0.7">-$12</text>
-    </svg>
-  </div>
-);
-
-
-const AUTO_TV_SYMBOLS: Record<string,string> = {
-  SOL:'BINANCE:SOLUSDT', BTC:'BINANCE:BTCUSDT', ETH:'BINANCE:ETHUSDT',
-  JUP:'BINANCE:JUPUSDT', WIF:'BINANCE:WIFUSDT', BONK:'BINANCE:BONKUSDT',
-  JTO:'BINANCE:JTOUSDT', PYTH:'BINANCE:PYTHUSDT', RAY:'BINANCE:RAYUSDT',
-  ORCA:'BINANCE:ORCAUSDT',
-};
-
-const AutoChartView = ({sym, trade, pos}: {sym:string, trade:any, pos:any}) => {
-  const ref = useRef<HTMLDivElement>(null);
-  const entryPrice = trade?.price || pos?.avg || 0;
-  const sl = entryPrice ? entryPrice * 0.975 : 0;
-  const tp = entryPrice ? entryPrice * 1.055 : 0;
-  const tvSym = AUTO_TV_SYMBOLS[sym] || `BINANCE:${sym}USDT`;
-
-  useEffect(() => {
-    if (!ref.current) return;
-    ref.current.innerHTML = '';
-    const script = document.createElement('script');
-    script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
-    script.async = true;
-    script.textContent = JSON.stringify({
-      autosize: true, symbol: tvSym, interval: '5',
-      timezone: 'Etc/UTC', theme: 'dark', style: '1', locale: 'en',
-      backgroundColor: 'rgba(4,6,13,1)', gridColor: 'rgba(10,29,51,0.4)',
-      hide_top_toolbar: false, withdateranges: false, save_image: false,
-      studies: ['RSI@tv-basicstudies','MAExp@tv-basicstudies','MACD@tv-basicstudies','Volume@tv-basicstudies'],
-      overrides: {
-        "paneProperties.background": "#04060D", "paneProperties.backgroundType": "solid",
-        "paneProperties.vertGridProperties.color": "#081422", "paneProperties.horzGridProperties.color": "#081422",
-        "scalesProperties.textColor": "#4A7090", "scalesProperties.lineColor": "#0A1D33",
-        "scalesProperties.backgroundColor": "#04060D",
-        "mainSeriesProperties.candleStyle.upColor": "#00FF88", "mainSeriesProperties.candleStyle.downColor": "#FF3366",
-        "mainSeriesProperties.candleStyle.borderUpColor": "#00FF88", "mainSeriesProperties.candleStyle.borderDownColor": "#FF3366",
-        "mainSeriesProperties.candleStyle.wickUpColor": "#00FF8850", "mainSeriesProperties.candleStyle.wickDownColor": "#FF336650",
-      },
-      studies_overrides: {
-        "relative strength index.plot.color": "#BD00FF", "relative strength index.plot.linewidth": 2,
-        "MACD.macd.color": "#00F2FE", "MACD.signal.color": "#FFD700",
-        "moving average exponential.Plot.color": "#00F2FE", "moving average exponential.Plot.linewidth": 2,
-      },
-      disabled_features: ["use_localstorage_for_settings","header_symbol_search","header_compare"],
-    });
-    ref.current.appendChild(script);
-    return () => { if (ref.current) ref.current.innerHTML = ''; };
-  }, [tvSym]);
-
-  return (
-    <div style={{flex:1,position:'relative',background:'#04060D',overflow:'hidden'}}>
-      <style>{`.tradingview-widget-container,.tradingview-widget-container>div,.tradingview-widget-container iframe{background:#04060D!important;background-color:#04060D!important;width:100%!important;height:100%!important}`}</style>
-      <div ref={ref} className="tradingview-widget-container" style={{width:'100%',height:'100%',position:'relative',background:'#04060D'}}/>
-      {entryPrice > 0 && (
-        <div style={{position:'absolute',top:12,left:12,display:'flex',flexDirection:'column',gap:5,zIndex:10,pointerEvents:'none'}}>
-          {[{l:'— TP',v:tp,c:'#00FF88'},{l:'— ENTRY',v:entryPrice,c:'#00F2FE'},{l:'— SL',v:sl,c:'#FF3366'}].map((lv,i) => (
-            <div key={i} style={{display:'flex',alignItems:'center',gap:6,padding:'4px 10px',background:'rgba(4,6,13,0.95)',border:`1px solid ${lv.c}50`,borderRadius:4,boxShadow:`0 0 12px ${lv.c}15`}}>
-              <span style={{fontSize:10,color:lv.c,fontWeight:700,fontFamily:'monospace'}}>{lv.l} ${lv.v.toFixed(2)}</span>
-            </div>
-          ))}
-        </div>
-      )}
-      <div style={{position:'absolute',top:12,right:12,zIndex:10,pointerEvents:'none'}}>
-        {[{n:'LENS',i:'RSI(14)',c:'#BD00FF'},{n:'RADAR',i:'EMA 9/21',c:'#00F2FE'},{n:'RAZOR',i:'MACD',c:'#FFD700'},{n:'SURGE',i:'Volume',c:'#00FF88'}].map((a,i) => (
-          <div key={i} style={{display:'flex',alignItems:'center',gap:5,padding:'2px 8px',marginBottom:2,background:'rgba(4,6,13,0.9)',border:`1px solid ${a.c}20`,borderRadius:3}}>
-            <div style={{width:5,height:5,borderRadius:'50%',background:a.c}}/>
-            <span style={{fontSize:8,color:a.c,fontWeight:700,fontFamily:'monospace'}}>{a.n}</span>
-            <span style={{fontSize:8,color:'#2A5070',fontFamily:'monospace'}}>{a.i}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-};
-
 export default function KYMIA({isLive=false}:{isLive?:boolean}){
-  const searchParams=useSearchParams();
-  const plan=(searchParams.get("plan")||"sandbox") as PlanKey;
-  const planLimits=PLAN_LIMITS[plan]??PLAN_LIMITS.sandbox;
-
   const prices=usePrices();
   const pricesRef=useRef(prices);
   useEffect(()=>{pricesRef.current=prices;},[prices]);
@@ -2284,26 +1744,6 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   const [beatResult,setBeatResult]=useState<string|null>(null);
   const [newTokens,setNewTokens]=useState<NewToken[]>([]);
   const [scannerLoading,setScannerLoading]=useState(false);
-  const [scannerSubTab,setScannerSubTab]=useState<"new"|"top100">("new");
-  const [top100Opps,setTop100Opps]=useState<ScanOpportunity[]>([]);
-  const [top100Loading,setTop100Loading]=useState(false);
-  const [memeAlert,setMemeAlert]=useState<MemeToken|null>(null);
-  const [marketRegime,setMarketRegime]=useState<RegimeState|null>(null);
-  const [viralCard,setViralCard]=useState<{sym:string;pnl:number;pct:number}|null>(null);
-  const [blacklist,setBlacklist]=useState<Record<string,number>>({});
-  const [symLosses,setSymLosses]=useState<Record<string,number>>({});
-  const [swarmConfig,setSwarmConfig]=useState<SwarmConfig|null>(null);
-  const [showOnboarding,setShowOnboarding]=useState(false);
-  const [kymiaTotalFee,setKymiaTotalFee]=useState(0);
-  const [sessionWins,setSessionWins]=useState(0);
-  const [sessionFees,setSessionFees]=useState(0);
-  const [sessionNetPnl,setSessionNetPnl]=useState(0);
-  const swarmConfigRef=useRef<SwarmConfig|null>(null);
-  useEffect(()=>{swarmConfigRef.current=swarmConfig;},[swarmConfig]);
-  const blacklistRef=useRef<Record<string,number>>({});
-  const symLossesRef=useRef<Record<string,number>>({});
-  useEffect(()=>{blacklistRef.current=blacklist;},[blacklist]);
-  useEffect(()=>{symLossesRef.current=symLosses;},[symLosses]);
   const [dataStatus,setDataStatus]=useState<DataStatus>({jupiter:"loading",binance:"loading",coingecko:"loading",lastUpdate:0});
   const [chartTrade,setChartTrade]=useState<{trade:Trade|null,position:Position|null,agentSignals?:AgentSignals}|null>(null);
   const [confirmClose,setConfirmClose]=useState<string|null>(null);
@@ -2325,7 +1765,6 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   const swarmRef=useRef<HTMLDivElement>(null);
   const entropyRef=useRef(entropy);
   useEffect(()=>{entropyRef.current=entropy;},[entropy]);
-  const btcFlowRef=useRef<number>(0);
 
   // Keep completedMissions ref in sync for use inside effects
   useEffect(()=>{completedMissionsRef.current=completedMissions;},[completedMissions]);
@@ -2625,14 +2064,10 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
       const sellPct=totalW>0?sellW/totalW:0;
       const dir=buyPct>=sellPct?"BUY":"SELL";
       const agreePct=dir==="BUY"?buyPct:sellPct;
-      // Count agents explicitly agreeing (not just weighted)
-      const buyAgents=active.filter(ag=>ag.sig==="BUY").length;
-      const sellAgents=active.filter(ag=>ag.sig==="SELL").length;
-      const agreeCount=dir==="BUY"?buyAgents:sellAgents;
-      const sig=(agreePct>=CONSENSUS_THRESHOLD&&agreeCount>=MIN_AGENTS_AGREE)?dir:"HOLD";
+      const sig=agreePct>=0.60?dir:"HOLD";
       const conf=Math.round(agreePct*100);
-      console.log("[CONSENSUS] active="+active.length+" BUY="+Math.round(buyPct*100)+"% SELL="+Math.round(sellPct*100)+"% agree="+Math.round(agreePct*100)+"% agents="+agreeCount+" → SIG:"+sig+" CONF:"+conf);
-      updates["consensus"]={sig,conf,real:true,on:true,th:`${active.length}/17 agents reporting\nBUY weight: ${Math.round(buyPct*100)}% | SELL: ${Math.round(sellPct*100)}%\nAgreement: ${Math.round(agreePct*100)}% (need 72%+)\nAgents aligned: ${agreeCount}/${active.length} (need ${MIN_AGENTS_AGREE}+)\n${sig==="HOLD"?"No consensus — threshold not met":dir+" consensus confirmed"}`};
+      console.log("[CONSENSUS] active="+active.length+" BUY="+Math.round(buyPct*100)+"% SELL="+Math.round(sellPct*100)+"% agree="+Math.round(agreePct*100)+"% → SIG:"+sig+" CONF:"+conf);
+      updates["consensus"]={sig,conf,real:true,on:true,th:`${active.length}/17 agents reporting\nBUY weight: ${Math.round(buyPct*100)}% | SELL: ${Math.round(sellPct*100)}%\nAgreement: ${Math.round(agreePct*100)}%\n${sig==="HOLD"?"No consensus (need 60%+)":dir+" consensus confirmed"}`};
     }catch(e){console.error("[CONSENSUS] FAILED",e);updates["consensus"]={real:false};}
 
     // Apply all updates + track last-active timestamps
@@ -2682,106 +2117,6 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
     const iv=setInterval(scanNewTokens,60000);
     return()=>clearInterval(iv);
   },[scanNewTokens]);
-
-  // ── Top 100 opportunity scanner (60s) ────────────────────────────────────
-  useEffect(()=>{
-    const run=async()=>{
-      setTop100Loading(true);
-      const opps=await scanOpportunities();
-      setTop100Opps(opps);
-      setTop100Loading(false);
-      if(opps.length>0)log("SCANNER",`[SCANNER] Found ${opps.length} opportunities in top 100`,K.gold);
-    };
-    run();
-    const iv=setInterval(run,60000);
-    return()=>clearInterval(iv);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[]);
-
-  // ── Memecoin detector (3 min, only when running) ─────────────────────────
-  useEffect(()=>{
-    if(!running)return;
-    const scan=async()=>{
-      try{
-        const r=await fetch("/api/dexscreener?type=new-tokens");
-        const d=await r.json();
-        const pairs=d.pairs||[];
-        const fresh=pairs.filter((p:any)=>{
-          const ageH=(Date.now()-p.pairCreatedAt)/3600000;
-          return ageH<6&&(p.liquidity?.usd||0)>20000&&(p.volume?.h1||0)>5000;
-        }).sort((a:any,b:any)=>(b.volume?.h1||0)-(a.volume?.h1||0)).slice(0,5).map((p:any)=>{
-          const buys=p.txns?.h1?.buys||0,sells=p.txns?.h1?.sells||1;
-          const buyRatio=Math.round(buys/(buys+sells)*100);
-          let rugScore=100;const rugFlags:string[]=[];
-          if((p.liquidity?.usd||0)<50000){rugScore-=30;rugFlags.push("Low liquidity");}
-          if(buyRatio>85){rugScore-=25;rugFlags.push("Suspicious buy pressure");}
-          if(!p.info?.websites?.length){rugScore-=20;rugFlags.push("No website");}
-          return{symbol:p.baseToken?.symbol,name:p.baseToken?.name,address:p.baseToken?.address,price:parseFloat(p.priceUsd||"0"),priceChange1h:p.priceChange?.h1||0,volume1h:p.volume?.h1||0,liquidity:p.liquidity?.usd||0,buyRatio,ageH:Math.round((Date.now()-p.pairCreatedAt)/3600000),dexUrl:p.url,rugScore,rugFlags,txns1h:{buys,sells}};
-        });
-        if(fresh.length>0&&!memeAlert){
-          const best=fresh[0] as MemeToken;
-          if(best.rugScore>50&&best.buyRatio>60){
-            setMemeAlert(best);
-            log("LEVIATHAN",`🚨 NEW MEMECOIN: ${best.symbol} +${best.priceChange1h?.toFixed(0)}% | Rug: ${best.rugScore}/100`,K.gold);
-          }
-        }
-      }catch{}
-    };
-    scan();
-    const iv=setInterval(scan,180000);
-    return()=>clearInterval(iv);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[running]);
-
-  // ── Market Regime Engine (2 min cycle) ──────────────────────────────────────
-  useEffect(()=>{
-    const detect=async()=>{
-      const r=await detectMarketRegime();
-      setMarketRegime(prev=>{
-        if(prev&&prev.regime!==r.regime)log("ATLAS",`[REGIME] ${r.regime} — ${r.reason} (${r.confidence}% conf)`,r.regime==="BULL_TREND"?K.g:r.regime==="BEAR_TREND"?K.r:K.gold);
-        return r;
-      });
-    };
-    detect();
-    const iv=setInterval(detect,120000);
-    return()=>clearInterval(iv);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[]);
-
-  // ── Drawdown guard — respects swarmConfig.maxDrawdown ───────────────────────
-  useEffect(()=>{
-    if(!running||!swarmConfig)return;
-    const drawdown=((port.peak-port.equity)/port.peak)*100;
-    if(drawdown>=swarmConfig.maxDrawdown){
-      setRunning(false);
-      log("AEGIS",`🛑 Max drawdown -${drawdown.toFixed(1)}% reached. Trading paused — review required.`,K.r);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[port.equity,running]);
-
-  // ── Correlation Flow Tracker (BTC moves → alt prediction) ────────────────
-  useEffect(()=>{
-    if(!running)return;
-    const iv=setInterval(()=>{
-      const btcData=pricesRef.current["BTC"];
-      if(!btcData)return;
-      const cur=btcData.change;
-      const prev=btcFlowRef.current;
-      const delta=cur-prev;
-      btcFlowRef.current=cur;
-      if(Math.abs(delta)>1.8){
-        const isUp=delta>0;
-        const mag=Math.abs(delta).toFixed(1);
-        if(isUp){
-          setTimeout(()=>log("ATLAS",`[FLOW] BTC +${mag}% surge → alt momentum expected 2-4H. SURGE+LENS watching`,K.g),25000);
-        }else{
-          setTimeout(()=>log("ATLAS",`[FLOW] BTC -${mag}% drop → capital flight risk. AEGIS: tighten stops`,K.gold),15000);
-        }
-      }
-    },30000);
-    return()=>clearInterval(iv);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[running]);
 
   // Demo burst: fire 3 trades quickly after start (SOL/JUP/WIF with named agents)
   useEffect(()=>{
@@ -2839,8 +2174,8 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
       const pct=isShort?((pos.avg-cur)/pos.avg)*100:((cur-pos.avg)/pos.avg)*100;
 
       if(isShort){
-        // SHORT: SL = entry*1.018 (-1.8% tighter), TP = entry*0.935 (+6.5% wider)
-        const sl=pos.avg*1.018,tp=pos.avg*0.935;
+        // SHORT: SL = entry*1.025, TP = entry*0.945
+        const sl=pos.avg*1.025,tp=pos.avg*0.945;
         // 4h expiry
         if(pos.entryMs&&now-pos.entryMs>4*60*60*1000){
           setPort(prev=>{const p2={...prev.pos};delete p2[sym];return{...prev,cash:prev.cash+pos.avg*pos.qty+pnl,pos:p2};});
@@ -2908,33 +2243,6 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
     const card:WinCard={id:Math.random().toString(36).slice(2),sym,pnl,pct,price,agent,t:ts(),origin};
     setWinCards(prev=>[...prev.slice(-1),card]);
     setTrades(t=>[{id:card.id,sym,side:"SELL",qty:0,price,pnl,conf:80,t:card.t,ms:Date.now(),agent,reason:reason||agent},...t.slice(0,99)]);
-    if(pnl>=50)setTimeout(()=>setViralCard({sym,pnl,pct}),800);
-    // Track session net P&L always
-    setSessionNetPnl(n=>n+pnl);
-    if(pnl>0){setSessionWins(w=>w+1);}
-    // Performance fee (always track so dashboard shows it in demo too)
-    if(pnl>0&&swarmConfigRef.current){
-      const feePct=isLive?(swarmConfigRef.current.performanceFee/100):0.10;
-      const fee=pnl*feePct;
-      setKymiaTotalFee(f=>f+fee);
-      setSessionFees(f=>f+fee);
-      if(isLive)log("KYMIA",`◈ Performance fee: $${fee.toFixed(2)} (${swarmConfigRef.current.performanceFee}% on +$${pnl.toFixed(0)})`,K.gold);
-    }
-    // Blacklist tracking
-    if(pnl<0){
-      const losses=(symLossesRef.current[sym]||0)+1;
-      setSymLosses(sl=>({...sl,[sym]:losses}));
-      symLossesRef.current={...symLossesRef.current,[sym]:losses};
-      if(losses>=2){
-        const expiry=Date.now()+30*60*1000;
-        setBlacklist(b=>({...b,[sym]:expiry}));
-        blacklistRef.current={...blacklistRef.current,[sym]:expiry};
-        log("AEGIS",`⛔ ${sym} blacklisted 30min after ${losses} consecutive losses`,K.r);
-      }
-    }else{
-      setSymLosses(sl=>({...sl,[sym]:0}));
-      symLossesRef.current={...symLossesRef.current,[sym]:0};
-    }
   };
 
   // Real-data agents — NEVER overwritten by simulation (only AEGIS remains sim)
@@ -2996,14 +2304,9 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
       log("EXEC","▶ FORCE ENTRY "+sym+" @ "+fPrice(p.price)+" [DEMO]",K.g);
       tradeCount++;
     },8000);
-    const iv=setInterval(()=>{(async()=>{
+    const iv=setInterval(()=>{
       const cs=agStRef.current["consensus"];
-      const profMinConf=swarmConfigRef.current?.profileData?.minConf??75;
-      if(!cs?.on||!cs.conf||cs.conf<profMinConf)return;
-      // Profile rules enforcement
-      const profRules=getProfileRules(swarmConfigRef.current?.profile??"balanced");
-      const currentPosCount=Object.keys(portRef.current.pos).length;
-      if(currentPosCount>=profRules.maxPositions){log("AEGIS",`◉ Profile max ${profRules.maxPositions} positions reached — skip`,K.dim);return;}
+      if(!cs?.on||!cs.conf||cs.conf<45)return;
       // Pick volatile non-stable token
       const allKeys=Object.keys(SYMS);
       const pool=allKeys.filter(sym=>{
@@ -3014,81 +2317,43 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
       const candidates=pool.length>0?pool:allKeys.filter(s=>!STABLE_SYMS.has(s));
       const sym=candidates[Math.floor(Math.random()*candidates.length)];
       const p=pricesRef.current[sym];if(!p)return;
-
-      // Blacklist check
-      const blExpiry=blacklistRef.current[sym];
-      if(blExpiry){
-        if(Date.now()<blExpiry){log("AEGIS",`⛔ ${sym} blacklisted — skip`,K.dim);return;}
-        else{setBlacklist(b=>{const n={...b};delete n[sym];return n;});blacklistRef.current={...blacklistRef.current};delete blacklistRef.current[sym];}
-      }
-
+      // Multi-timeframe confirmation
       const sig=confirmSignal(p.hist);
       log("SIGNAL","◈ "+sym+" quality:"+sig.quality+" RSI-conf:"+Math.round(sig.conf)+"%",sig.quality==="HIGH"?K.g:sig.quality==="MED"?K.gold:K.dim);
       const prt=portRef.current;
-
-      // Exposure-based limit (replaces fixed count limit)
+      // Portfolio-based position limits (Bug 4)
+      const maxPos=getMaxPositions(prt.equity||prt.cash);
       const exposure=getTotalExposure(prt.pos,pricesRef.current);
-      const equity=prt.equity||prt.cash;
-      const exposurePct=exposure/equity;
-      const canOpen=!prt.pos[sym]&&(exposurePct+MIN_TRADE_SIZE_PCT<=MAX_TOTAL_EXPOSURE);
+      const maxExposure=(prt.equity||prt.cash)*0.80;
+      const canOpen=Object.keys(prt.pos).length<maxPos&&exposure<maxExposure;
       if(!canOpen&&!prt.pos[sym]){
-        log("AEGIS",`◉ Exposure: ${(exposurePct*100).toFixed(0)}% · ${Object.keys(prt.pos).length}pos — max ${(MAX_TOTAL_EXPOSURE*100).toFixed(0)}% reached`,K.dim);
-        return;
+        log("AEGIS","[AEGIS] Exposure: "+fU(exposure)+"/"+fU(prt.equity||prt.cash)+" ("+f2(exposure/(prt.equity||prt.cash)*100,0)+"%) — max reached, waiting",K.gold);
       }
-
-      // Weighted consensus confidence
-      const weightedConf=(()=>{
-        const ags=agStRef.current;
-        let wSum=0,totalW=0;
-        for(const[id,ag] of Object.entries(ags)){
-          if(ag.sig&&ag.conf){const w=AGENT_WEIGHTS[id]||1.0;wSum+=ag.conf*w;totalW+=w;}
-        }
-        return totalW>0?wSum/totalW:cs.conf||0;
-      })();
-
+      // ── MACRO TREND FILTER (BTC ±4% blocks directional trades) ────────
       const btcChange=pricesRef.current["BTC"]?.change??0;
       const btcBearish=btcChange<=-TRADER_RULES.macroBtcThreshold;
       const btcBullish=btcChange>=TRADER_RULES.macroBtcThreshold;
-
-      // FIX 4A: Tighter BTC macro filter (±2%)
-      const side4A=(cs.sig==="BUY"||sig.isBuy)?"BUY":(cs.sig==="SELL"||sig.isSell)?"SELL":null;
-      if(side4A==="BUY"&&btcChange<-2){
-        log("AEGIS",`⛔ BTC macro negative (${btcChange.toFixed(1)}%) → no LONG`,K.r);return;
-      }
-      if(side4A==="SELL"&&btcChange>2){
-        log("AEGIS",`⛔ BTC macro positive (${btcChange.toFixed(1)}%) → no SHORT`,K.r);return;
-      }
-
-      // FIX 4C: RSI guard from lens agent
-      const lensRSI=(agStRef.current as any)?.lens?.lastRSI;
-      if(lensRSI!==undefined){
-        if(side4A==="BUY"&&lensRSI>60){log("AEGIS",`⛔ RSI ${lensRSI.toFixed(0)} overbought → skip LONG`,K.dim);return;}
-        if(side4A==="SELL"&&lensRSI<40){log("AEGIS",`⛔ RSI ${lensRSI.toFixed(0)} oversold → skip SHORT`,K.dim);return;}
-      }
-
       if((cs.sig==="BUY"||sig.isBuy)&&!prt.pos[sym]&&prt.cash>500&&canOpen){
-        if(btcBearish&&p.rsi>=25){log("ATLAS","[ATLAS] ⚠ BTC macro bearish ("+fP(btcChange)+") — LONG "+sym+" blocked",K.gold);return;}
+        // Macro LONG block: BTC down >4%, unless RSI <25 (extreme oversold exception)
+        if(btcBearish&&p.rsi>=25){
+          log("ATLAS","[ATLAS] ⚠ BTC macro bearish ("+fP(btcChange)+") — LONG "+sym+" blocked",K.gold);return;
+        }
         if(btcBearish&&p.rsi<25)log("ATLAS","[ATLAS] RSI<25 exception — LONG despite BTC bearish",K.gold);
         if(isPeakHour())log("WATCH","[WATCH] NY/EU session open — elevated confidence window",K.c);
         else log("WATCH","[WATCH] Off-peak hours — applying strict 72% conf threshold",K.dim);
+        // Momentum filter
         if(!hasMomentum(p.hist)){log("SIGNAL","⊘ No momentum: "+sym+" — skip",K.dim);return;}
+        // Anti-correlation check
         const heldSyms=Object.keys(prt.pos);
         const corr=CORRELATED[sym]||[];
-        if(heldSyms.some(h=>corr.includes(h)||((CORRELATED[h]||[]).includes(sym)))){log("RISK","⊘ Anti-corr block: "+sym+" — diversify",K.gold);return;}
-
-        // 4H trend filter
-        const trend4h=await get4HTrend(sym);
-        if(trend4h==="BEAR"){log("AEGIS",`⛔ 4H trend BEAR — no LONG on ${sym}`,K.r);return;}
-
-        // Triple confirmation
-        const tc=await tripleConfirm(sym,"BUY");
-        if(!tc.passed){log("AEGIS",`⛔ Triple confirm FAILED: ${tc.checks.length}/3 (${sym})`,K.r);return;}
-        log("AEGIS",`✓ Triple confirm: ${tc.checks.join(" · ")}`,K.g);
-
+        if(heldSyms.some(h=>corr.includes(h)||((CORRELATED[h]||[]).includes(sym)))){
+          log("RISK","⊘ Anti-corr block: "+sym+" — diversify",K.gold);return;
+        }
+        // Scale-in sizing + experienced trader rules
         const cl=tradesRef.current.filter((t:Trade)=>t.pnl!==0);
         const wr=cl.length?cl.filter((t:Trade)=>t.pnl>0).length/cl.length:0.5;
         const rawFrac=kellySize(sig.conf,wr*100);
-        const traderCheck=applyTraderRules(sig.conf,rawFrac,tradesRef.current,sessionStartEquityRef.current,equity);
+        const traderCheck=applyTraderRules(sig.conf,rawFrac,tradesRef.current,sessionStartEquityRef.current,prt.equity||prt.cash);
         if(!traderCheck.allow){
           if(traderCheck.triggerCircuit){setCircuit(true);log("AEGIS","[AEGIS] ⛔ 5 LOSS STREAK — CIRCUIT BREAKER TRIGGERED",K.r);}
           log("RISK","⊘ Trader rules: "+sym+" — "+(traderCheck.reason||"filtered"),K.gold);return;
@@ -3100,22 +2365,13 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
           traderPauseTimerRef.current=setTimeout(()=>{setTraderIsPaused(false);log("AEGIS","[AEGIS] Pause lifted — resuming trading",K.g);},TRADER_RULES.loss3PauseMs);
         }
         if(traderIsPaused){log("AEGIS","[AEGIS] In pause window — skipping "+sym,K.gold);return;}
-
-        // Dynamic size by weighted confidence + profile cap + AEGIS volatility cap
-        const profMaxPct=swarmConfigRef.current?.profileData?.maxPosPct??MAX_TRADE_SIZE_PCT;
-        const baseLeverage=swarmConfigRef.current?.leverage??1;
-        // AEGIS: cap leverage when market is volatile (avg|change|>5% → max 2x, >3% → max 70%)
-        const allVols=Object.values(pricesRef.current).map(p=>Math.abs((p as PriceData).change||0));
-        const avgVol=allVols.length>0?allVols.reduce((a,b)=>a+b,0)/allVols.length:0;
-        const effectiveLeverage=avgVol>5?Math.min(baseLeverage,2):avgVol>3?Math.min(baseLeverage,baseLeverage*0.7):baseLeverage;
-        if(effectiveLeverage<baseLeverage)log("AEGIS",`[AEGIS] Vol ${avgVol.toFixed(1)}% — leverage capped ${baseLeverage}x→${effectiveLeverage.toFixed(1)}x`,K.gold);
-        const leverageMult=effectiveLeverage;
-        const rawAlloc=Math.min(getPositionSize(Math.round(weightedConf),equity),equity*profMaxPct*leverageMult);
-        const alloc=Math.min(rawAlloc,prt.cash*0.9);
-        const qty=alloc/p.price;
-        log("AEGIS",`◉ Exp: ${(exposurePct*100).toFixed(0)}% · ${Object.keys(prt.pos).length}pos · +${(alloc/equity*100).toFixed(0)}% alloc · ${Math.round(weightedConf)}% wConf`,K.dim);
+        if(traderCheck.consecLosses>=2)log("AEGIS","[AEGIS] "+traderCheck.consecLosses+" recent losses — size reduced to "+f2(traderCheck.frac*100,0)+"%",K.gold);
         setTraderConsecLosses(traderCheck.consecLosses);
         setTraderScaleMode(true);
+        const allocFrac=traderCheck.frac;
+        log("AEGIS","[AEGIS] Scale-in entry: $"+f2(prt.cash*allocFrac,0)+" ("+f2(allocFrac*100,0)+"% init @ "+Math.round(sig.conf)+"% conf)",K.co);
+        const alloc=Math.min(prt.cash*allocFrac,prt.cash*.9);
+        const qty=alloc/p.price;
         setPort(prev=>{if(prev.pos[sym])return prev;return{...prev,cash:prev.cash-alloc,pos:{...prev.pos,[sym]:{qty,avg:p.price,peak:p.price,entryMs:Date.now(),trailActive:false,side:"LONG",scaledIn:false}}};});
         setSignalCount(n=>n+1);
         const ags2=agStRef.current;
@@ -3127,11 +2383,11 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
         if(ags2["echo"]?.conf&&ags2["echo"]?.sig)agSig2.echo={fg:Math.round(entropyRef.current),signal:ags2["echo"].sig};
         if(ags2["razor"]?.conf&&ags2["razor"]?.sig)agSig2.razor={rsi:calcRSI(p.hist.slice(-15),14),macd:0.002,signal:ags2["razor"].sig};
         if(ags2["vector"]?.conf&&ags2["vector"]?.sig)agSig2.vector={adx:Math.round(ags2["vector"].conf/2),signal:ags2["vector"].sig};
-        setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym,side:"BUY",qty,price:p.price,pnl:0,conf:Math.round(weightedConf),t:ts(),ms:Date.now(),agentSignals:agSig2},...t.slice(0,99)]);
-        log("EXEC","▶ LONG "+sym+" @ "+fPrice(p.price)+" alloc:$"+f2(alloc)+" wConf:"+Math.round(weightedConf)+"%",K.g);
-        setTimeout(()=>{showAutoChart(sym,portRef.current.pos[sym],{sym,side:"BUY",price:p.price,agent:"CONSENSUS",reason:""});},500);
+        setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym,side:"BUY",qty,price:p.price,pnl:0,conf:Math.round(sig.conf),t:ts(),ms:Date.now(),agentSignals:agSig2},...t.slice(0,99)]);
+        log("EXEC","▶ LONG "+sym+" @ "+fPrice(p.price)+" init:"+f2(allocFrac*100,0)+"% sig:"+sig.quality,K.g);
         tradeCount++;
       }else if((cs.sig==="SELL"||sig.isSell)&&prt.pos[sym]&&prt.pos[sym].side!=="SHORT"){
+        // Close existing LONG position
         const pos=prt.pos[sym];
         const pnl=(p.price-pos.avg)*pos.qty;
         setPort(prev=>{const p2={...prev.pos};delete p2[sym];return{...prev,cash:prev.cash+pos.qty*p.price,pos:p2};});
@@ -3139,7 +2395,9 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
         log("EXEC","◀ CLOSE "+sym+" @ "+fPrice(p.price)+" PnL:"+fU(pnl),pnl>=0?K.g:K.r);
         tradeCount++;
       }
-      if((cs.sig==="SELL"&&(cs.conf||0)>=72)||sig.isSell){
+      // SHORT: separate path — triggers on SELL consensus (≥55%) OR multi-TF SELL signal
+      // Macro SHORT block: BTC up >4% blocks shorts
+      if((cs.sig==="SELL"&&(cs.conf||0)>=55)||sig.isSell){
         if(btcBullish){log("ATLAS","[ATLAS] ⚠ BTC macro bullish ("+fP(btcChange)+") — SHORT blocked",K.gold);}
         else{
           const shortSym=selectBestShort();
@@ -3150,7 +2408,7 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
           }
         }
       }
-    })();},2000);
+    },2000);
     return()=>{clearInterval(iv);clearTimeout(forceT);};
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[running,circuit,traderIsPaused,log]);
@@ -3179,19 +2437,6 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
     return()=>clearInterval(iv);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[running,log]);
-
-  // ── Win Rate Gate — pause if WR drops below 45% after 5+ trades ──────────────
-  useEffect(()=>{
-    const closed=trades.filter(t=>t.pnl!==0);
-    if(closed.length<5||!running)return;
-    const wr=closed.filter(t=>t.pnl>0).length/closed.length;
-    if(wr<0.45){
-      log("AEGIS",`⚠ Win rate ${(wr*100).toFixed(0)}% below 45% — 10min cooldown pause`,K.r);
-      setRunning(false);
-      setTimeout(()=>{setRunning(true);log("AEGIS","▶ Cooldown complete — resuming",K.g);},600000);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[trades]);
 
   // Edge events
   useEffect(()=>{
@@ -3232,36 +2477,6 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[]);
 
-  // Auto-chart overlay state
-  const [autoChart,setAutoChart]=useState<{sym:string,pos:any,trade:any}|null>(null);
-  const [autoChartTimer,setAutoChartTimer]=useState(15);
-  const autoChartTimeout=useRef<ReturnType<typeof setTimeout>|null>(null);
-  const autoChartInterval=useRef<ReturnType<typeof setInterval>|null>(null);
-
-  const showAutoChart=useCallback((sym:string,pos:any,trade:any)=>{
-    if(autoChartTimeout.current)clearTimeout(autoChartTimeout.current);
-    if(autoChartInterval.current)clearInterval(autoChartInterval.current);
-    setAutoChart({sym,pos,trade});
-    setAutoChartTimer(15);
-    let count=15;
-    autoChartInterval.current=setInterval(()=>{
-      count-=1;
-      setAutoChartTimer(count);
-      if(count<=0)clearInterval(autoChartInterval.current!);
-    },1000);
-    autoChartTimeout.current=setTimeout(()=>{
-      setAutoChart(null);
-      setAutoChartTimer(15);
-    },15000);
-  },[]);
-
-  useEffect(()=>{
-    return()=>{
-      if(autoChartTimeout.current)clearTimeout(autoChartTimeout.current);
-      if(autoChartInterval.current)clearInterval(autoChartInterval.current);
-    };
-  },[]);
-
   // Open a SHORT position directly (bypasses trader rules — used by demo + consensus path)
   const openShort=useCallback((sym:string,reason:string,agent:string,conf=70)=>{
     const p=pricesRef.current[sym];if(!p)return;
@@ -3272,10 +2487,9 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
     setPort(prev=>{if(prev.pos[sym])return prev;return{...prev,cash:prev.cash-alloc,pos:{...prev.pos,[sym]:{qty,avg:p.price,peak:p.price,entryMs:Date.now(),trailActive:false,side:"SHORT"}}};});
     setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym,side:"SHORT",qty,price:p.price,pnl:0,conf,t:ts(),ms:Date.now(),agent,reason},...t.slice(0,99)]);
     log("EXEC","▼ ["+agent+"] SHORT "+sym+" @ "+fPrice(p.price)+" conf:"+conf+"%",K.r);
-    setTimeout(()=>{showAutoChart(sym,portRef.current.pos[sym],{sym,side:"SHORT",price:p.price,agent,reason:""});},500);
     setSignalCount(n=>n+1);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[showAutoChart]);
+  },[]);
 
   // Pick best SHORT candidate — most overbought, not already held
   const selectBestShort=useCallback(():string|null=>{
@@ -3374,53 +2588,16 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
   const totalPnL=port.equity-CAP,pct=(totalPnL/CAP)*100;
   const dd=((port.peak-port.equity)/port.peak)*100;
   const cl=trades.filter(t=>t.pnl!==0);
-  // Buy/sell percent for BottomSection
-  const _actAgents=AGENTS.filter(a=>a.id!=="consensus"&&agSt[a.id]?.on&&agSt[a.id]?.sig);
-  const _buyCount=_actAgents.filter(a=>agSt[a.id].sig==="BUY").length;
-  const _sellCount=_actAgents.filter(a=>agSt[a.id].sig==="SELL").length;
-  const _totalVotes=_actAgents.length||1;
-  const bP=Math.round(_buyCount/_totalVotes*100);
-  const sP=Math.round(_sellCount/_totalVotes*100);
-  const actAgentIds=Object.entries(agSt).filter(([,a])=>a.on).map(([id])=>id);
   const wr=cl.length?cl.filter(t=>t.pnl>0).length/cl.length*100:0;
   const rc=(aiData?.regime as string||"").includes("BULL")?K.g:(aiData?.regime as string||"").includes("BEAR")?K.r:K.gold;
   const entropyCol=entropy<30?K.r:entropy>70?K.g:K.gold;
 
-  const generateWeeklyReport=()=>{
-    const cl=tradesRef.current.filter((t:Trade)=>t.pnl!==0);
-    const wins=cl.filter((t:Trade)=>t.pnl>0);
-    const losses=cl.filter((t:Trade)=>t.pnl<0);
-    const totalPnL=cl.reduce((s:number,t:Trade)=>s+t.pnl,0);
-    const wr=cl.length?Math.round(wins.length/cl.length*100):0;
-    const best=wins.length?Math.max(...wins.map((t:Trade)=>t.pnl)):0;
-    const worst=losses.length?Math.min(...losses.map((t:Trade)=>t.pnl)):0;
-    const report=`📊 KYMIA AI WEEKLY REPORT\n\nTrades: ${cl.length} | Win Rate: ${wr}%\nTotal P&L: ${totalPnL>=0?"+":""}$${Math.abs(totalPnL).toFixed(0)}\nBest trade: +$${best.toFixed(0)}${worst<0?`\nWorst trade: $${worst.toFixed(0)}`:""}\n\nPowered by KYMIA — 18 AI agents trading 24/7 🤖\n#KYMIA #AITrading #CryptoTrading\ntry.kymia.ai`;
-    navigator.clipboard?.writeText(report);
-    log("USER","📊 Weekly report copied to clipboard — paste to X/Twitter",K.c);
-  };
-
-  const [tradingMode,setTradingMode]=useState<"day"|"swing"|"hybrid">("hybrid");
-  const [selPair,setSelPair]=useState("SOL");
-  const [rightPanelTab,setRightPanelTab]=useState<"signals"|"history">("signals");
-  const [chartOpen,setChartOpen]=useState(false);
-  const [selectedTrade,setSelectedTrade]=useState<{sym:string;pos?:Position;price?:number;side?:string;agent?:string;agentSignals?:AgentSignals}|null>(null);
-
   const handleStart=()=>{
-    if(!running){
-      if(!swarmConfig){setShowOnboarding(true);}
-      else{setRunning(true);log("SYS","▶ KYMIA ACTIVATED — 18 agents online",K.g);}
-    }else{
-      setRunning(false);
-      log("SYS","⏹ SYSTEM HALTED",K.r);
-    }
-  };
-
-  const handleOnboardingComplete=(config:SwarmConfig)=>{
-    setSwarmConfig(config);
-    swarmConfigRef.current=config;
-    setShowOnboarding(false);
-    setRunning(true);
-    log("KYMIA",`◈ Swarm configured: ${config.profile.toUpperCase()} | ${config.leverage}x leverage | -${config.maxDrawdown}% max DD`,K.c);
+    setRunning(r=>{
+      const next=!r;
+      log("SYS",next?"▶ KYMIA ACTIVATED — 18 agents online":"⏹ SYSTEM HALTED",next?K.g:K.r);
+      return next;
+    });
   };
 
   const beatStart=(sym:string,side:string)=>{
@@ -3437,7 +2614,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
   };
 
   return(
-<div style={{fontFamily:"'JetBrains Mono','Courier New',monospace",display:'grid',gridTemplateRows:'52px 1fr 220px',gridTemplateColumns:'220px 1fr 260px',position:'fixed',inset:0,overflow:'hidden',background:'#04060D',color:K.hi}}>
+    <div style={{fontFamily:"'JetBrains Mono','Courier New',monospace",background:blackSwan?"#0C0304":K.bg,color:K.hi,minHeight:"100vh",display:"flex",flexDirection:"column",overflow:"hidden",fontSize:12,transition:"background 1s",paddingBottom:28}}>
       <style>{`
         *{box-sizing:border-box;margin:0;padding:0}
         ::-webkit-scrollbar{width:3px}::-webkit-scrollbar-track{background:#020508}::-webkit-scrollbar-thumb{background:#0A1D33;border-radius:2px}
@@ -3447,366 +2624,847 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
         @keyframes fi{from{opacity:0;transform:translateX(-5px)}to{opacity:1;transform:translateX(0)}}
         @keyframes bootLine{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
         @keyframes laserSweep{from{transform:translateX(-100%)}to{transform:translateX(200%)}}
+        @keyframes arcFlow{0%{stroke-dashoffset:200}100%{stroke-dashoffset:0}}
         @keyframes moneyFloat{0%{opacity:0;transform:translateY(0)}20%{opacity:1}100%{opacity:0;transform:translateY(-22px)}}
         @keyframes winCardIn{from{transform:translateX(230px);opacity:0}to{transform:translateX(0);opacity:1}}
         @keyframes toastIn{from{transform:translateX(230px);opacity:0}to{transform:translateX(0);opacity:1}}
         @keyframes confBar{from{width:100%}to{width:0%}}
         @keyframes tickerScroll{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+        @keyframes shockwave{0%{r:60;opacity:.5}100%{r:108;opacity:0}}
         @keyframes whalePulse{0%{transform:scale(0);opacity:.72}100%{transform:scale(1);opacity:0}}
+        @keyframes agentPulse{0%,100%{opacity:1}50%{opacity:.15}}
+        @keyframes swan{0%,100%{box-shadow:0 0 0 rgba(255,51,102,.2)}50%{box-shadow:0 0 24px rgba(255,51,102,.5)}}
         @keyframes odometerRoll{from{transform:translateY(-100%);opacity:0}to{transform:translateY(0);opacity:1}}
         @keyframes glitch{0%{transform:translateX(0)}25%{transform:translateX(-2px) skewX(2deg)}75%{transform:translateX(2px) skewX(-2deg)}100%{transform:translateX(0)}}
-        @keyframes logSlideIn{from{opacity:0;transform:translateX(-8px)}to{opacity:1;transform:translateX(0)}}
-        @keyframes matrixFall{from{transform:translateY(-20px)}to{transform:translateY(160px)}}
-        @keyframes spin{to{transform:rotate(360deg)}}
-        @keyframes profitPulse{0%,100%{box-shadow:inset 0 0 20px rgba(0,255,136,0.08)}50%{box-shadow:inset 0 0 40px rgba(0,255,136,0.15)}}
+        @keyframes scan{0%{transform:translateY(4px)}100%{transform:translateY(36px)}}
+        @keyframes logSlideIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+        .log-entry{animation:logSlideIn .3s ease forwards}
         @keyframes convPulse{0%,100%{box-shadow:0 0 0 rgba(0,242,254,0);border-color:rgba(0,242,254,.15)}50%{box-shadow:0 0 28px rgba(0,242,254,.25),inset 0 0 18px rgba(0,242,254,.07);border-color:rgba(0,242,254,.55)}}
         @keyframes convBuyPulse{0%,100%{box-shadow:0 0 0 rgba(0,255,136,0);border-color:rgba(0,255,136,.15)}50%{box-shadow:0 0 28px rgba(0,255,136,.25),inset 0 0 18px rgba(0,255,136,.07);border-color:rgba(0,255,136,.55)}}
         @keyframes nodeFlash{0%{filter:brightness(1)}25%{filter:brightness(3) saturate(2)}75%{filter:brightness(2)}100%{filter:brightness(1)}}
-        @keyframes arc-debate{0%,100%{opacity:0.95}50%{opacity:0.55}}
-        @keyframes swan{0%,100%{box-shadow:0 0 0 rgba(255,51,102,.2)}50%{box-shadow:0 0 24px rgba(255,51,102,.5)}}
+        @keyframes arcFlicker{0%,100%{opacity:0.95}50%{opacity:0.55}}
+        .arc-debate{animation:arcFlicker 0.12s infinite}
         @keyframes agentGlobeAppear{0%{opacity:0;transform:translateX(-50%) translateY(-8px)}15%{opacity:1;transform:translateX(-50%) translateY(0)}75%{opacity:1}100%{opacity:0;transform:translateX(-50%) translateY(-12px)}}
-        @keyframes slideInChart{from{opacity:0;transform:translateX(-16px)}to{opacity:1;transform:translateX(0)}}
-        @keyframes chartSlideIn{from{opacity:0;transform:scale(0.97) translateY(-8px)}to{opacity:1;transform:scale(1) translateY(0)}}
-        .log-entry{animation:logSlideIn .3s ease forwards}
-        .arc-debate{animation:arc-debate 0.12s infinite}
         .tab{background:none;border:none;cursor:pointer;font-family:inherit;font-size:12px;letter-spacing:.1em;padding:7px 14px;color:#1E3A55;transition:all .2s;text-transform:uppercase;border-bottom:2px solid transparent}
         .tab:hover{color:${K.c}}.tab.on{color:${K.c};border-bottom-color:${K.c}}
         .tr:hover{background:#060B14}
         .panel{background:rgba(6,10,18,0.75);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid #0A1D33;border-radius:2px;box-shadow:0 4px 24px rgba(0,0,0,.45),inset 0 1px 0 rgba(0,242,254,.04)}
+        .panel:hover{border-color:#0F2840;box-shadow:0 4px 28px rgba(0,0,0,.55),inset 0 1px 0 rgba(0,242,254,.07)}
         .btn{font-family:inherit;font-size:9px;letter-spacing:.1em;cursor:pointer;border-radius:2px;text-transform:uppercase;border:none;transition:all .2s;padding:5px 11px}
         .btn:hover{filter:brightness(1.2)}
       `}</style>
 
-{/* Vignette */}
-<div style={{position:"fixed",inset:0,zIndex:201,pointerEvents:"none",background:"radial-gradient(ellipse at center, transparent 55%, rgba(2,4,10,0.72) 100%)"}}/>
+      {/* Vignette overlay */}
+      <div style={{position:"fixed",inset:0,zIndex:201,pointerEvents:"none",background:"radial-gradient(ellipse at center, transparent 55%, rgba(2,4,10,0.72) 100%)"}}/>
 
-{/* LIVE gate */}
-{isLive&&!walletConnected&&(
-<div style={{position:"fixed",inset:0,background:"rgba(2,4,10,0.97)",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:20,zIndex:500}}>
-  <div style={{fontSize:48,color:K.c,textShadow:"0 0 30px "+K.c}}>◈</div>
-  <div style={{fontSize:20,fontWeight:900,color:K.c,letterSpacing:".2em"}}>KYMIA LIVE MODE</div>
-  <div style={{fontSize:12,color:K.dim,textAlign:"center",lineHeight:2}}>Connect your Phantom wallet to start<br/>autonomous AI trading on Solana</div>
-  <button onClick={async()=>{
-    const ph=(window as unknown as {phantom?:{solana?:{connect:()=>Promise<{publicKey:{toString:()=>string}}>,isPhantom?:boolean}}}).phantom?.solana;
-    if(!ph?.isPhantom){window.open("https://phantom.app/","_blank");return;}
-    try{const r=await ph.connect();setWalletAddress(r.publicKey.toString());setWalletConnected(true);log("SYS","⚡ LIVE MODE — Phantom connected: "+r.publicKey.toString().slice(0,8)+"...",K.g);}
-    catch{log("SYS","Phantom connection rejected",K.r);}
-  }} style={{background:"rgba(0,242,254,0.15)",border:"2px solid rgba(0,242,254,0.5)",color:K.c,fontFamily:"inherit",fontSize:13,borderRadius:6,padding:"12px 36px",cursor:"pointer"}}>
-    ⚡ CONNECT PHANTOM
-  </button>
-  <a href="/" style={{fontSize:10,color:K.dim,textDecoration:"none"}}>← Back to DEMO mode</a>
-</div>
-
+      {/* ── LIVE MODE — Phantom connection gate ── */}
+      {isLive&&!walletConnected&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(2,4,10,0.97)",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:20,zIndex:500,fontFamily:"'JetBrains Mono','Courier New',monospace"}}>
+          <div style={{fontSize:48,color:K.c,textShadow:"0 0 30px "+K.c}}>◈</div>
+          <div style={{fontSize:20,fontWeight:900,color:K.c,letterSpacing:".2em"}}>KYMIA LIVE MODE</div>
+          <div style={{fontSize:12,color:K.dim,textAlign:"center",lineHeight:2}}>
+            Connect your Phantom wallet to start<br/>autonomous AI trading on Solana
+          </div>
+          <button onClick={async()=>{
+            const ph=(window as unknown as {phantom?:{solana?:{connect:()=>Promise<{publicKey:{toString:()=>string}}>,isPhantom?:boolean}}}).phantom?.solana;
+            if(!ph?.isPhantom){window.open("https://phantom.app/","_blank");return;}
+            try{const r=await ph.connect();setWalletAddress(r.publicKey.toString());setWalletConnected(true);log("SYS","⚡ LIVE MODE — Phantom connected: "+r.publicKey.toString().slice(0,8)+"...",K.g);}
+            catch{log("SYS","Phantom connection rejected",K.r);}
+          }} style={{background:"rgba(0,242,254,0.15)",border:"2px solid rgba(0,242,254,0.5)",color:K.c,fontFamily:"inherit",fontSize:13,borderRadius:6,padding:"12px 36px",cursor:"pointer",letterSpacing:".1em",transition:"all .2s"}}>
+            ⚡ CONNECT PHANTOM
+          </button>
+          <div style={{padding:"10px 24px",maxWidth:380,background:"rgba(255,215,0,0.06)",border:"1px solid rgba(255,215,0,0.2)",borderRadius:4,fontSize:10,color:K.gold,textAlign:"center",lineHeight:1.8}}>
+            ⚠ Real funds will be used for trading.<br/>KYMIA never holds your funds.<br/>Non-custodial · You keep your keys.
+          </div>
+          <a href="/" style={{fontSize:10,color:K.dim,textDecoration:"none",marginTop:4}}>← Back to DEMO mode</a>
+        </div>
       )}
 
-{booting&&<BootSequence onDone={()=>{setBooting(false);setTimeout(()=>{setRunning(true);log("SYS","▶ AUTO-START — 18 agents online",K.g);},800);}}/>}
+      {booting&&<BootSequence onDone={()=>{setBooting(false);setTimeout(()=>{setRunning(true);log("SYS","▶ AUTO-START — 18 agents online",K.g);},800);}}/>}
 
-      {/* ══ ROW 1: HEADER ══ */}
-      <div style={{gridColumn:"1/-1",height:'100%',overflow:'hidden',display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 16px",borderBottom:"1px solid "+K.brd,background:blackSwan?"#090203":"#040810",zIndex:10}}>
-        <div style={{display:"flex",alignItems:"center",gap:12}}>
-          <span style={{fontSize:13,fontWeight:700,letterSpacing:2,color:K.hi}}>NEXUS</span>
-          <span style={{fontSize:10,color:K.dim,letterSpacing:1}}>v2.0</span>
-          {blackSwan&&<span style={{fontSize:10,color:K.r,letterSpacing:2,animation:"pulse 1s infinite"}}>⚠ BLACK SWAN</span>}
+      {blackSwan&&(
+        <div style={{background:K.r+"18",borderBottom:"1px solid "+K.r,padding:"4px 16px",display:"flex",justifyContent:"space-between",alignItems:"center",animation:"swan 2s infinite"}}>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <div style={{width:6,height:6,borderRadius:"50%",background:K.r,animation:"pu 1s infinite"}}/>
+            <span style={{color:K.r,fontSize:10,fontWeight:700,letterSpacing:".12em"}}>⚠ BLACK SWAN — EXTREME VOLATILITY DETECTED</span>
+          </div>
+          <button className="btn" onClick={()=>{setCircuit(true);log("CIRCUIT","⚡ BLACK SWAN — Execution LOCKED",K.r);}} style={{background:K.r+"20",color:K.r,border:"1px solid "+K.r+"50"}}>AUTO LOCK</button>
+        </div>
+      )}
+
+      <header style={{background:blackSwan?"#090203":"#040810",borderBottom:"1px solid "+(blackSwan?K.r+"40":K.brd),padding:"4px 12px",display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,zIndex:100}}>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <div style={{display:"flex",alignItems:"center",gap:9}}>
+            <svg width="30" height="30" viewBox="0 0 30 30" style={{flexShrink:0,filter:"drop-shadow(0 0 6px "+(blackSwan?K.r:K.c)+")"}}>
+              <polygon points="15,1 27,8 27,22 15,29 3,22 3,8" fill="none" stroke={blackSwan?K.r:K.c} strokeWidth="1.5"/>
+              <ellipse cx="15" cy="15" rx="7" ry="4.2" fill="none" stroke={blackSwan?K.r:K.c} strokeWidth="1" opacity=".8"/>
+              <circle cx="15" cy="15" r="2.8" fill={blackSwan?K.r:K.c} opacity=".9"/>
+              <circle cx="15" cy="15" r="1.1" fill="#000" opacity=".7"/>
+              <line x1="8" y1="15" x2="22" y2="15" stroke={blackSwan?K.r:K.c} strokeWidth=".6" opacity=".35"/>
+            </svg>
+            <span style={{fontSize:17,fontWeight:900,color:blackSwan?K.r:K.c,letterSpacing:".25em",textShadow:"0 0 20px "+(blackSwan?K.r:K.c),animation:"glow 2.5s ease-in-out infinite",fontFamily:"'JetBrains Mono','Courier New',monospace"}}>KYMIA</span>
+          </div>
+          <span style={{fontSize:9,color:"#102030",letterSpacing:".1em"}}>QUANT AI · v2.0</span>
+          {!isLive?(
+            <div style={{padding:"3px 10px",background:"rgba(0,255,136,0.12)",border:"1px solid rgba(0,255,136,0.3)",borderRadius:3,fontSize:9,color:K.g,letterSpacing:".1em"}}>◈ DEMO · $10K VIRTUAL</div>
+          ):(
+            <div style={{padding:"3px 10px",background:"rgba(255,51,102,0.12)",border:"1px solid rgba(255,51,102,0.4)",borderRadius:3,fontSize:9,color:K.r,letterSpacing:".1em",animation:"pu 1s infinite"}}>⚡ LIVE · REAL FUNDS</div>
+          )}
+          <a href={isLive?"/nexus?mode=demo":"/nexus?mode=live"} style={{padding:"3px 9px",fontSize:9,background:"transparent",color:K.dim,border:"1px solid #0A1D33",borderRadius:2,textDecoration:"none",cursor:"pointer",letterSpacing:".06em"}}>
+            {isLive?"→ DEMO":"→ LIVE"}
+          </a>
+          <div style={{display:"flex",alignItems:"center",gap:4,padding:"2px 7px",background:K.c+"10",border:"1px solid "+K.c+"25",borderRadius:2}}>
+            <span style={{fontSize:9,fontWeight:700,color:K.c}}>{SYM_COUNT}</span>
+            <span style={{fontSize:7,color:K.dim,letterSpacing:".08em"}}>MARKETS</span>
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:5}}>
+            <div style={{width:6,height:6,borderRadius:"50%",background:running?K.g:K.r,boxShadow:"0 0 8px "+(running?K.g:K.r),animation:"pu 1.5s infinite"}}/>
+            <span style={{fontSize:9,color:running?K.g:K.r}}>{running?"LIVE · AUTO":"STANDBY"}</span>
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:5,padding:"3px 9px",background:K.g+"12",border:"1px solid "+K.g+"40",borderRadius:2}}>
+            <div style={{width:5,height:5,borderRadius:"50%",background:K.g,boxShadow:"0 0 6px "+K.g,animation:"pu 1.5s infinite"}}/>
+            <span style={{fontSize:11,fontWeight:700,color:K.g,letterSpacing:".04em"}}>{liveUsers.toLocaleString()}</span>
+            <span style={{fontSize:8,color:K.g,opacity:.7,letterSpacing:".08em"}}>ONLINE</span>
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:5,padding:"2px 7px",background:entropyCol+"15",border:"1px solid "+entropyCol+"40",borderRadius:2}}>
+            <span style={{fontSize:8,color:K.dim}}>ENTROPY</span>
+            <span style={{fontSize:10,color:entropyCol,fontWeight:700}}>{Math.round(entropy)}</span>
+          </div>
+          {(()=>{const nextM=MISSIONS.find(m=>!completedMissions.includes(m.id));if(!nextM)return null;const mp=Math.min(100,((port.equity-CAP)/CAP)/nextM.target*100);return(<div style={{display:"flex",alignItems:"center",gap:5,padding:"2px 8px",background:nextM.color+"10",border:`1px solid ${nextM.color}25`,borderRadius:2}}><span style={{fontSize:9,color:nextM.color}}>{nextM.icon}</span><div style={{width:52,height:3,background:"#06090F",borderRadius:2}}><div style={{height:"100%",borderRadius:2,background:nextM.color,width:mp+"%",transition:"width .5s",boxShadow:`0 0 6px ${nextM.color}`}}/></div><span style={{fontSize:8,color:"#2A5070"}}>{mp.toFixed(0)}%</span></div>);})()}
+          {running&&<div style={{display:"flex",alignItems:"center",gap:4,padding:"2px 7px",background:K.g+"10",border:"1px solid "+K.g+"25",borderRadius:2}}><div style={{width:5,height:5,borderRadius:"50%",background:K.g,animation:"pu 1s infinite"}}/><span style={{fontSize:7,color:K.g,letterSpacing:".1em"}}>24/7</span></div>}
+          {aiData&&<span style={{padding:"2px 7px",background:rc+"20",color:rc,border:"1px solid "+rc+"40",fontSize:9,borderRadius:2}}>{String(aiData.regime||"")}</span>}
         </div>
         <div style={{display:"flex",alignItems:"center",gap:8}}>
-          {(["day","swing","hybrid"] as const).map(m=>(
-            <button key={m} className="btn" onClick={()=>setTradingMode(m)} style={{background:tradingMode===m?K.c+"22":"transparent",color:tradingMode===m?K.c:K.dim,border:"1px solid "+(tradingMode===m?K.c:K.brd),fontSize:9,padding:"2px 8px",borderRadius:3,cursor:"pointer",textTransform:"uppercase",letterSpacing:1}}>{m}</button>
-          ))}
-        </div>
-        {/* Live price ticker center */}
-        <div style={{display:"flex",gap:12,alignItems:"center",fontSize:9,fontFamily:"monospace",color:K.dim}}>
-          {(['SOL','BTC','ETH'] as const).map(sym=>{
-            const pd=prices[sym];
-            const p=pd?.price||0;
-            const up=(pd?.trend==='up');
-            return(
-              <span key={sym} style={{color:up?K.g:K.r,whiteSpace:'nowrap'}}>
-                {sym} {fPrice(p)} {up?'▲':'▼'}
-              </span>
-            );
-          })}
-        </div>
-        <div style={{display:"flex",alignItems:"center",gap:16}}>
-          <div style={{textAlign:"right"}}>
-            <div style={{fontSize:9,color:K.dim,letterSpacing:1}}>EQUITY</div>
-            <div style={{fontSize:18,fontWeight:900,color:port.equity>=CAP?K.g:K.r}}>${f2(port.equity)}</div>
-          </div>
-          <div style={{textAlign:"right"}}>
-            <div style={{fontSize:9,color:K.dim}}>P&L</div>
-            <div style={{fontSize:12,color:totalPnL>=0?K.g:K.r}}>{totalPnL>=0?"+":""}{f2(totalPnL)}</div>
-          </div>
-          <div style={{display:"flex",gap:6}}>
-            <button className="btn" onClick={()=>setChartOpen(o=>!o)} style={{fontSize:9,padding:"3px 8px",background:chartOpen?K.c+"22":"transparent",color:chartOpen?K.c:K.dim,border:"1px solid "+(chartOpen?K.c:K.brd),borderRadius:3,cursor:"pointer"}}>{chartOpen?"▼ CHART":"▲ CHART"}</button>
-            {running?<button className="btn" onClick={()=>{setRunning(false);log("SYS","⏹ HALTED",K.r);}} style={{fontSize:9,padding:"3px 8px",background:K.r+"22",color:K.r,border:"1px solid "+K.r,borderRadius:3,cursor:"pointer"}}>■ STOP</button>:<button className="btn" onClick={handleStart} style={{fontSize:9,padding:"3px 8px",background:K.g+"22",color:K.g,border:"1px solid "+K.g,borderRadius:3,cursor:"pointer"}}>▶ START</button>}
-          </div>
-        </div>
-      </div>
-
-      {/* ══ ROW 2 LEFT: MARKET PANEL ══ */}
-      <div className="panel" style={{gridColumn:1,gridRow:2,height:'100%',overflow:'hidden',overflowY:"auto",borderRight:"1px solid "+K.brd,padding:"8px 0",display:"flex",flexDirection:"column"}}>
-        {/* Pair selector */}
-        <div style={{padding:"0 10px 8px",borderBottom:"1px solid "+K.brd+"44"}}>
-          <div style={{fontSize:9,color:K.dim,letterSpacing:1,marginBottom:4}}>MARKET</div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:3}}>
-            {["SOL","BTC","ETH","BONK","WIF","JTO"].map(s=>(
-              <button key={s} onClick={()=>{setSelPair(s);setSelectedTrade(t=>t?{...t,sym:s}:{sym:s});}} style={{fontSize:9,padding:"3px 4px",background:selPair===s?K.c+"22":"transparent",color:selPair===s?K.c:K.dim,border:"1px solid "+(selPair===s?K.c:K.brd+"66"),borderRadius:2,cursor:"pointer"}}>{s}</button>
-            ))}
-          </div>
-        </div>
-        {/* Price display */}
-        {(()=>{
-          const pd=prices[selPair+"USDT"]||prices[selPair+"USD"]||null;
-          const p=(pd as PriceData)?.price||0;
-          const ch=(pd as PriceData)?.change||0;
-          return(
-            <div style={{padding:"8px 10px",borderBottom:"1px solid "+K.brd+"44"}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
-                <span style={{fontSize:18,fontWeight:700,color:K.hi}}>${p<1?p.toFixed(5):f2(p)}</span>
-                <span style={{fontSize:10,color:ch>=0?K.g:K.r}}>{ch>=0?"+":""}{f2(ch)}%</span>
+          {([{l:"EQUITY",v:"$"+f2(port.equity),col:totalPnL>=0?K.g:K.r},{l:"P&L",v:fU(totalPnL)+" ("+fP(pct)+")",col:totalPnL>=0?K.g:K.r},{l:"DD",v:"-"+f2(dd)+"%",col:dd>5?K.r:K.gold}]).map((x,i)=>(
+            <div key={i} style={{textAlign:"right"}}>
+              <div style={{fontSize:8,color:"#102030"}}>{x.l}</div>
+              <div style={{fontSize:12,fontWeight:600,display:"flex",justifyContent:"flex-end"}}>
+                <Odometer value={x.v} col={x.col} style={{textShadow:i<2?`0 0 8px ${x.col}60`:undefined}}/>
               </div>
-              <div style={{fontSize:9,color:K.dim,marginTop:2}}>{selPair}/USDT · 1m</div>
             </div>
-          );
-        })()}
-        {/* RSI / volatility */}
-        <div style={{padding:"8px 10px",borderBottom:"1px solid "+K.brd+"44"}}>
-          <div style={{fontSize:9,color:K.dim,letterSpacing:1,marginBottom:4}}>INDICATORS</div>
-          {(()=>{
-            const sym=selPair+"USDT";
-            const rsiVal=(prices[sym] as PriceData)?.rsi||0;
-            const volVal=0;
-            return(
-              <div style={{display:"flex",flexDirection:"column",gap:4}}>
-                <div style={{display:"flex",justifyContent:"space-between"}}>
-                  <span style={{fontSize:9,color:K.dim}}>RSI</span>
-                  <span style={{fontSize:9,color:rsiVal>70?K.r:rsiVal<30?K.g:K.hi}}>{f2(rsiVal)}</span>
-                </div>
-                <div style={{height:3,background:K.brd,borderRadius:2}}>
-                  <div style={{height:"100%",width:rsiVal+"%",background:rsiVal>70?K.r:rsiVal<30?K.g:K.c,borderRadius:2,transition:"width .3s"}}/>
-                </div>
-                <div style={{display:"flex",justifyContent:"space-between",marginTop:2}}>
-                  <span style={{fontSize:9,color:K.dim}}>VOL</span>
-                  <span style={{fontSize:9,color:K.hi}}>{f2(volVal*100)}%</span>
-                </div>
-              </div>
-            );
-          })()}
+          ))}
+          <div style={{display:"flex",alignItems:"center",gap:5,padding:"2px 8px",background:"#060A12",border:"1px solid #0A1D33",borderRadius:2}}>
+            <span style={{fontSize:9,fontWeight:700,color:K.gold}}>{trades.filter(t=>t.pnl!==0).length}</span>
+            <span style={{fontSize:7,color:K.dim,letterSpacing:".06em"}}>TRADES</span>
+          </div>
+          <div style={{display:"flex",gap:5}}>
+            <button className="btn" onClick={()=>setModal("share")} style={{background:"#0A1428",color:K.gold,border:"1px solid "+K.gold+"50"}}>◈ SHARE</button>
+            <button className="btn" onClick={()=>setFocusMode(f=>!f)} style={{background:focusMode?K.c+"20":"#040810",color:focusMode?K.c:K.dim,border:"1px solid "+(focusMode?K.c+"50":K.brd)}}>{focusMode?"◈ EXIT FOCUS":"◈ FOCUS"}</button>
+            <button className="btn" onClick={runAI} disabled={analyzing} style={{background:analyzing?"#06111E":"#001428",color:analyzing?"#1A4A6A":K.c,border:"1px solid "+(analyzing?"#0A2040":K.c+"60")}}>{analyzing?"⟳":"⚡ DEBATE"}</button>
+            <button className="btn" onClick={runDNA} disabled={dnaLoading} style={{background:"#100020",color:K.pu,border:"1px solid "+K.pu+"50"}}>{dnaLoading?"⟳":"🧬 DNA"}</button>
+            <button className="btn" onClick={()=>setModal("beat")} style={{background:"#001820",color:K.gold,border:"1px solid "+K.gold+"50"}}>🎮 BEAT AI</button>
+            <button className="btn" onClick={()=>setShowKill(s=>!s)} style={{background:"#000F28",color:K.co,border:"1px solid "+K.co+"50"}}>⚙ AGENTS</button>
+            <button className="btn" onClick={handleStart} style={{background:running?"#180610":"#001808",color:running?K.r:K.g,border:"1px solid "+(running?K.r+"40":K.g+"40")}}>{running?"⏹ HALT":"▶ START"}</button>
+            <button className="btn" onClick={()=>{setCircuit(c=>!c);log("CIRCUIT",circuit?"Released":"⚡ LOCKED",K.gold);}} style={{background:circuit?"#180A00":"#080808",color:circuit?K.gold:K.tx,border:"1px solid "+(circuit?K.gold+"40":K.brd)}}>{circuit?"🔓":"⚡"}</button>
+          </div>
         </div>
-        {/* Globe */}
-        <LeftGlobe />
-        {/* Markets list */}
-        <div style={{padding:"8px 10px",borderBottom:"1px solid "+K.brd+"44"}}>
-          <div style={{fontSize:9,color:K.dim,letterSpacing:1,marginBottom:4}}>WATCHLIST</div>
-          <div style={{display:"flex",flexDirection:"column",gap:2}}>
-            {Object.keys(SYMS).slice(0,8).map(sym=>{
-              const pd=prices[sym]||null;
-              const p=(pd as PriceData)?.price||0;
-              const ch=(pd as PriceData)?.change||0;
-              return(
-                <div key={sym} onClick={()=>setSelPair(sym.replace("USDT","").replace("USD",""))} style={{display:"flex",justifyContent:"space-between",padding:"2px 0",cursor:"pointer",borderBottom:"1px solid "+K.brd+"22"}}>
-                  <span style={{fontSize:9,color:K.hi}}>{sym.replace("USDT","").replace("USD","")}</span>
-                  <span style={{fontSize:9,color:ch>=0?K.g:K.r}}>{ch>=0?"+":""}{f2(ch)}%</span>
-                </div>
-              );
+      </header>
+
+      <ProfitTicker trades={trades}/>
+
+      {showKill&&(
+        <div style={{background:"#030710",borderBottom:"1px solid "+K.brd,padding:"7px 16px"}}>
+          <div style={{fontSize:8,color:K.dim,letterSpacing:".12em",marginBottom:5}}>◉ KILL SWITCH — DISABLE AGENTS · WATCH SWARM ADAPT</div>
+          <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+            {AGENTS.map(a=>{
+              const dis=disabled.has(a.id),ag=agSt[a.id]||{};
+              const col=dis?"#1A2535":ag.sig==="BUY"?K.g:ag.sig==="SELL"?K.r:K.co;
+              return<button key={a.id} className="btn" onClick={()=>{setDisabled(prev=>{const n=new Set(prev);n.has(a.id)?n.delete(a.id):n.add(a.id);return n;});}} style={{background:dis?"#030608":col+"12",color:dis?K.dim:col,border:"1px solid "+(dis?"#080E18":col+"40"),opacity:dis?.45:1,textDecoration:dis?"line-through":"none",padding:"2px 8px"}}>{a.s}</button>;
             })}
+            {disabled.size>0&&<button className="btn" onClick={()=>setDisabled(new Set())} style={{background:K.g+"10",color:K.g,border:"1px solid "+K.g+"30"}}>ENABLE ALL</button>}
           </div>
         </div>
-        {/* Session P&L */}
-        <div style={{padding:"8px 10px"}}>
-          <div style={{fontSize:9,color:K.dim,letterSpacing:1,marginBottom:4}}>SESSION</div>
-          <div style={{display:"flex",flexDirection:"column",gap:3}}>
-            <div style={{display:"flex",justifyContent:"space-between"}}>
-              <span style={{fontSize:9,color:K.dim}}>Trades</span>
-              <span style={{fontSize:9,color:K.hi}}>{trades.length}</span>
-            </div>
-            <div style={{display:"flex",justifyContent:"space-between"}}>
-              <span style={{fontSize:9,color:K.dim}}>Win Rate</span>
-              <span style={{fontSize:9,color:K.g}}>{trades.length>0?Math.round(trades.filter(t=>t.pnl>0).length/trades.length*100):0}%</span>
-            </div>
-            <div style={{display:"flex",justifyContent:"space-between"}}>
-              <span style={{fontSize:9,color:K.dim}}>Open Pos</span>
-              <span style={{fontSize:9,color:K.hi}}>{Object.keys(port.pos).length}</span>
-            </div>
-            <div style={{display:"flex",justifyContent:"space-between"}}>
-              <span style={{fontSize:9,color:K.dim}}>Drawdown</span>
-              <span style={{fontSize:9,color:K.r}}>{f2(dd)}%</span>
-            </div>
+      )}
+
+      <div style={{background:"#030710",borderBottom:"1px solid #060B14",padding:"0 16px",display:"flex",gap:2}}>
+        {[["terminal","◈ COMMAND"],["trades","◎ HISTORY"],["scanner","⊕ SCANNER"],["crisis","⊞ CRISIS REPLAY"],["dna","🧬 SWARM DNA"],["onchain","⛓ ON-CHAIN"]].map(([v,l])=>(
+          <button key={v} className={`tab${tab===v?" on":""}`} onClick={()=>setTab(v)}>{l}</button>
+        ))}
+        <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:12,fontSize:8,color:"#0A1D2A"}}>
+          <span>WIN {f2(wr,0)}% · {trades.length} TRADES</span>
+          <div style={{display:"flex",gap:6}}>
+            {([["● JUP",dataStatus.jupiter],["● BNB",dataStatus.binance],["● CGK",dataStatus.coingecko]] as [string,"ok"|"err"|"loading"][]).map(([lbl,st])=>(
+              <span key={lbl} style={{color:st==="ok"?K.g:st==="err"?K.r:K.dim,fontSize:7,letterSpacing:".04em"}}>{lbl}</span>
+            ))}
+            {dataStatus.lastUpdate>0&&<span style={{color:"#0D1E30",fontSize:7}}>{Math.round((Date.now()-dataStatus.lastUpdate)/1000)}s ago</span>}
           </div>
+          <span style={{padding:"2px 8px",background:K.c+"10",border:"1px solid "+K.c+"20",color:K.c,borderRadius:2,fontSize:8,letterSpacing:".06em"}}>◈ DEMO · REAL PRICES · VIRTUAL $10K</span>
         </div>
       </div>
 
-      {/* ══ ROW 2 CENTER: SWARM ══ */}
-      <div style={{gridColumn:2,gridRow:2,height:'100%',overflow:"hidden",position:"relative",background:K.bg}}>
-        <div style={{width:"100%",height:"100%"}}>
-          <SwarmGraph st={agSt} debate={debate} disabled={disabled} swarmRef={swarmRef} flashingAgent={flashingAgent}/>
-        </div>
-        {/* Center overlay: pair + mode badge */}
-        <div style={{position:"absolute",top:8,left:12,display:"flex",gap:6,pointerEvents:"none"}}>
-          <span style={{fontSize:9,color:K.dim,background:K.bg+"cc",padding:"2px 6px",borderRadius:2,border:"1px solid "+K.brd}}>{selPair}/USDT</span>
-          <span style={{fontSize:9,color:K.c,background:K.c+"11",padding:"2px 6px",borderRadius:2,border:"1px solid "+K.c+"44",textTransform:"uppercase"}}>{tradingMode}</span>
-        </div>
-        {/* Auto-chart overlay */}
-        {autoChart&&(
-          <div style={{position:'absolute',inset:0,zIndex:50,animation:'chartSlideIn 0.4s ease forwards',background:'#04060D',display:'flex',flexDirection:'column'}}>
-            {/* Header */}
-            <div style={{padding:'8px 16px',background:'rgba(4,6,13,0.98)',borderBottom:'1px solid rgba(0,242,254,0.15)',display:'flex',alignItems:'center',gap:12,flexShrink:0}}>
-              <span style={{fontSize:16,fontWeight:900,color:'#00F2FE',fontFamily:'monospace'}}>{autoChart.sym}/USD</span>
-              <span style={{padding:'2px 8px',background:autoChart.trade?.side==='SHORT'?'rgba(255,51,102,0.2)':'rgba(0,255,136,0.2)',border:`1px solid ${autoChart.trade?.side==='SHORT'?'rgba(255,51,102,0.5)':'rgba(0,255,136,0.5)'}`,borderRadius:3,fontSize:10,fontWeight:700,color:autoChart.trade?.side==='SHORT'?'#FF3366':'#00FF88'}}>{autoChart.trade?.side==='SHORT'?'▼ SHORT':'▲ LONG'}</span>
-              <span style={{fontSize:9,color:'#2A5070',fontFamily:'monospace'}}>Opened by {autoChart.trade?.agent||'CONSENSUS'}</span>
-              <div style={{flex:1}}/>
-              <div style={{display:'flex',alignItems:'center',gap:8,padding:'4px 12px',background:'rgba(0,242,254,0.06)',border:'1px solid rgba(0,242,254,0.2)',borderRadius:20}}>
-                <svg width="20" height="20" style={{flexShrink:0}}>
-                  <circle cx="10" cy="10" r="8" fill="none" stroke="#0A1D33" strokeWidth="2"/>
-                  <circle cx="10" cy="10" r="8" fill="none" stroke="#00F2FE" strokeWidth="2"
-                    strokeDasharray={`${(autoChartTimer/15)*50.3} 50.3`} strokeLinecap="round"
-                    transform="rotate(-90 10 10)" style={{transition:'stroke-dasharray 1s linear'}}/>
-                </svg>
-                <span style={{fontSize:11,color:'#00F2FE',fontFamily:'monospace',fontWeight:700,minWidth:18,textAlign:'center'}}>{autoChartTimer}s</span>
-                <span style={{fontSize:8,color:'#2A5070'}}>auto-close</span>
+      {tab==="terminal"&&(()=>{
+        const activeAgents=AGENTS.filter(a=>a.id!=="consensus"&&agSt[a.id]?.on&&agSt[a.id]?.sig);
+        const buyVotes=activeAgents.filter(a=>agSt[a.id].sig==="BUY").length;
+        const sellVotes=activeAgents.filter(a=>agSt[a.id].sig==="SELL").length;
+        const totalVotes=activeAgents.length||1;
+        const swarmBP=Math.round(buyVotes/totalVotes*100);const swarmSP=Math.round(sellVotes/totalVotes*100);
+        const highConviction=swarmBP>72||swarmSP>72;
+        const convDom=swarmBP>swarmSP?"BUY":"SELL";
+        const convCol=convDom==="BUY"?K.g:K.r;
+        return(
+        <div style={{flex:1,display:"grid",gridTemplateColumns:focusMode?"0px 1fr 0px":"220px 1fr 260px",gridTemplateRows:"1fr 240px",gap:focusMode?0:6,padding:8,overflow:"hidden",minHeight:0,transition:"grid-template-columns .4s ease"}}>
+          {/* LEFT */}
+          <div style={{gridRow:"1/3",display:"flex",flexDirection:"column",gap:6,overflow:"hidden"}}>
+            <div className="panel" style={{display:"flex",flexDirection:"column",alignItems:"center",padding:"8px 4px 6px"}}>
+              <div style={{fontSize:8,color:K.dim,letterSpacing:".12em",marginBottom:4,alignSelf:"flex-start",paddingLeft:6}}>◉ GLOBAL MACRO SPHERE</div>
+              <Globe3D trades={trades} blackSwan={blackSwan} whaleAlert={whaleAlert} totalPnL={totalPnL} tradeCount={trades.length} agSt={agSt} running={running}/>
+            </div>
+            <div className="panel" style={{flex:1,overflow:"hidden",display:"flex",flexDirection:"column"}}>
+              <div style={{padding:"4px 8px 0",borderBottom:"1px solid #060A14",display:"flex",alignItems:"center",gap:8}}>
+                <span style={{fontSize:7,color:K.dim,letterSpacing:".12em"}}>◉ MARKETS</span>
+                {(["MOVERS","RADAR","ALL"] as const).map(t=>(
+                  <button key={t} onClick={()=>setMktTab(t)} style={{background:"none",border:"none",cursor:"pointer",fontFamily:"inherit",fontSize:7,letterSpacing:".1em",padding:"4px 6px 3px",color:mktTab===t?K.c:K.dim,borderBottom:"1px solid "+(mktTab===t?K.c:"transparent")}}>
+                    {t}
+                  </button>
+                ))}
+                <span style={{marginLeft:"auto",fontSize:7,color:K.dim}}>{SYM_COUNT} MKT</span>
               </div>
-              <button onClick={()=>{setAutoChart(null);if(autoChartTimeout.current)clearTimeout(autoChartTimeout.current);if(autoChartInterval.current)clearInterval(autoChartInterval.current);}} style={{background:'none',border:'none',color:'#2A5070',cursor:'pointer',fontSize:18,padding:'0 4px'}}>&#x2715;</button>
+              <div style={{overflow:"auto",flex:1}}>
+                {(()=>{
+                  const entries=Object.entries(prices);
+                  let display=entries;
+                  if(mktTab==="MOVERS"){
+                    display=[...entries].sort((a,b)=>Math.abs(b[1].change)-Math.abs(a[1].change)).slice(0,10);
+                  }else if(mktTab==="RADAR"){
+                    display=entries.filter(([sym,d])=>!STABLE_SYMS.has(sym)&&Math.abs(d.change)>2&&d.rsi<65).sort((a,b)=>Math.abs(b[1].change)-Math.abs(a[1].change)).slice(0,8);
+                  }else{
+                    // ALL: top 10 by absolute change (compact list)
+                    display=[...entries].filter(([sym])=>!STABLE_SYMS.has(sym)).sort((a,b)=>Math.abs(b[1].change)-Math.abs(a[1].change)).slice(0,10);
+                  }
+                  return display.map(([sym,d])=>{
+                    const up=d.trend==="up",pos=port.pos[sym];
+                    const rsi=d.rsi;
+                    const rsiCol=rsi>70?K.r:rsi<30?K.g:K.gold;
+                    const isShortPos=pos?.side==="SHORT";
+                    return(
+                      <div key={sym} className="tr" style={{display:"grid",gridTemplateColumns:"8px 36px 1fr 38px 26px",alignItems:"center",gap:4,padding:"0 8px",height:32,borderBottom:"1px solid #050810",borderLeft:"2px solid "+(pos?(isShortPos?K.r:K.c):mktTab==="RADAR"?K.gold+"60":"transparent"),cursor:"pointer"}} onClick={()=>{const tr=trades.find(t=>t.sym===sym&&t.side==="BUY");if(pos)setChartTrade({trade:tr||null,position:pos,agentSignals:tr?.agentSignals});}}>
+                        <div style={{width:6,height:6,borderRadius:"50%",background:up?K.g:K.r,flexShrink:0,boxShadow:"0 0 4px "+(up?K.g:K.r)}}/>
+                        <div style={{fontSize:9,fontWeight:700,color:K.hi,letterSpacing:".03em",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{sym}</div>
+                        <div style={{minWidth:0}}>
+                          <div style={{fontSize:9,color:up?K.g:K.r}}>{fPrice(d.price)}</div>
+                          {d.source&&<div style={{fontSize:6,color:K.dim,letterSpacing:".06em"}}>{d.source}</div>}
+                        </div>
+                        <div style={{fontSize:8,color:up?K.g:K.r,textAlign:"right",whiteSpace:"nowrap"}}>{up?"+":""}{d.change.toFixed(1)}%</div>
+                        <div style={{fontSize:7,textAlign:"center",padding:"1px 3px",borderRadius:2,background:rsiCol+"18",color:rsiCol}}>{Math.round(rsi)}</div>
+                      </div>
+                    );
+                  });
+                })()}
+              </div>
             </div>
-            {/* Chart */}
-            <AutoChartView sym={autoChart.sym} trade={autoChart.trade} pos={autoChart.pos}/>
-          </div>
-        )}
-      </div>
-
-      {/* ══ ROW 2 RIGHT: SIGNALS / HISTORY ══ */}
-      <div className="panel" style={{gridColumn:3,gridRow:2,height:'100%',overflow:"hidden",borderLeft:"1px solid "+K.brd,display:"flex",flexDirection:"column"}}>
-        {/* Tabs */}
-        <div style={{display:"flex",borderBottom:"1px solid "+K.brd}}>
-          {(["signals","history"] as const).map(t=>(
-            <button key={t} className="tab" onClick={()=>setRightPanelTab(t)} style={{flex:1,fontSize:9,padding:"6px 0",background:rightPanelTab===t?K.c+"11":"transparent",color:rightPanelTab===t?K.c:K.dim,border:"none",borderBottom:rightPanelTab===t?"2px solid "+K.c:"2px solid transparent",cursor:"pointer",textTransform:"uppercase",letterSpacing:1}}>{t}</button>
-          ))}
-        </div>
-        <div style={{flex:1,overflowY:"auto",padding:"6px 8px"}}>
-          {rightPanelTab==="signals"?(
-            <div style={{display:"flex",flexDirection:"column",gap:4}}>
-              <div style={{fontSize:9,color:K.dim,letterSpacing:1,marginBottom:4}}>AGENT SIGNALS</div>
-              {Object.entries(agSt).slice(0,12).map(([id,ag],i)=>(
-                <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"3px 0",borderBottom:"1px solid "+K.brd+"22"}}>
-                  <div style={{display:"flex",alignItems:"center",gap:4}}>
-                    <div style={{width:5,height:5,borderRadius:"50%",background:ag.sig==="BUY"?K.g:ag.sig==="SELL"?K.r:K.dim}}/>
-                    <span style={{fontSize:8,color:K.hi,maxWidth:60,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{id}</span>
+            <div className="panel" style={{padding:9}}>
+              <div style={{fontSize:8,color:K.dim,marginBottom:6,letterSpacing:".12em"}}>◉ ENTROPY & RISK</div>
+              {([{l:"ENTROPY",v:Math.round(entropy),col:entropyCol,pct:entropy},{l:"CASH",v:f2(port.cash/port.equity*100,1)+"%",col:K.co,pct:port.cash/port.equity*100},{l:"DRAWDOWN",v:"-"+f2(dd,1)+"%",col:dd>5?K.r:K.gold,pct:dd}] as Array<{l:string,v:number|string,col:string,pct:number}>).map((r,i)=>(
+                <div key={i} style={{marginBottom:5}}>
+                  <div style={{display:"flex",justifyContent:"space-between",marginBottom:2,fontSize:8}}>
+                    <span style={{color:K.tx}}>{r.l}</span><span style={{color:r.col}}>{r.v}</span>
                   </div>
-                  <span style={{fontSize:8,color:ag.sig==="BUY"?K.g:ag.sig==="SELL"?K.r:K.dim}}>{ag.sig||"—"}</span>
+                  <div style={{height:3,background:"#050810",borderRadius:1}}>
+                    <div style={{height:"100%",borderRadius:1,background:r.col,width:Math.min(100,Math.max(0,r.pct))+"%",transition:"width .5s"}}/>
+                  </div>
                 </div>
               ))}
-              {/* Consensus bar */}
+            </div>
+            {/* Portfolio Health + Mission Progress */}
+            <div className="panel" style={{padding:"8px 10px"}}>
               {(()=>{
-                const buys=Object.values(agSt).filter(a=>a.sig==="BUY").length;
-                const sells=Object.values(agSt).filter(a=>a.sig==="SELL").length;
-                const total=Object.keys(agSt).length||1;
-                return(
-                  <div style={{marginTop:8}}>
-                    <div style={{fontSize:9,color:K.dim,marginBottom:3}}>CONSENSUS</div>
-                    <div style={{height:6,background:K.brd,borderRadius:3,overflow:"hidden",display:"flex"}}>
-                      <div style={{width:(buys/total*100)+"%",background:K.g,transition:"width .4s"}}/>
-                      <div style={{width:(sells/total*100)+"%",background:K.r,transition:"width .4s"}}/>
+                const pnl=port.equity-CAP;const pct=(pnl/CAP)*100;
+                const cl=trades.filter(t=>t.pnl!==0);
+                const wr=cl.length?cl.filter(t=>t.pnl>0).length/cl.length*100:0;
+                const nextM=MISSIONS.find(m=>!completedMissions.includes(m.id));
+                const pnlCol=pnl>=0?K.g:K.r;
+                const mp=nextM?Math.min(100,pct/(nextM.target*100)*100):100;
+                return(<>
+                  <div style={{fontSize:19,fontWeight:900,color:pnlCol,textShadow:`0 0 12px ${pnlCol}`,marginBottom:2,fontFamily:"monospace"}}>{pnl>=0?"+":""}{fU(pnl)}</div>
+                  <div style={{fontSize:8,color:"#2A5070",marginBottom:8}}>{fP(pct)} since start · WR {f2(wr,0)}% · {signalCount} signals</div>
+                  {nextM&&(<>
+                    <div style={{display:"flex",justifyContent:"space-between",fontSize:8,marginBottom:3}}>
+                      <span style={{color:nextM.color}}>{nextM.icon} {nextM.name}</span>
+                      <span style={{color:"#2A5070"}}>{mp.toFixed(0)}%</span>
                     </div>
-                    <div style={{display:"flex",justifyContent:"space-between",marginTop:2}}>
-                      <span style={{fontSize:8,color:K.g}}>B {buys}</span>
-                      <span style={{fontSize:8,color:K.r}}>S {sells}</span>
+                    <div style={{height:4,background:"#06090F",borderRadius:2,marginBottom:3}}>
+                      <div style={{height:"100%",borderRadius:2,background:nextM.color,width:mp+"%",transition:"width .5s",boxShadow:`0 0 8px ${nextM.color}`}}/>
+                    </div>
+                    <div style={{fontSize:7,color:"#2A5070",marginBottom:6}}>Target: +{(nextM.target*100).toFixed(0)}% (+{f2(CAP*nextM.target)} virtual)</div>
+                  </>)}
+                  {completedMissions.length>0&&(
+                    <div style={{display:"flex",gap:3,flexWrap:"wrap"}}>
+                      {completedMissions.map(id=>{const m=MISSIONS.find(x=>x.id===id)!;return(<div key={id} style={{padding:"1px 5px",fontSize:7,background:m.color+"15",color:m.color,border:`1px solid ${m.color}30`,borderRadius:2}}>{m.icon} {m.name}</div>);})}
+                    </div>
+                  )}
+                </>);
+              })()}
+            </div>
+            {/* Agent Activity Monitor */}
+            <div className="panel" style={{padding:"6px 9px"}}>
+              <div style={{fontSize:7,color:K.dim,letterSpacing:".12em",marginBottom:5}}>◉ AGENT ACTIVITY</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"2px 6px"}}>
+                {AGENTS.filter(a=>a.id!=="consensus").slice(0,12).map(a=>{
+                  const last=agentLastActiveRef.current[a.id]||0;
+                  const secAgo=last?(Date.now()-last)/1000:999;
+                  const status=secAgo<20?"ACTIVE":secAgo<60?"SCAN":"IDLE";
+                  const col=status==="ACTIVE"?K.g:status==="SCAN"?K.gold:K.dim;
+                  return(<div key={a.id} style={{display:"flex",justifyContent:"space-between",fontSize:7,padding:"1px 0"}}>
+                    <span style={{color:K.tx}}>{a.s}</span>
+                    <span style={{color:col,letterSpacing:".06em"}}>{status}</span>
+                  </div>);
+                })}
+              </div>
+              <div style={{marginTop:5,fontSize:7,color:"#2A5070"}}>⚡ {signalCount} signals analyzed</div>
+            </div>
+          </div>
+
+          {/* CENTER */}
+          <div style={{gridRow:"1/2",display:"flex",flexDirection:"column",gap:6,overflow:"hidden"}}>
+            <div className="panel" style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",position:"relative"}}>
+              {/* Neural grid background */}
+              <svg style={{position:"absolute",inset:0,width:"100%",height:"100%",opacity:.09,pointerEvents:"none"}} aria-hidden>
+                <defs>
+                  <pattern id="hexgrid" x="0" y="0" width="40" height="46" patternUnits="userSpaceOnUse">
+                    <polygon points="20,2 38,12 38,34 20,44 2,34 2,12" fill="none" stroke={K.c} strokeWidth="0.5"/>
+                  </pattern>
+                </defs>
+                <rect width="100%" height="100%" fill="url(#hexgrid)"/>
+              </svg>
+              {/* Radial depth gradient */}
+              <div style={{position:"absolute",inset:0,background:"radial-gradient(ellipse at center, #0A1628 0%, #04060D 65%, #030508 100%)",pointerEvents:"none"}}/>
+              {/* Scan lines */}
+              <div style={{position:"absolute",inset:0,background:"repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,242,254,0.012) 3px,rgba(0,242,254,0.012) 4px)",pointerEvents:"none"}}/>
+              {/* Header */}
+              <div style={{padding:"5px 12px 4px",borderBottom:"1px solid #060A14",display:"flex",justifyContent:"space-between",alignItems:"center",position:"relative",zIndex:1}}>
+                <div style={{fontSize:8,color:K.dim,letterSpacing:".12em"}}>◈ NEURAL SWARM — 18 COGNITIVE AGENTS</div>
+                <div style={{display:"flex",gap:8,fontSize:8}}>
+                  {([["BUY",K.g],["SELL",K.r],["ACTIVE",K.c]] as Array<[string,string]>).map(([l,c])=><span key={l} style={{color:c}}>● {l}</span>)}
+                </div>
+              </div>
+              <div style={{flex:1,display:"flex",justifyContent:"center",alignItems:"center",padding:4,position:"relative",zIndex:1,boxShadow:"inset 0 0 60px rgba(0,0,0,0.55)"}}>
+                <SwarmGraph st={agSt} debate={debate} disabled={disabled} swarmRef={swarmRef} flashingAgent={flashingAgent} highConviction={highConviction} convCol={convCol}/>
+                {/* Focus mode: Globe overlay in top-left */}
+                {focusMode&&<div style={{position:"absolute",top:8,left:8,zIndex:10,opacity:.85,borderRadius:4,overflow:"hidden",border:"1px solid "+K.c+"30"}}><Globe3D trades={trades} blackSwan={blackSwan} whaleAlert={whaleAlert} totalPnL={totalPnL} tradeCount={trades.length} agSt={agSt} running={running}/></div>}
+              </div>
+            </div>
+          </div>
+
+          {/* RIGHT */}
+          <div style={{gridRow:"1/3",display:"flex",flexDirection:"column",gap:6,overflow:"hidden"}}>
+            <div className="panel" style={{overflow:"hidden",display:"flex",flexDirection:"column",maxHeight:190}}>
+              <div style={{fontSize:11,color:K.dim,padding:"6px 10px 4px",borderBottom:"1px solid #060A14",letterSpacing:".12em"}}>◉ SIGNAL STREAM</div>
+              <div style={{overflow:"auto",flex:1}}>
+                {AGENTS.filter(a=>agSt[a.id]?.on&&!disabled.has(a.id)).slice(0,8).map(({id,s})=>{
+                  const ag=agSt[id]||{};
+                  const col=ag.sig==="BUY"?K.g:ag.sig==="SELL"?K.r:K.tx;
+                  const conf=ag.conf||0;
+                  const circ=2*Math.PI*10;
+                  return(
+                    <div key={id} className="fi" style={{padding:"5px 10px",borderBottom:"1px solid #040910",display:"flex",gap:7,alignItems:"center",borderLeft:"2px solid "+col+"40"}}>
+                      <svg width="24" height="24" style={{flexShrink:0}}>
+                        <circle cx="12" cy="12" r="10" fill="none" stroke={K.brd} strokeWidth="2"/>
+                        <circle cx="12" cy="12" r="10" fill="none" stroke={col} strokeWidth="2" strokeDasharray={`${conf/100*circ} ${circ}`} strokeLinecap="round" transform="rotate(-90 12 12)" opacity=".8"/>
+                        <text x="12" y="15" textAnchor="middle" fontSize="8" fontFamily="monospace" fill={col}>{conf}</text>
+                      </svg>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{display:"flex",gap:5,alignItems:"center",marginBottom:1}}>
+                          <span style={{padding:"1px 5px",background:col+"15",color:col,border:"1px solid "+col+"30",fontSize:11,borderRadius:1}}>{ag.sig==="BUY"?"▲":ag.sig==="SELL"?"▼":"◆"} {s}</span>
+                          {ag.real&&<span style={{padding:"1px 4px",background:K.g+"20",color:K.g,border:"1px solid "+K.g+"40",fontSize:6,borderRadius:1,letterSpacing:".06em"}}>LIVE</span>}
+                        </div>
+                        <div style={{fontSize:11,color:K.tx,lineHeight:1.3,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:150}}>{ag.th}</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="panel" style={{padding:9,flex:1,overflow:"auto"}}>
+              <div style={{fontSize:8,color:K.dim,marginBottom:6,letterSpacing:".12em"}}>◉ POSITIONS</div>
+              {Object.keys(port.pos).length===0
+                ?<div style={{textAlign:"center",color:"#0A1E30",padding:"12px 0",fontSize:9}}>No open positions</div>
+                :Object.entries(port.pos).map(([sym,pos])=>{
+                  const cur=prices[sym]?.price||pos.avg;
+                  const isShort=pos.side==="SHORT";
+                  const pnl=isShort?(pos.avg-cur)*pos.qty:(cur-pos.avg)*pos.qty;
+                  const pp=isShort?((pos.avg-cur)/pos.avg*100):((cur-pos.avg)/pos.avg*100);
+                  const posCol=isShort?K.r:K.c;
+                  return(
+                    <div key={sym} onClick={()=>{const tr=trades.find(t=>t.sym===sym&&(t.side==="BUY"||t.side==="SHORT"));setChartTrade({trade:tr||null,position:pos,agentSignals:tr?.agentSignals});}} style={{marginBottom:6,padding:7,background:(pnl>=0?K.g:K.r)+"08",borderRadius:2,border:"1px solid "+(pnl>=0?K.g:K.r)+"20",cursor:"pointer",transition:"border-color .2s"}} title="Click to view chart">
+                      <div style={{display:"flex",justifyContent:"space-between",marginBottom:2}}>
+                        <span style={{color:posCol,fontWeight:700,fontSize:10}}>{sym} {isShort?"▼ SHORT":"LONG"} {pos.trailActive&&<span style={{color:K.gold,fontSize:8}}> ◈TRAIL</span>}</span>
+                        <span style={{color:pnl>=0?K.g:K.r,fontSize:10}}>{fU(pnl)}</span>
+                      </div>
+                      <div style={{display:"flex",justifyContent:"space-between",fontSize:8,color:K.tx}}>
+                        <span>@${f2(pos.avg)}</span><span>${f2(cur)}</span><span style={{color:pnl>=0?K.g:K.r}}>{fP(pp)}</span>
+                      </div>
+                      <div style={{marginTop:3,height:2,background:"#050810",borderRadius:1}}>
+                        <div style={{height:"100%",borderRadius:1,background:pnl>=0?K.g:K.r,width:Math.min(100,Math.max(0,50+pp*8))+"%",transition:"width .5s"}}/>
+                      </div>
+                      <div style={{display:"flex",justifyContent:"space-between",marginTop:3,fontSize:7,color:K.dim,alignItems:"center"}}>
+                        <span>STOP:{fPrice(getStop(pos,cur))}</span><span>PEAK:{fPrice(pos.peak||pos.avg)}</span>
+                        <button onClick={e=>{e.stopPropagation();setConfirmClose(sym);}} style={{fontSize:7,padding:"1px 5px",background:K.r+"18",border:"1px solid "+K.r+"55",borderRadius:2,color:K.r,cursor:"pointer",fontFamily:"monospace"}}>✕ CLOSE</button>
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+            {(()=>{
+              const closed=trades.filter(t=>t.pnl!==0);
+              const last10=closed.slice(0,10);
+              const wins=last10.filter(t=>t.pnl>0);
+              const losses10=last10.filter(t=>t.pnl<0);
+              const wr10=last10.length?wins.length/last10.length*100:0;
+              const avgWin=wins.length?wins.reduce((s,t)=>s+t.pnl,0)/wins.length:0;
+              const avgLoss=losses10.length?Math.abs(losses10.reduce((s,t)=>s+t.pnl,0)/losses10.length):0;
+              const totalG=closed.filter(t=>t.pnl>0).reduce((s,t)=>s+t.pnl,0);
+              const totalL=Math.abs(closed.filter(t=>t.pnl<0).reduce((s,t)=>s+t.pnl,0));
+              const pf=totalL>0?totalG/totalL:totalG>0?9.99:0;
+              const edge=Math.min(100,Math.round(wr10*.45+(Math.min(pf,5)*8)+(last10.length>=5?15:last10.length*3)));
+              const edgeCol=edge>=70?K.g:edge>=45?K.gold:K.r;
+              return(
+                <div className="panel" style={{padding:9}}>
+                  <div style={{fontSize:8,color:K.dim,marginBottom:6,letterSpacing:".12em"}}>◉ ALGO PERFORMANCE</div>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",marginBottom:6}}>
+                    <div>
+                      <div style={{fontSize:6,color:K.dim,marginBottom:1}}>EDGE SCORE</div>
+                      <div style={{fontSize:20,fontWeight:900,color:edgeCol,textShadow:"0 0 10px "+edgeCol}}>{edge}</div>
+                    </div>
+                    <div style={{textAlign:"right"}}>
+                      <div style={{fontSize:6,color:K.dim}}>10-TRADE WIN RATE</div>
+                      <div style={{fontSize:14,fontWeight:700,color:wr10>=50?K.g:K.r}}>{f2(wr10,0)}%</div>
+                    </div>
+                  </div>
+                  <div style={{height:3,background:"#050810",borderRadius:1,marginBottom:6}}>
+                    <div style={{height:"100%",borderRadius:1,background:edgeCol,width:edge+"%",transition:"width .5s"}}/>
+                  </div>
+                  {([
+                    {l:"AVG WIN",v:avgWin>0?"+$"+f2(avgWin):"—",c:K.g},
+                    {l:"AVG LOSS",v:avgLoss>0?"-$"+f2(avgLoss):"—",c:K.r},
+                    {l:"PROFIT FACTOR",v:pf>0?f2(Math.min(pf,9.99))+"x":"—",c:pf>=2?K.g:pf>=1?K.gold:K.r},
+                    {l:"TRADES (10)",v:last10.length+"/10",c:K.tx},
+                  ] as Array<{l:string,v:string,c:string}>).map((r,i)=>(
+                    <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"2px 0",borderBottom:i<3?"1px solid #040910":"none",fontSize:8}}>
+                      <span style={{color:K.dim}}>{r.l}</span><span style={{color:r.c,fontWeight:600}}>{r.v}</span>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+            <div className="panel" style={{padding:9}}>
+              <div style={{fontSize:8,color:K.dim,marginBottom:5,letterSpacing:".12em"}}>◉ STATUS</div>
+              {(()=>{
+                const btcChg=prices["BTC"]?.change??0;
+                const macroStr=btcChg<=-TRADER_RULES.macroBtcThreshold?"BEARISH":btcChg>=TRADER_RULES.macroBtcThreshold?"BULLISH":"NEUTRAL";
+                const macroCol=btcChg<=-TRADER_RULES.macroBtcThreshold?K.r:btcChg>=TRADER_RULES.macroBtcThreshold?K.g:K.tx;
+                const peakStr=isPeakHour()?"NY/EU OPEN":"OFF-PEAK";
+                const peakCol=isPeakHour()?K.g:K.dim;
+                const lossStreakStr=traderConsecLosses===0?"CLEAN":traderConsecLosses+"x STREAK";
+                const lossStreakCol=traderConsecLosses>=3?K.r:traderConsecLosses>=2?K.gold:K.g;
+                const scaleModeStr=traderScaleMode?"ACTIVE":"INIT 7%";
+                const scaleModeCol=traderScaleMode?K.c:K.tx;
+                return([
+                  {l:"Execution",v:circuit?"LOCKED":traderIsPaused?"PAUSED":"ACTIVE",c:circuit?K.r:traderIsPaused?K.gold:K.g},
+                  {l:"SL/TP",v:"Tiered Trail",c:K.tx},
+                  {l:"Agents",v:(AGENTS.length-disabled.size)+"/18",c:disabled.size>0?K.gold:K.g},
+                  {l:"Positions",v:Object.keys(port.pos).length+"/"+getMaxPositions(port.equity||port.cash),c:K.tx},
+                  {l:"Entropy",v:Math.round(entropy)+"/100",c:entropyCol},
+                  {l:"PEAK HOURS",v:peakStr,c:peakCol},
+                  {l:"MACRO TREND",v:"BTC "+macroStr,c:macroCol},
+                  {l:"LOSS STREAK",v:lossStreakStr,c:lossStreakCol},
+                  {l:"SCALE MODE",v:scaleModeStr,c:scaleModeCol},
+                ] as Array<{l:string,v:string,c:string}>).map((r,i)=>(
+                  <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"2px 0",borderBottom:i<8?"1px solid #040910":"none",fontSize:10}}>
+                    <span style={{color:i>=5?K.dim+"CC":K.dim,fontSize:i>=5?8:10}}>{r.l}</span>
+                    <span style={{color:r.c,fontWeight:600,fontSize:i>=5?9:13}}>{r.v}</span>
+                  </div>
+                ));
+              })()}
+            </div>
+          </div>
+
+          {/* BOTTOM CENTER — Decision Zone + Log, always visible */}
+          <div style={{gridColumn:"2/3",overflow:"hidden",display:"flex",flexDirection:"column",gap:4}}>
+            {/* Decision Zone */}
+            <div style={{flexShrink:0}}>
+              <DecisionZone agSt={agSt} running={running} onExecute={(sym,side)=>{const syms=Object.keys(port.pos).length<5?["SOL","JUP","WIF","BTC","ETH"]:[];const target=syms[0]||"SOL";forceTrade(target,side,"CONSENSUS",70);log("EXEC","⚡ Manual execute: "+side+" "+target,side==="BUY"?K.g:K.r);}}/>
+            </div>
+            {/* Compact Claude AI bar (if available) */}
+            {aiData&&(
+              <div className="panel" style={{flexShrink:0,padding:"5px 12px",borderColor:rc+"30",background:"linear-gradient(135deg,"+K.pan+" 0%,"+rc+"08 100%)",display:"flex",alignItems:"center",gap:10}}>
+                <span style={{fontSize:8,color:rc,letterSpacing:".1em",flexShrink:0}}>◈ CLAUDE</span>
+                {(aiData.consensus as {signal?:string,symbol?:string,confidence?:number})?.signal&&(
+                  <span style={{padding:"1px 7px",background:((aiData.consensus as {signal?:string}).signal==="BUY"?K.g:K.r)+"20",color:(aiData.consensus as {signal?:string}).signal==="BUY"?K.g:K.r,border:"1px solid "+((aiData.consensus as {signal?:string}).signal==="BUY"?K.g:K.r)+"40",fontSize:9,borderRadius:1,flexShrink:0}}>{String((aiData.consensus as {signal?:string}).signal||"")} {String((aiData.consensus as {symbol?:string}).symbol||"")} {String((aiData.consensus as {confidence?:number}).confidence||0)}%</span>
+                )}
+                <span style={{fontSize:8,color:K.tx,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{String(aiData.marketSummary||"").slice(0,120)}</span>
+                <button className="btn" onClick={()=>setModal("debate")} style={{background:K.c+"10",color:K.c,border:"1px solid "+K.c+"30",fontSize:7,padding:"2px 8px",flexShrink:0}}>THEATER</button>
+              </div>
+            )}
+            {/* Log — fills remaining space, always visible */}
+            <div className="panel" style={{flex:1,overflow:"hidden",display:"flex",flexDirection:"column",minHeight:0}}>
+              <div style={{padding:"3px 10px",borderBottom:"1px solid #060A14",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
+                <div style={{display:"flex",alignItems:"center",gap:6}}>
+                  {running&&<div style={{width:4,height:4,borderRadius:"50%",background:K.c,animation:"pu 1s infinite"}}/>}
+                  <div style={{fontSize:8,color:K.dim,letterSpacing:".12em"}}>◉ LIVE REASONING</div>
+                </div>
+                <button className="btn" onClick={()=>setLogs([{t:ts(),ag:"SYS",msg:"Log cleared",col:K.tx}])} style={{background:"#040810",color:K.dim,border:"1px solid "+K.brd,padding:"2px 8px",fontSize:8}}>CLR</button>
+              </div>
+              <div ref={logRef} style={{flex:1,overflowY:"auto",padding:"2px 0",scrollBehavior:"smooth"}}>
+                {logs.map((e,i)=>(
+                  <div key={i} className="log-entry" style={{display:"flex",gap:7,padding:"2px 10px",borderBottom:"1px solid #030810"}}>
+                    <span style={{color:K.dim,minWidth:46,fontSize:11,whiteSpace:"nowrap"}}>{e.t}</span>
+                    <span style={{color:"#0D1E30",minWidth:52,fontSize:11,fontWeight:600}}>[{e.ag}]</span>
+                    <span style={{color:e.col,fontSize:11}}>{e.msg}</span>
+                  </div>
+                ))}
+                {analyzing&&<div style={{display:"flex",gap:7,padding:"2px 10px"}}>
+                  <span style={{color:K.dim,minWidth:46,fontSize:11}}>{ts()}</span>
+                  <span style={{color:"#0D1E30",minWidth:52,fontSize:11}}>[CLAUDE]</span>
+                  <span style={{color:K.c,fontSize:11,animation:"pu 1s infinite"}}>⟳ Debate running...</span>
+                </div>}
+              </div>
+            </div>
+          </div>
+        </div>
+        );
+      })()}
+
+      {tab==="trades"&&(()=>{
+        const now2=Date.now();
+        const periodMs2:Record<string,number>={"1H":36e5,"3H":108e5,"24H":864e5,"7D":6048e5,"ALL":Infinity};
+        const cutoff2=periodMs2[histFilter];
+        const allClosed=trades.filter(t=>t.pnl!==0);
+        const filtered2=allClosed.filter(t=>!t.ms||now2-t.ms<cutoff2);
+        const sorted2=histSort==="pnl"?[...filtered2].sort((a,b)=>b.pnl-a.pnl):[...filtered2];
+        const periodPnL2=filtered2.reduce((s,t)=>s+t.pnl,0);
+        const wins2=filtered2.filter(t=>t.pnl>0);
+        const wr2=filtered2.length?wins2.length/filtered2.length*100:0;
+        return(
+          <div style={{flex:1,padding:10,overflow:"auto",display:"flex",flexDirection:"column",gap:8}}>
+            {/* Toolbar */}
+            <div className="panel" style={{padding:"8px 12px",display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+              <div style={{display:"flex",gap:4}}>
+                {(["1H","3H","24H","7D","ALL"] as const).map(f=>(
+                  <button key={f} onClick={()=>setHistFilter(f)} className="btn" style={{padding:"3px 9px",background:histFilter===f?K.c+"20":"#040810",color:histFilter===f?K.c:K.dim,border:"1px solid "+(histFilter===f?K.c+"50":K.brd)}}>{f}</button>
+                ))}
+              </div>
+              <div style={{display:"flex",gap:4}}>
+                {(["time","pnl"] as const).map(s=>(
+                  <button key={s} onClick={()=>setHistSort(s)} className="btn" style={{padding:"3px 9px",background:histSort===s?K.gold+"15":"#040810",color:histSort===s?K.gold:K.dim,border:"1px solid "+(histSort===s?K.gold+"40":K.brd)}}>SORT: {s.toUpperCase()}</button>
+                ))}
+              </div>
+              <div style={{marginLeft:"auto",display:"flex",gap:16,fontSize:10}}>
+                <div style={{textAlign:"right"}}><div style={{fontSize:7,color:K.dim}}>P&L</div><div style={{color:periodPnL2>=0?K.g:K.r,fontWeight:700}}>{periodPnL2>=0?"+":""}${f2(Math.abs(periodPnL2))}</div></div>
+                <div style={{textAlign:"right"}}><div style={{fontSize:7,color:K.dim}}>WIN RATE</div><div style={{color:wr2>=50?K.g:K.r,fontWeight:700}}>{f2(wr2,0)}%</div></div>
+                <div style={{textAlign:"right"}}><div style={{fontSize:7,color:K.dim}}>TRADES</div><div style={{color:K.c,fontWeight:700}}>{filtered2.length}</div></div>
+              </div>
+            </div>
+            {/* Table */}
+            <div className="panel" style={{overflow:"auto",flex:1}}>
+              {sorted2.length===0
+                ?<div style={{padding:50,textAlign:"center",color:"#0A1E30",fontSize:10}}>No closed trades in this period. Activate swarm.</div>
+                :<table style={{width:"100%",borderCollapse:"collapse"}}>
+                  <thead><tr style={{fontSize:8,color:K.dim,borderBottom:"1px solid #060A14",position:"sticky",top:0,background:K.pan}}>
+                    {["TIME","ASSET","SIDE","PRICE","P&L","AGENT","REASON"].map(h=><th key={h} style={{padding:"6px 10px",textAlign:"left",fontWeight:400,letterSpacing:".06em"}}>{h}</th>)}
+                  </tr></thead>
+                  <tbody>
+                    {sorted2.map(t=>{
+                      const sv=SYMS[t.sym],win=t.pnl>0,col=win?K.g:K.r;
+                      return(
+                        <tr key={t.id} className="tr" onClick={()=>setChartTrade({trade:t,position:null,agentSignals:t.agentSignals})} style={{borderBottom:"1px solid #040910",borderLeft:"2px solid "+(win?K.g+"40":K.r+"40"),cursor:"pointer"}}>
+                          <td style={{padding:"5px 10px",color:"#102030",fontSize:9,whiteSpace:"nowrap"}}>{t.t}</td>
+                          <td style={{padding:"5px 10px"}}><span style={{color:sv?.col,marginRight:4}}>{sv?.icon}</span><span style={{color:K.c,fontWeight:700,fontSize:10}}>{t.sym}</span></td>
+                          <td style={{padding:"5px 10px"}}><span style={{padding:"1px 5px",background:col+"12",color:col,border:"1px solid "+col+"30",fontSize:8,borderRadius:1}}>{win?"▲ WIN":"▼ LOSS"}</span></td>
+                          <td style={{padding:"5px 10px",color:K.hi,fontSize:9}}>{fPrice(t.price)}</td>
+                          <td style={{padding:"5px 10px",color:col,fontWeight:700,fontSize:10}}>{win?"+":"-"}${f2(Math.abs(t.pnl))}</td>
+                          <td style={{padding:"5px 10px",color:K.dim,fontSize:9}}>{t.agent||"ALGO"}</td>
+                          <td style={{padding:"5px 10px",color:K.tx,fontSize:9}}>{t.reason||"—"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>}
+            </div>
+          </div>
+        );
+      })()}
+
+      {tab==="scanner"&&(
+        <div style={{flex:1,padding:10,overflow:"auto",display:"flex",flexDirection:"column",gap:8}}>
+          <div className="panel" style={{padding:"8px 12px",display:"flex",alignItems:"center",gap:10}}>
+            <span style={{fontSize:9,color:K.c,letterSpacing:".1em"}}>⊕ NEW TOKEN SCANNER</span>
+            <span style={{fontSize:8,color:K.dim}}>DexScreener · Solana · auto-refresh 60s</span>
+            <button className="btn" onClick={scanNewTokens} disabled={scannerLoading} style={{marginLeft:"auto",padding:"2px 10px",background:K.c+"10",color:K.c,border:"1px solid "+K.c+"30"}}>{scannerLoading?"⟳ SCANNING...":"↻ REFRESH"}</button>
+          </div>
+          {newTokens.length===0
+            ?<div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",color:K.dim,fontSize:11}}>{scannerLoading?"Scanning DexScreener...":"No tokens loaded yet"}</div>
+            :<div className="panel" style={{overflow:"auto",flex:1}}>
+              <table style={{width:"100%",borderCollapse:"collapse"}}>
+                <thead><tr style={{fontSize:8,color:K.dim,borderBottom:"1px solid #060A14",position:"sticky",top:0,background:K.pan}}>
+                  {["TOKEN","PRICE","1H%","VOL 24H","LIQUIDITY","BUY/SELL","RUG SCORE"].map(h=><th key={h} style={{padding:"6px 10px",textAlign:"left",fontWeight:400,letterSpacing:".06em"}}>{h}</th>)}
+                </tr></thead>
+                <tbody>
+                  {newTokens.map((t,i)=>{
+                    const rs=t.rugScore;
+                    const rCol=rs<30?K.g:rs<60?K.gold:K.r;
+                    const chCol=t.change1h>=0?K.g:K.r;
+                    return(
+                      <tr key={i} className="tr" style={{borderBottom:"1px solid #040910",borderLeft:"2px solid "+rCol+"30"}}>
+                        <td style={{padding:"5px 10px",color:K.c,fontWeight:700,fontSize:10}}>{t.name}</td>
+                        <td style={{padding:"5px 10px",color:K.hi,fontSize:9}}>${parseFloat(t.price||"0").toPrecision(4)}</td>
+                        <td style={{padding:"5px 10px",color:chCol,fontSize:9,fontWeight:700}}>{t.change1h>=0?"+":""}{t.change1h.toFixed(1)}%</td>
+                        <td style={{padding:"5px 10px",color:K.tx,fontSize:9}}>${t.volume24h>=1e6?(t.volume24h/1e6).toFixed(1)+"M":t.volume24h>=1e3?(t.volume24h/1e3).toFixed(0)+"K":t.volume24h.toFixed(0)}</td>
+                        <td style={{padding:"5px 10px",color:K.tx,fontSize:9}}>${t.liquidity>=1e6?(t.liquidity/1e6).toFixed(1)+"M":t.liquidity>=1e3?(t.liquidity/1e3).toFixed(0)+"K":t.liquidity.toFixed(0)}</td>
+                        <td style={{padding:"5px 10px",fontSize:9}}>
+                          <span style={{color:K.g}}>{t.buys}▲</span><span style={{color:K.dim}}>/</span><span style={{color:K.r}}>{t.sells}▼</span>
+                        </td>
+                        <td style={{padding:"5px 10px"}}>
+                          <div style={{display:"flex",alignItems:"center",gap:5}}>
+                            <div style={{width:36,height:4,background:"#040910",borderRadius:2}}>
+                              <div style={{width:rs+"%",height:"100%",background:rCol,borderRadius:2}}/>
+                            </div>
+                            <span style={{fontSize:9,color:rCol,fontWeight:700}}>{rs}</span>
+                            <span style={{fontSize:7,color:rCol}}>{rs<30?"SAFE":rs<60?"WARN":"RISK"}</span>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>}
+        </div>
+      )}
+
+      {tab==="crisis"&&(
+        <div style={{flex:1,padding:10,display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,overflow:"auto"}}>
+          {[
+            {e:"FTX COLLAPSE",d:"Nov 2022",drop:"-32%",dur:"48h",sol:"-61%",out:"SURVIVED",conf:88,col:K.g,desc:"$32B empire collapses overnight. Whale tracker detected outflows 4h before impact."},
+            {e:"LUNA DEPEG",d:"May 2022",drop:"-98%",dur:"72h",sol:"-44%",out:"CIRCUIT BREAK",conf:71,col:K.gold,desc:"$40B wiped in 72h. Circuit breaker triggered at -3.2% portfolio exposure."},
+            {e:"BTC FLASH CRASH",d:"May 2021",drop:"-30%",dur:"4h",sol:"-52%",out:"SURVIVED",conf:82,col:K.g,desc:"China mining ban triggers cascade. Shadow Sim flagged 68% crash probability."},
+            {e:"3AC COLLAPSE",d:"Jun 2022",drop:"-41%",dur:"96h",sol:"-38%",out:"SURVIVED",conf:79,col:K.g,desc:"$10B fund liquidation. Whale tracker reduced exposure 40min before cascade."},
+            {e:"BINANCE PANIC",d:"Nov 2022",drop:"-18%",dur:"12h",sol:"-22%",out:"CLEAN EXIT",conf:91,col:K.c,desc:"Anti-manipulation engine detected coordinated sell wall. Clean exit secured."},
+            {e:"BLACK SWAN X",d:"SIMULATED",drop:"-55%",dur:"6h",sol:"-71%",out:"PARTIAL LOSS",conf:54,col:K.r,desc:"Hypothetical: exchange hack + ban + whale dump simultaneously. 54% survival."},
+          ].map((s,i)=>(
+            <div key={i} className="panel" style={{padding:14,borderColor:s.col+"30",cursor:"pointer",transition:"border-color .2s"}} onMouseEnter={e=>(e.currentTarget as HTMLDivElement).style.borderColor=s.col} onMouseLeave={e=>(e.currentTarget as HTMLDivElement).style.borderColor=s.col+"30"}>
+              <div style={{fontSize:11,color:s.col,letterSpacing:".1em",marginBottom:2,fontWeight:900}}>{s.e}</div>
+              <div style={{fontSize:9,color:K.dim,marginBottom:6}}>{s.d}</div>
+              <p style={{fontSize:9,color:K.tx,lineHeight:1.5,marginBottom:9,fontStyle:"italic"}}>{s.desc}</p>
+              {([{l:"Drop",v:s.drop,c:K.r},{l:"Duration",v:s.dur,c:K.tx},{l:"SOL",v:s.sol,c:K.r},{l:"KYMIA",v:s.out,c:s.col}] as Array<{l:string,v:string,c:string}>).map((r,j)=>(
+                <div key={j} style={{display:"flex",justifyContent:"space-between",padding:"2px 0",borderBottom:"1px solid #040910",fontSize:10}}>
+                  <span style={{color:K.dim}}>{r.l}</span><span style={{color:r.c,fontWeight:600}}>{r.v}</span>
+                </div>
+              ))}
+              <div style={{marginTop:8}}>
+                <div style={{display:"flex",justifyContent:"space-between",fontSize:9,marginBottom:2}}>
+                  <span style={{color:K.tx}}>Survival</span><span style={{color:s.col}}>{s.conf}%</span>
+                </div>
+                <div style={{height:3,background:"#040910",borderRadius:2}}>
+                  <div style={{height:"100%",borderRadius:2,background:s.col,width:s.conf+"%"}}/>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {tab==="dna"&&(
+        <div style={{flex:1,padding:10,display:"flex",alignItems:"center",justifyContent:"center"}}>
+          <div style={{maxWidth:480,width:"100%"}}>
+            {!dnaData?(
+              <div style={{textAlign:"center",padding:40}}>
+                <div style={{fontSize:32,marginBottom:16}}>🧬</div>
+                <div style={{color:K.hi,marginBottom:8,fontSize:14,letterSpacing:".1em"}}>SWARM DNA ANALYSIS</div>
+                <div style={{color:K.tx,fontSize:11,marginBottom:20,lineHeight:1.6}}>After trading, generate your performance DNA card — AI-powered analysis of your trading personality.</div>
+                <button className="btn" onClick={runDNA} disabled={dnaLoading||trades.length<3} style={{background:K.pu+"20",color:K.pu,border:"1px solid "+K.pu+"50",padding:"10px 24px",fontSize:11}}>{dnaLoading?"⟳ ANALYZING...":trades.length<3?"NEED 3+ TRADES":"🧬 GENERATE MY DNA"}</button>
+              </div>
+            ):(
+              <div className="panel" style={{padding:24,borderColor:K.pu+"40",background:"linear-gradient(135deg,"+K.pan+" 0%,"+K.pu+"10 100%)"}}>
+                <div style={{fontSize:13,color:K.pu,letterSpacing:".2em",fontWeight:900,marginBottom:4}}>◈ KYMIA PERFORMANCE DNA</div>
+                <div style={{marginBottom:12}}>
+                  <span style={{padding:"3px 10px",background:K.gold+"20",color:K.gold,border:"1px solid "+K.gold+"40",fontSize:11,borderRadius:2,fontWeight:700}}>{String(dnaData.tier||"GOLD")} TIER · {String(dnaData.score||74)}/100</span>
+                </div>
+                <div style={{fontSize:18,color:K.hi,fontWeight:900,marginBottom:8,letterSpacing:".05em"}}>&quot;{String(dnaData.traderTitle||"")}&quot;</div>
+                <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:12}}>
+                  {((dnaData.tradingDNA as string[])||[]).map((t,i)=>(
+                    <span key={i} style={{padding:"2px 9px",background:K.c+"15",color:K.c,border:"1px solid "+K.c+"30",fontSize:9,borderRadius:1}}>{t}</span>
+                  ))}
+                </div>
+                <div style={{marginBottom:8}}>
+                  <div style={{fontSize:9,color:K.dim,marginBottom:4}}>STRENGTHS</div>
+                  {((dnaData.strengths as string[])||[]).map((s,i)=><div key={i} style={{color:K.g,fontSize:10,marginBottom:2}}>✓ {s}</div>)}
+                </div>
+                <div style={{marginBottom:12}}>
+                  <div style={{fontSize:9,color:K.dim,marginBottom:4}}>WEAKNESS</div>
+                  <div style={{color:K.r,fontSize:10}}>⚠ {String(dnaData.weakness||"")}</div>
+                </div>
+                <div style={{padding:"10px 14px",background:K.pu+"12",border:"1px solid "+K.pu+"30",borderRadius:2,marginBottom:14}}>
+                  <div style={{fontSize:9,color:K.pu,marginBottom:3,letterSpacing:".1em"}}>KYMIA VERDICT</div>
+                  <p style={{fontSize:11,color:K.hi,lineHeight:1.5,fontStyle:"italic"}}>&quot;{String(dnaData.aiVerdict||"")}&quot;</p>
+                </div>
+                <button className="btn" onClick={()=>{const txt=`My KYMIA DNA: ${dnaData.traderTitle} | ${dnaData.tier} | Score:${dnaData.score}/100 | "${dnaData.aiVerdict}"`;navigator.clipboard?.writeText(txt);}} style={{background:K.pu+"20",color:K.pu,border:"1px solid "+K.pu+"50",padding:"8px 20px",fontSize:10,width:"100%"}}>[ SHARE YOUR DNA ]</button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {tab==="onchain"&&<OnChainTab/>}
+
+      {/* Performance Card Modal */}
+      {modal==="share"&&<PerformanceCard trades={trades} totalPnL={totalPnL} onClose={()=>setModal(null)}/>}
+
+      {/* Trade Chart Modal */}
+      {missionCelebration&&<MissionComplete mission={missionCelebration} onDismiss={()=>setMissionCelebration(null)}/>}
+
+      {chartTrade&&<TradeModal
+        trade={chartTrade.trade}
+        position={chartTrade.position}
+        agentSignals={chartTrade.agentSignals}
+        onClose={()=>setChartTrade(null)}
+        onClosePosition={chartTrade.position?()=>{
+          const sym=chartTrade.trade?.sym||"";
+          setChartTrade(null);
+          setConfirmClose(sym);
+        }:undefined}
+      />}
+
+      {/* Confirm Close Modal */}
+      {confirmClose&&<ConfirmCloseModal sym={confirmClose} onCancel={()=>setConfirmClose(null)} onConfirm={()=>{
+        const sym=confirmClose;
+        setConfirmClose(null);
+        const pos=portRef.current.pos[sym];
+        const cur=pricesRef.current[sym]?.price||pos?.avg||0;
+        if(!pos||!cur)return;
+        const pnl=(cur-pos.avg)*pos.qty;
+        const pct=((cur-pos.avg)/pos.avg)*100;
+        setPort(prev=>{const p2={...prev.pos};delete p2[sym];return{...prev,cash:prev.cash+pos.qty*cur,pos:p2};});
+        addWinCard(sym,pnl,pct,cur,"MANUAL","Manually closed by user");
+        log("EXEC","◀ MANUAL CLOSE "+sym+" @ "+fPrice(cur)+" PnL:"+fU(pnl),pnl>=0?K.g:K.r);
+      }}/>}
+
+      {/* Win Cards */}
+      <div style={{position:"fixed",bottom:60,right:16,zIndex:200,display:"flex",flexDirection:"column",gap:8,pointerEvents:"none"}}>
+        {winCards.map(card=><WinCardEl key={card.id} card={card} onDone={()=>setWinCards(p=>p.filter(c=>c.id!==card.id))}/>)}
+      </div>
+
+      {/* Edge Toasts */}
+      <div style={{position:"fixed",top:90,right:16,zIndex:200,display:"flex",flexDirection:"column",gap:0,pointerEvents:"none"}}>
+        {edgeToasts.map(t=><EdgeToastEl key={t.id} toast={t} onDone={()=>setEdgeToasts(p=>p.filter(c=>c.id!==t.id))}/>)}
+      </div>
+
+      {/* Debate Theater Modal */}
+      {modal==="debate"&&aiData&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(2,4,10,.94)",zIndex:500,display:"flex",alignItems:"center",justifyContent:"center",backdropFilter:"blur(6px)"}} onClick={()=>setModal(null)}>
+          <div style={{background:"#040810",border:"1px solid "+K.brd,borderRadius:4,padding:"22px 26px",width:640,maxHeight:"80vh",overflow:"auto"}} onClick={e=>e.stopPropagation()}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+              <div style={{fontSize:13,color:K.c,letterSpacing:".2em",fontWeight:900}}>◈ SWARM DEBATE THEATER</div>
+              <button onClick={()=>setModal(null)} style={{background:"none",border:"none",color:K.tx,cursor:"pointer",fontSize:16}}>✕</button>
+            </div>
+            <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:14}}>
+              {((aiData.debate as Array<{agent:string,thesis:string,signal:string,conf:number}>)||[]).map((d,i)=>{
+                const col=d.signal==="BUY"?K.g:d.signal==="SELL"?K.r:K.tx;
+                return(
+                  <div key={i} style={{display:"flex",gap:10,flexDirection:i%2===0?"row":"row-reverse",animation:"fi .4s ease forwards",opacity:0,animationDelay:(i*.15)+"s"}}>
+                    <div style={{width:48,height:48,borderRadius:3,background:col+"14",border:"1.5px solid "+col+"40",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                      <div style={{fontSize:8,color:col,fontWeight:700}}>{String(d.agent||"").toUpperCase().slice(0,6)}</div>
+                      <div style={{fontSize:8,color:K.dim}}>{d.conf}%</div>
+                    </div>
+                    <div style={{flex:1,background:"#060C16",border:"1px solid "+col+"22",borderRadius:3,padding:"8px 12px"}}>
+                      <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
+                        <span style={{fontSize:9,color:K.dim}}>{String(d.agent||"").toUpperCase()}</span>
+                        <span style={{padding:"1px 6px",background:col+"20",color:col,fontSize:8,borderRadius:1}}>{d.signal} {d.conf}%</span>
+                      </div>
+                      <p style={{fontSize:11,color:K.hi,lineHeight:1.5}}>{d.thesis}</p>
                     </div>
                   </div>
                 );
-              })()}
+              })}
             </div>
-          ):(
-            <div style={{display:"flex",flexDirection:"column",gap:3}}>
-              <div style={{fontSize:9,color:K.dim,letterSpacing:1,marginBottom:4}}>TRADE HISTORY</div>
-              {trades.slice(-20).reverse().map((t,i)=>(
-                <div key={i} style={{display:"flex",flexDirection:"column",padding:"4px 0",borderBottom:"1px solid "+K.brd+"22"}}>
-                  <div style={{display:"flex",justifyContent:"space-between"}}>
-                    <span style={{fontSize:8,color:K.hi}}>{t.sym.replace("USDT","").replace("USD","")}</span>
-                    <span style={{fontSize:8,color:t.pnl>=0?K.g:K.r}}>{t.pnl>=0?"+":""}{f2(t.pnl)}</span>
-                  </div>
-                  <div style={{display:"flex",justifyContent:"space-between",marginTop:1}}>
-                    <span style={{fontSize:7,color:K.dim}}>{t.agent||"—"}</span>
-                    <span style={{fontSize:7,color:K.dim}}>{t.side||"—"}</span>
-                  </div>
-                </div>
-              ))}
-              {trades.length===0&&<div style={{fontSize:9,color:K.dim,textAlign:"center",paddingTop:20}}>No trades yet</div>}
-            </div>
-          )}
-        </div>
-        {/* Fee tracker */}
-        <div style={{borderTop:"1px solid "+K.brd,padding:"6px 8px"}}>
-          <div style={{fontSize:9,color:K.dim,marginBottom:3}}>FEES</div>
-          <div style={{display:"flex",justifyContent:"space-between"}}>
-            <span style={{fontSize:8,color:K.dim}}>Total</span>
-            <span style={{fontSize:8,color:K.r}}>-${f2(trades.length*0.25)}</span>
-          </div>
-        </div>
-        {/* Algo performance */}
-        <div style={{borderTop:"1px solid "+K.brd,padding:"6px 8px"}}>
-          <div style={{fontSize:9,color:K.dim,marginBottom:3}}>ALGO PERF</div>
-
-          <div style={{display:"flex",justifyContent:"space-between",marginTop:2}}>
-            <span style={{fontSize:8,color:K.dim}}>Max DD</span>
-            <span style={{fontSize:8,color:K.r}}>-{swarmConfig?.maxDrawdown||20}%</span>
-          </div>
-        </div>
-      </div>
-
-      {/* ══ ROW 3: POSITIONS + LOG PANEL ══ */}
-      <div style={{gridColumn:'1/-1',gridRow:3,height:'220px',overflow:'hidden',borderTop:"1px solid "+K.brd,display:'flex',flexDirection:'column',background:'#010407',position:'relative'}}>
-        {/* Positions bar */}
-        <div style={{flexShrink:0,display:'flex',alignItems:'center',gap:8,padding:'0 12px',height:44,overflowX:'auto',borderBottom:'1px solid '+K.brd+'44',background:'#020508'}}>
-          <span style={{fontSize:9,color:K.dim,letterSpacing:1,whiteSpace:'nowrap',minWidth:'fit-content'}}>POSITIONS</span>
-          {Object.entries(port.pos).length===0?(
-            <span style={{fontSize:9,color:K.dim+'66',fontStyle:'italic'}}>No open positions</span>
-          ):(
-            Object.entries(port.pos).map(([sym,pos])=>{
-              const pd=prices[sym]||null;
-              const cur=(pd as PriceData)?.price||pos.avg;
-              const pnlPct=pos.avg>0?(cur-pos.avg)/pos.avg*100*(pos.side==='SHORT'?-1:1):0;
-              const pnlUsd=pnlPct/100*pos.qty*pos.avg;
+            {(aiData.consensus as {signal?:string})?.signal&&(()=>{
+              const cs=aiData.consensus as {signal:string,symbol:string,confidence:number,rationale:string,tp:number,sl:number};
+              const col=cs.signal==="BUY"?K.g:K.r;
               return(
-                <div key={sym} onClick={()=>{setSelectedTrade({sym:sym.replace('USDT','').replace('USD',''),pos,price:cur,side:pos.side||'LONG'});setChartOpen(true);}} style={{minWidth:110,background:pnlUsd>=0?K.g+'0a':K.r+'0a',border:'1px solid '+(pnlUsd>=0?K.g+'44':K.r+'44'),borderRadius:3,padding:'4px 8px',cursor:'pointer',flexShrink:0,animation:pnlUsd>=0?'profitPulse 2s ease-in-out infinite':undefined}}>
-                  <div style={{display:'flex',justifyContent:'space-between',marginBottom:1}}>
-                    <span style={{fontSize:8,fontWeight:700,color:K.hi}}>{sym.replace('USDT','').replace('USD','')}</span>
-                    <span style={{fontSize:7,color:pos.side==='SHORT'?K.r:K.g}}>{pos.side||'LONG'}</span>
+                <div style={{background:col+"0E",border:"1.5px solid "+col+"40",borderRadius:3,padding:"13px 17px"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                    <span style={{fontSize:12,color:col,fontWeight:900}}>⟹ CONSENSUS</span>
+                    <span style={{fontSize:15,fontWeight:700,color:col}}>{cs.signal} {cs.symbol} · {cs.confidence}%</span>
                   </div>
-                  <div style={{fontSize:8,fontWeight:600,color:pnlUsd>=0?K.g:K.r}}>{pnlUsd>=0?'+':''}{f2(pnlUsd)}</div>
+                  <p style={{fontSize:11,color:K.tx,lineHeight:1.55,marginBottom:6}}>{cs.rationale}</p>
+                  <div style={{display:"flex",gap:16,fontSize:10}}>
+                    <span style={{color:K.g}}>TP: ${f2(cs.tp)}</span>
+                    <span style={{color:K.r}}>SL: ${f2(cs.sl)}</span>
+                  </div>
                 </div>
               );
-            })
-          )}
-          <div style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:10,paddingLeft:8,borderLeft:'1px solid '+K.brd,flexShrink:0}}>
-            <div style={{textAlign:'right'}}>
-              <div style={{fontSize:7,color:K.dim}}>P&L</div>
-              <div style={{fontSize:10,color:totalPnL>=0?K.g:K.r}}>{totalPnL>=0?'+':''}{f2(totalPnL)}</div>
-            </div>
-            <div style={{textAlign:'right'}}>
-              <div style={{fontSize:7,color:K.dim}}>CASH</div>
-              <div style={{fontSize:10,color:K.hi}}>${f2(port.cash)}</div>
-            </div>
+            })()}
           </div>
         </div>
-        {/* Log area */}
-        <div style={{flex:1,overflowY:'auto',padding:'4px 12px',display:'flex',flexDirection:'column',gap:1}} ref={logRef}>
-          {logs.slice(-80).map((l,i)=>(
-            <div key={i} style={{display:'flex',gap:8,alignItems:'baseline',padding:'2px 4px',borderLeft:`2px solid ${l.col||K.hi}44`,marginBottom:1,borderRadius:'0 2px 2px 0'}}>
-              <span style={{fontSize:9,color:K.dim,whiteSpace:'nowrap',minWidth:48,flexShrink:0}}>{l.t}</span>
-              <span style={{fontSize:10,color:l.col||K.hi,fontWeight:700,flexShrink:0}}>[{l.ag}]</span>
-              <span style={{fontSize:11,color:K.hi+'cc',lineHeight:1.3}}>{l.msg}</span>
+      )}
+
+      {/* DNA Modal */}
+      {modal==="dna"&&dnaData&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(2,4,10,.94)",zIndex:500,display:"flex",alignItems:"center",justifyContent:"center",backdropFilter:"blur(6px)"}} onClick={()=>setModal(null)}>
+          <div style={{background:"#040810",border:"1px solid "+K.pu+"50",borderRadius:4,padding:"24px 28px",width:440}} onClick={e=>e.stopPropagation()}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+              <div style={{fontSize:13,color:K.pu,letterSpacing:".2em",fontWeight:900}}>◈ KYMIA PERFORMANCE DNA</div>
+              <button onClick={()=>setModal(null)} style={{background:"none",border:"none",color:K.tx,cursor:"pointer",fontSize:16}}>✕</button>
             </div>
-          ))}
+            <div style={{marginBottom:10}}><span style={{padding:"3px 10px",background:K.gold+"20",color:K.gold,border:"1px solid "+K.gold+"40",fontSize:11,borderRadius:2,fontWeight:700}}>{String(dnaData.tier)} TIER · {String(dnaData.score)}/100</span></div>
+            <div style={{fontSize:17,color:K.hi,fontWeight:900,marginBottom:8}}>&quot;{String(dnaData.traderTitle)}&quot;</div>
+            <div style={{display:"flex",gap:5,flexWrap:"wrap",marginBottom:10}}>{((dnaData.tradingDNA as string[])||[]).map((t,i)=><span key={i} style={{padding:"2px 8px",background:K.c+"15",color:K.c,border:"1px solid "+K.c+"30",fontSize:8,borderRadius:1}}>{t}</span>)}</div>
+            <div style={{marginBottom:8}}><div style={{fontSize:8,color:K.dim,marginBottom:3}}>STRENGTHS</div>{((dnaData.strengths as string[])||[]).map((s,i)=><div key={i} style={{color:K.g,fontSize:10,marginBottom:1}}>✓ {s}</div>)}</div>
+            <div style={{marginBottom:10}}><div style={{fontSize:8,color:K.dim,marginBottom:3}}>WEAKNESS</div><div style={{color:K.r,fontSize:10}}>⚠ {String(dnaData.weakness)}</div></div>
+            <div style={{padding:"10px 13px",background:K.pu+"10",border:"1px solid "+K.pu+"30",borderRadius:2,marginBottom:14}}>
+              <p style={{fontSize:11,color:K.hi,lineHeight:1.5,fontStyle:"italic"}}>&quot;{String(dnaData.aiVerdict)}&quot;</p>
+            </div>
+            <button className="btn" onClick={()=>setModal(null)} style={{width:"100%",background:K.pu+"15",color:K.pu,border:"1px solid "+K.pu+"40",padding:"9px 0",fontSize:10}}>[ CLOSE ]</button>
+          </div>
         </div>
+      )}
+
+      {/* Beat the AI Modal */}
+      {modal==="beat"&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(2,4,10,.94)",zIndex:500,display:"flex",alignItems:"center",justifyContent:"center",backdropFilter:"blur(6px)"}} onClick={()=>setModal(null)}>
+          <div style={{background:"#040810",border:"1px solid "+K.gold+"50",borderRadius:4,padding:"24px 28px",width:440}} onClick={e=>e.stopPropagation()}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+              <div style={{fontSize:13,color:K.gold,letterSpacing:".2em",fontWeight:900}}>🎮 BEAT THE AI</div>
+              <button onClick={()=>setModal(null)} style={{background:"none",border:"none",color:K.tx,cursor:"pointer",fontSize:16}}>✕</button>
+            </div>
+            <p style={{fontSize:10,color:K.tx,marginBottom:14,lineHeight:1.5}}>Pick an asset + direction. Race KYMIA over 30 seconds. Whoever calls the next move correctly wins.</p>
+            <div style={{fontSize:8,color:K.dim,marginBottom:6,letterSpacing:".1em"}}>SELECT ASSET</div>
+            <div style={{display:"flex",gap:6,marginBottom:14,flexWrap:"wrap"}}>
+              {Object.entries(SYMS).map(([sym,sv])=>(
+                <button key={sym} className="btn" onClick={()=>setBeatChoice(prev=>prev?{...prev,sym}:{sym,side:"LONG"})} style={{background:beatChoice?.sym===sym?sv.col+"20":K.pan,color:beatChoice?.sym===sym?sv.col:K.tx,border:"1px solid "+(beatChoice?.sym===sym?sv.col+"60":K.brd),padding:"5px 12px"}}>
+                  {sv.icon} {sym}
+                </button>
+              ))}
+            </div>
+            {beatChoice?.sym&&(
+              <>
+                <div style={{fontSize:8,color:K.dim,marginBottom:6,letterSpacing:".1em"}}>YOUR DIRECTION</div>
+                <div style={{display:"flex",gap:6,marginBottom:14}}>
+                  {(["LONG","SHORT"] as const).map(side=>(
+                    <button key={side} className="btn" onClick={()=>setBeatChoice(prev=>prev?{...prev,side}:null)} style={{flex:1,background:beatChoice?.side===side?(side==="LONG"?K.g:K.r)+"20":K.pan,color:beatChoice?.side===side?(side==="LONG"?K.g:K.r):K.tx,border:"1px solid "+(beatChoice?.side===side?(side==="LONG"?K.g:K.r)+"50":K.brd),padding:"8px 0",fontSize:11}}>
+                      {side==="LONG"?"▲ LONG":"▼ SHORT"}
+                    </button>
+                  ))}
+                </div>
+                {beatResult
+                  ?<div style={{padding:"14px",textAlign:"center",fontSize:16,fontWeight:900,color:beatResult.includes("WIN")&&!beatResult.includes("KYMIA")?K.g:K.r,background:(beatResult.includes("WIN")&&!beatResult.includes("KYMIA")?K.g:K.r)+"10",border:"1px solid "+(beatResult.includes("WIN")&&!beatResult.includes("KYMIA")?K.g:K.r)+"40",borderRadius:3}}>{beatResult}</div>
+                  :<button className="btn" onClick={()=>{beatStart(beatChoice.sym,beatChoice.side);}} style={{width:"100%",background:K.gold+"15",color:K.gold,border:"1px solid "+K.gold+"40",padding:"10px 0",fontSize:11,letterSpacing:".1em"}}>⚡ START 30s RACE</button>
+                }
+                <div style={{marginTop:8,fontSize:8,color:K.dim,textAlign:"center"}}>2,842 observers online · KYMIA win rate: 67%</div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      <div style={{background:"#020608",borderTop:"1px solid #050A12",padding:"3px 16px",display:"flex",justifyContent:"space-between",fontSize:8,color:"#081525",letterSpacing:".1em",paddingBottom:31}}>
+        {isLive
+          ?<span>◈ KYMIA v2.0 — <span style={{color:K.r+"80"}}>LIVE MODE</span> · REAL FUNDS · NON-CUSTODIAL · YOU KEEP YOUR KEYS</span>
+          :<span>◈ KYMIA v2.0 — PAPER TRADING · $10,000 SANDBOX CAPITAL · NO REAL FUNDS AT RISK</span>
+        }
+        <span>Claude Sonnet · 18 Agents · {walletAddress?walletAddress.slice(0,8)+"...":"DEMO"}</span>
       </div>
 
-      {/* ══ OVERLAYS ══ */}
-      {showOnboarding&&<OnboardingWizard onComplete={handleOnboardingComplete} isLive={isLive}/>}
-      {viralCard&&<ViralCardModal sym={viralCard.sym} pnl={viralCard.pnl} pct={viralCard.pct} onClose={()=>setViralCard(null)}/>}
-      {memeAlert&&<MemeConfirmModal token={memeAlert} onConfirm={()=>setMemeAlert(null)} onReject={()=>setMemeAlert(null)}/>}
-      {missionCelebration&&<MissionComplete mission={missionCelebration} onDismiss={()=>setMissionCelebration(null)}/>}
-      {confirmClose&&<ConfirmCloseModal sym={confirmClose} onConfirm={()=>{setPort(p=>{const np={...p};delete np.pos[confirmClose];return{...np,equity:np.cash+Object.values(np.pos).reduce((s,v)=>(s+v.qty*(prices[confirmClose]?.price||v.avg)),0)};});setConfirmClose(null);}} onCancel={()=>setConfirmClose(null)}/>}
-      {chartTrade&&<TradeModal trade={chartTrade.trade} position={chartTrade.position} agentSignals={chartTrade.agentSignals} onClose={()=>setChartTrade(null)}/>}
-      {winCards.map((w)=><WinCardEl key={w.id} card={w} onDone={()=>setWinCards(c=>c.filter(x=>x.id!==w.id))}/>)}
-      {edgeToasts.map((t)=><EdgeToastEl key={t.id} toast={t} onDone={()=>setEdgeToasts(c=>c.filter(x=>x.id!==t.id))}/>)}
+      <TimeScrubber sessionStart={sessionStartRef.current} trades={trades}/>
     </div>
   );
 }
