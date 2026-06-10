@@ -2104,67 +2104,6 @@ const PLAN_LIMITS={
 } as const;
 type PlanKey=keyof typeof PLAN_LIMITS;
 
-// ── MiniSwarm: small agent graph shown in right panel when chart is open ──────
-const MiniSwarm = ({agSt, act, dis, sig}: {agSt:Record<string,any>, act:string[], dis:Set<string>, sig?:string}) => {
-  const CX = 90, CY = 70;
-  const MINI_AGENTS = [
-    {id:'cnsns', x:CX, y:CY},
-    {id:'lens',  x:CX-55, y:CY-35},
-    {id:'radar', x:CX-20, y:CY-55},
-    {id:'surge', x:CX+20, y:CY-55},
-    {id:'atlas', x:CX+55, y:CY-35},
-    {id:'echo',  x:CX+65, y:CY+10},
-    {id:'levia', x:CX+40, y:CY+50},
-    {id:'razor', x:CX-40, y:CY+50},
-    {id:'aegis', x:CX-65, y:CY+10},
-  ];
-  return (
-    <div style={{padding:'6px',borderBottom:'1px solid #0A1D33',background:'#040810'}}>
-      <div style={{fontSize:8,color:'#2A5070',letterSpacing:'.2em',padding:'0 4px',marginBottom:4}}>◈ SWARM ACTIVE</div>
-      <svg width="180" height="140" style={{display:'block',margin:'0 auto'}}>
-        <defs>
-          <filter id="msg2">
-            <feGaussianBlur stdDeviation="2" result="b"/>
-            <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
-          </filter>
-        </defs>
-        {MINI_AGENTS.filter(a=>a.id!=='cnsns').map(a=>{
-          const agId=a.id==='levia'?'leviathan':a.id;
-          const isOn=act.includes(agId)&&!dis.has(agId);
-          const ag=agSt[agId];
-          const col=ag?.sig==='BUY'?'#00FF88':ag?.sig==='SELL'?'#FF3366':'#00F2FE';
-          return isOn?(
-            <line key={a.id} x1={a.x} y1={a.y} x2={CX} y2={CY} stroke={col} strokeWidth="1" opacity="0.4" filter="url(#msg2)"/>
-          ):(
-            <line key={a.id} x1={a.x} y1={a.y} x2={CX} y2={CY} stroke="#0A1D33" strokeWidth="0.5" opacity="0.3"/>
-          );
-        })}
-        {MINI_AGENTS.map(a=>{
-          const agId=a.id==='levia'?'leviathan':a.id==='cnsns'?'consensus':a.id;
-          const isCenter=a.id==='cnsns';
-          const isOn=isCenter||(act.includes(agId)&&!dis.has(agId));
-          const ag=agSt[agId];
-          const col=isCenter?'#00F2FE':ag?.sig==='BUY'?'#00FF88':ag?.sig==='SELL'?'#FF3366':'#00F2FE';
-          const r=isCenter?14:10;
-          return (
-            <g key={a.id} filter={isOn?'url(#msg2)':undefined} opacity={isOn?1:0.3}>
-              <circle cx={a.x} cy={a.y} r={r} fill="#050A14" stroke={col} strokeWidth={isOn?1.5:0.5}/>
-              <circle cx={a.x-3} cy={a.y-2} r={isOn?2:1.5} fill={col} opacity={isOn?0.9:0.4}/>
-              <circle cx={a.x+3} cy={a.y-2} r={isOn?2:1.5} fill={col} opacity={isOn?0.9:0.4}/>
-              {isOn&&ag?.sig&&ag.sig!=='HOLD'&&(
-                <circle cx={a.x} cy={a.y-r-3} r={2.5} fill={col} opacity={0.9}/>
-              )}
-              <text x={a.x} y={a.y+r+8} textAnchor="middle" fontSize="6" fill={col} fontFamily="monospace" opacity={isOn?1:0.4}>
-                {a.id.slice(0,4).toUpperCase()}
-              </text>
-            </g>
-          );
-        })}
-        <circle cx={CX} cy={CY} r={18} fill="none" stroke="#00F2FE" strokeWidth="0.5" opacity="0.2" strokeDasharray="3 5"/>
-      </svg>
-    </div>
-  );
-};
 
 const LeftGlobe = () => (
   <div style={{width:220,height:220,position:'relative',flexShrink:0,overflow:'hidden'}}>
@@ -2224,373 +2163,78 @@ const LeftGlobe = () => (
   </div>
 );
 
-// ── MiniSwarmGraph skull helpers ────────────────────────────────────────────
-const getSkullFace = (x: number, y: number, size: number, col: string, active: boolean) => (
-  <g>
-    <ellipse cx={x} cy={y-size*0.05} rx={size*0.55} ry={size*0.62} fill="#050A14" stroke={col} strokeWidth={active?1.4:0.6} opacity={active?1:0.35}/>
-    <polygon points={`${x-size*0.25},${y-size*0.1} ${x-size*0.12},${y-size*0.28} ${x},${y-size*0.1} ${x-size*0.12},${y+size*0.08}`} fill={active?col+'30':'transparent'} stroke={col} strokeWidth={active?1:0.5} opacity={active?1:0.3}/>
-    <circle cx={x-size*0.12} cy={y-size*0.1} r={size*0.1} fill={col} opacity={active?0.95:0.3}/>
-    <polygon points={`${x},${y-size*0.1} ${x+size*0.12},${y-size*0.28} ${x+size*0.25},${y-size*0.1} ${x+size*0.12},${y+size*0.08}`} fill={active?col+'30':'transparent'} stroke={col} strokeWidth={active?1:0.5} opacity={active?1:0.3}/>
-    <circle cx={x+size*0.12} cy={y-size*0.1} r={size*0.1} fill={col} opacity={active?0.95:0.3}/>
-    <polygon points={`${x},${y+size*0.12} ${x-size*0.09},${y+size*0.32} ${x+size*0.09},${y+size*0.32}`} fill="none" stroke={col} strokeWidth={0.7} opacity={active?0.6:0.2}/>
-    <line x1={x-size*0.45} y1={y+size*0.2} x2={x} y2={y+size*0.55} stroke={col} strokeWidth={0.8} opacity={active?0.65:0.2}/>
-    <line x1={x+size*0.45} y1={y+size*0.2} x2={x} y2={y+size*0.55} stroke={col} strokeWidth={0.8} opacity={active?0.65:0.2}/>
-  </g>
-);
 
-const getSwarmArcPath = (p1: {x:number,y:number}, p2: {x:number,y:number}) => {
-  const mx=(p1.x+p2.x)/2, my=(p1.y+p2.y)/2;
-  const dx=p2.x-p1.x, dy=p2.y-p1.y;
-  const len=Math.sqrt(dx*dx+dy*dy)||1;
-  const off=Math.max(10,len*0.25);
-  return `M${p1.x},${p1.y} Q${mx-(dy/len)*off},${my+(dx/len)*off} ${p2.x},${p2.y}`;
+const AUTO_TV_SYMBOLS: Record<string,string> = {
+  SOL:'BINANCE:SOLUSDT', BTC:'BINANCE:BTCUSDT', ETH:'BINANCE:ETHUSDT',
+  JUP:'BINANCE:JUPUSDT', WIF:'BINANCE:WIFUSDT', BONK:'BINANCE:BONKUSDT',
+  JTO:'BINANCE:JTOUSDT', PYTH:'BINANCE:PYTHUSDT', RAY:'BINANCE:RAYUSDT',
+  ORCA:'BINANCE:ORCAUSDT',
 };
 
-function MiniSwarmGraph({agSt, act, dis}: {agSt:Record<string,any>, act:string[], dis:Set<string>}) {
-  const W=300, H=200, CX=W/2, CY=H/2;
-  const nodes = [
-    {id:'cnsns', x:CX,    y:CY,    size:22},
-    {id:'aegis', x:CX,    y:CY-65, size:15},
-    {id:'oracle',x:CX+55, y:CY-42, size:15},
-    {id:'lens',  x:CX+68, y:CY+18, size:15},
-    {id:'radar', x:CX+42, y:CY+58, size:15},
-    {id:'titan', x:CX-42, y:CY+58, size:15},
-    {id:'echo',  x:CX-68, y:CY+18, size:15},
-    {id:'levia', x:CX-55, y:CY-42, size:15},
-    {id:'surge', x:CX,    y:CY-90, size:12},
-    {id:'atlas', x:CX+80, y:CY-65, size:12},
-    {id:'hydra', x:CX+95, y:CY+10, size:12},
-    {id:'razor', x:CX+60, y:CY+78, size:12},
-    {id:'vector',x:CX-60, y:CY+78, size:12},
-    {id:'shield',x:CX-95, y:CY+10, size:12},
-    {id:'delta', x:CX-80, y:CY-65, size:12},
-  ];
-  const center = nodes[0];
-  return (
-    <svg width="100%" height="100%" viewBox={`0 0 ${W} ${H}`} style={{display:'block'}}>
-      <defs>
-        <radialGradient id="swarmAura" cx="50%" cy="50%" r="50%">
-          <stop offset="0%" stopColor="#00F2FE" stopOpacity="0.15"/>
-          <stop offset="100%" stopColor="#00F2FE" stopOpacity="0"/>
-        </radialGradient>
-        <filter id="swarmGlow"><feGaussianBlur stdDeviation="2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
-      </defs>
-      {/* Center aura */}
-      <ellipse cx={CX} cy={CY} rx={30} ry={30} fill="url(#swarmAura)"/>
-      {/* Orbital rings */}
-      <ellipse cx={CX} cy={CY} rx={65} ry={65} fill="none" stroke="#00F2FE" strokeWidth="0.4" opacity="0.15" strokeDasharray="3 6"/>
-      <ellipse cx={CX} cy={CY} rx={90} ry={90} fill="none" stroke="#00F2FE" strokeWidth="0.3" opacity="0.1" strokeDasharray="2 8"/>
-      {/* Arcs from each node to center */}
-      {nodes.filter(n=>n.id!=='cnsns').map(n=>{
-        const agId = n.id==='levia'?'leviathan':n.id;
-        const isActive = act.includes(agId) && !dis.has(agId);
-        const ag = agSt[agId];
-        const col = ag?.sig==='BUY'?'#00FF88':ag?.sig==='SELL'?'#FF3366':'#00F2FE';
-        const arcPath = getSwarmArcPath({x:n.x,y:n.y},{x:center.x,y:center.y});
-        const arcId = `sarc-${n.id}`;
-        if (!isActive) return (
-          <path key={n.id} d={arcPath} fill="none" stroke="#0A1D33" strokeWidth="0.8" strokeDasharray="3 5" opacity="0.5"/>
-        );
-        return (
-          <g key={n.id}>
-            <path id={arcId} d={arcPath} fill="none" stroke={col} strokeWidth="1.5" opacity="0.7" filter="url(#swarmGlow)"/>
-            <path d={arcPath} fill="none" stroke={col} strokeWidth="5" opacity="0.08"/>
-            <circle r="2.5" fill="white" opacity="0.9" filter="url(#swarmGlow)">
-              <animateMotion dur="0.9s" repeatCount="indefinite">
-                <mpath href={`#${arcId}`}/>
-              </animateMotion>
-            </circle>
-          </g>
-        );
-      })}
-      {/* Skull nodes */}
-      {nodes.map(n=>{
-        const agId = n.id==='levia'?'leviathan':n.id==='cnsns'?'consensus':n.id;
-        const isCenter = n.id==='cnsns';
-        const isActive = isCenter || (act.includes(agId) && !dis.has(agId));
-        const ag = agSt[agId];
-        const col = isCenter?'#00F2FE':ag?.sig==='BUY'?'#00FF88':ag?.sig==='SELL'?'#FF3366':'#00F2FE';
-        return (
-          <g key={n.id} filter={isActive?'url(#swarmGlow)':undefined} opacity={isActive?1:0.25}>
-            {getSkullFace(n.x, n.y, n.size, col, isActive)}
-            <text x={n.x} y={n.y+n.size*0.75+8} textAnchor="middle" fontSize="5.5" fill={col} fontFamily="monospace" opacity={isActive?1:0.5}>
-              {n.id.slice(0,5).toUpperCase()}
-            </text>
-            {isActive && ag?.sig && ag.sig!=='HOLD' && (
-              <circle cx={n.x} cy={n.y-n.size*0.7} r="2.5" fill={col} opacity="0.9"/>
-            )}
-          </g>
-        );
-      })}
-    </svg>
-  );
-}
+const AutoChartView = ({sym, trade, pos}: {sym:string, trade:any, pos:any}) => {
+  const ref = useRef<HTMLDivElement>(null);
+  const entryPrice = trade?.price || pos?.avg || 0;
+  const sl = entryPrice ? entryPrice * 0.975 : 0;
+  const tp = entryPrice ? entryPrice * 1.055 : 0;
+  const tvSym = AUTO_TV_SYMBOLS[sym] || `BINANCE:${sym}USDT`;
 
-function MiniGlobePanel({px, port: _port, sig}: {px: Record<string,any>, port: any, sig?: string}) {
-  const [rot, setRot] = useState(0);
-  const [arcs, setArcs] = useState<Array<{id:string,from:{x:number,y:number},to:{x:number,y:number},col:string}>>([]);
-  const [labels, setLabels] = useState<Array<{id:string,x:number,y:number,val:string,col:string,born:number}>>([]);
-
-  useEffect(()=>{
-    const iv = setInterval(()=>setRot(r=>r+0.8), 60);
-    return ()=>clearInterval(iv);
-  },[]);
-
-  useEffect(()=>{
-    const iv = setInterval(()=>{
-      const cols = ['#00FF88','#FF3366','#00F2FE','#FFD700'];
-      const col = cols[Math.floor(Math.random()*cols.length)];
-      const isPos = col===cols[0]||col===cols[2];
-      const val = (isPos?'+':'-')+'$'+Math.floor(Math.random()*200+10);
-      setLabels(l=>[...l.slice(-4),{id:Math.random().toString(36).slice(2),x:40+Math.random()*220,y:20+Math.random()*80,val,col,born:Date.now()}]);
-      const cities = [{x:60,y:35},{x:80,y:42},{x:145,y:38},{x:138,y:55},{x:108,y:45},{x:140,y:45}];
-      const a = cities[Math.floor(Math.random()*cities.length)];
-      const b = cities[Math.floor(Math.random()*cities.length)];
-      if(a!==b) setArcs(ar=>[...ar.slice(-5),{id:Math.random().toString(36).slice(2),from:a,to:b,col}]);
-    },2000);
-    return ()=>clearInterval(iv);
-  },[]);
-
-  useEffect(()=>{
-    const iv = setInterval(()=>{const now=Date.now();setLabels(l=>l.filter(lb=>now-lb.born<3000));},200);
-    return ()=>clearInterval(iv);
-  },[]);
-
-  const W=300, H=140, CX=150, CY=65, R=55;
-  const cities = [
-    {lt:40.7,ln:280,c:'#00F2FE',name:'NYC'},
-    {lt:51.5,ln:0,  c:'#00F2FE',name:'LON'},
-    {lt:35.7,ln:140,c:'#FFD700',name:'TYO'},
-    {lt:1.35,ln:104,c:'#00FF88',name:'SGP'},
-    {lt:25.2,ln:55, c:'#FFD700',name:'DXB'},
-    {lt:22.3,ln:114,c:'#FFD700',name:'HKG'},
-  ];
-  const project = (lt:number,ln:number)=>{
-    const phi=(90-lt)*Math.PI/180;
-    const th=((ln+rot)%360)*Math.PI/180;
-    const x=CX+R*Math.sin(phi)*Math.cos(th);
-    const y=CY-R*Math.cos(phi);
-    const vis=Math.sin(phi)*Math.sin(th);
-    return {x,y,vis};
-  };
-
-  const solP = px['SOL']?.price;
-  const btcP = px['BTC']?.price;
-  const ethP = px['ETH']?.price;
+  useEffect(() => {
+    if (!ref.current) return;
+    ref.current.innerHTML = '';
+    const script = document.createElement('script');
+    script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
+    script.async = true;
+    script.textContent = JSON.stringify({
+      autosize: true, symbol: tvSym, interval: '5',
+      timezone: 'Etc/UTC', theme: 'dark', style: '1', locale: 'en',
+      backgroundColor: 'rgba(4,6,13,1)', gridColor: 'rgba(10,29,51,0.4)',
+      hide_top_toolbar: false, withdateranges: false, save_image: false,
+      studies: ['RSI@tv-basicstudies','MAExp@tv-basicstudies','MACD@tv-basicstudies','Volume@tv-basicstudies'],
+      overrides: {
+        "paneProperties.background": "#04060D", "paneProperties.backgroundType": "solid",
+        "paneProperties.vertGridProperties.color": "#081422", "paneProperties.horzGridProperties.color": "#081422",
+        "scalesProperties.textColor": "#4A7090", "scalesProperties.lineColor": "#0A1D33",
+        "scalesProperties.backgroundColor": "#04060D",
+        "mainSeriesProperties.candleStyle.upColor": "#00FF88", "mainSeriesProperties.candleStyle.downColor": "#FF3366",
+        "mainSeriesProperties.candleStyle.borderUpColor": "#00FF88", "mainSeriesProperties.candleStyle.borderDownColor": "#FF3366",
+        "mainSeriesProperties.candleStyle.wickUpColor": "#00FF8850", "mainSeriesProperties.candleStyle.wickDownColor": "#FF336650",
+      },
+      studies_overrides: {
+        "relative strength index.plot.color": "#BD00FF", "relative strength index.plot.linewidth": 2,
+        "MACD.macd.color": "#00F2FE", "MACD.signal.color": "#FFD700",
+        "moving average exponential.Plot.color": "#00F2FE", "moving average exponential.Plot.linewidth": 2,
+      },
+      disabled_features: ["use_localstorage_for_settings","header_symbol_search","header_compare"],
+    });
+    ref.current.appendChild(script);
+    return () => { if (ref.current) ref.current.innerHTML = ''; };
+  }, [tvSym]);
 
   return (
-    <div style={{display:'flex',flexDirection:'column',height:'100%'}}>
-      <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} style={{display:'block',flexShrink:0}}>
-        <defs>
-          <radialGradient id="mgGlobe" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stopColor="#051020" stopOpacity="1"/>
-            <stop offset="100%" stopColor="#04060D" stopOpacity="1"/>
-          </radialGradient>
-          <filter id="mgGlow"><feGaussianBlur stdDeviation="1.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
-          <clipPath id="mgClip"><circle cx={CX} cy={CY} r={R}/></clipPath>
-        </defs>
-        <circle cx={CX} cy={CY} r={R} fill="url(#mgGlobe)" stroke="#00F2FE" strokeWidth="0.4" opacity="0.6"/>
-        {/* Latitude lines */}
-        {[-45,-20,0,20,45].map(lat=>{
-          const ry=R*Math.cos(lat*Math.PI/180);
-          const y=CY-R*Math.sin(lat*Math.PI/180);
-          return <ellipse key={lat} cx={CX} cy={y} rx={ry} ry={ry*0.15} fill="none" stroke="#00F2FE" strokeWidth="0.25" opacity="0.18" clipPath="url(#mgClip)"/>;
-        })}
-        {/* Longitude lines */}
-        {[0,40,80,120,160].map(lon=>{
-          const rx=R*Math.sin(((lon+rot)%180)*Math.PI/180);
-          return <ellipse key={lon} cx={CX} cy={CY} rx={Math.abs(rx)} ry={R} fill="none" stroke="#00F2FE" strokeWidth="0.2" opacity="0.12" clipPath="url(#mgClip)"/>;
-        })}
-        {/* Trade arcs */}
-        {arcs.map(a=>{
-          const arcId=`mgarc-${a.id}`;
-          const mx=(a.from.x+a.to.x)/2, my=Math.min(a.from.y,a.to.y)-15;
-          const d=`M${a.from.x},${a.from.y} Q${mx},${my} ${a.to.x},${a.to.y}`;
-          return (
-            <g key={a.id}>
-              <path id={arcId} d={d} fill="none" stroke={a.col} strokeWidth="0.7" opacity="0.4" strokeDasharray="3 4"/>
-              <circle r="2" fill={a.col} opacity="0.85">
-                <animateMotion dur="1.8s" repeatCount="1"><mpath href={`#${arcId}`}/></animateMotion>
-              </circle>
-            </g>
-          );
-        })}
-        {/* City dots */}
-        {cities.map(c=>{
-          const pt=project(c.lt,c.ln);
-          if(pt.vis<-0.2) return null;
-          const op=Math.max(0.3,0.5+pt.vis*0.5);
-          return (
-            <g key={c.name} filter="url(#mgGlow)" opacity={op}>
-              <circle cx={pt.x} cy={pt.y} r="2.5" fill={c.c} opacity="0.9"/>
-              <circle cx={pt.x} cy={pt.y} r="5" fill="none" stroke={c.c} strokeWidth="0.4" opacity="0.35"/>
-            </g>
-          );
-        })}
-        {/* AI eye at center */}
-        <circle cx={CX} cy={CY} r="6" fill="#04060D" stroke="#00F2FE" strokeWidth="0.8" opacity="0.8"/>
-        <circle cx={CX} cy={CY} r="3" fill="#00F2FE" opacity="0.6"/>
-        <circle cx={CX} cy={CY} r="1.2" fill="#fff" opacity="0.9"/>
-        {/* Floating $ labels */}
-        {labels.map(lb=>(
-          <text key={lb.id} x={lb.x} y={lb.y} fontSize="7" fill={lb.col} fontFamily="monospace" opacity="0.8" style={{animation:'moneyFloat 3s ease-out forwards'}}>{lb.val}</text>
-        ))}
-        {/* Signal direction */}
-        {sig && sig!=='HOLD' && (
-          <text x={CX} y={CY+R+14} textAnchor="middle" fontSize="7.5" fill={sig==='BUY'?'#00FF88':'#FF3366'} fontFamily="monospace" fontWeight="700">◈ {sig} SIGNAL</text>
-        )}
-      </svg>
-      {/* Price strip */}
-      <div style={{display:'flex',justifyContent:'space-around',padding:'4px 8px',borderTop:'1px solid #0A1D33',background:'rgba(4,6,13,0.9)',flexShrink:0}}>
-        {([['SOL',solP,'#00F2FE'],['BTC',btcP,'#FFD700'],['ETH',ethP,'#627EEA']] as [string,number|undefined,string][]).map(([sym,p,col])=>(
-          <div key={sym} style={{textAlign:'center'}}>
-            <div style={{fontSize:6,color:'#2A5070'}}>{sym}</div>
-            <div style={{fontSize:8,color:col,fontWeight:700,fontFamily:'monospace'}}>{p?fPrice(p):'—'}</div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-const ALL_AGENTS_LIST = [
-  {id:'levia',  name:'LEVIA',   specialty:'Whale'},
-  {id:'lens',   name:'LENS',    specialty:'RSI'},
-  {id:'surge',  name:'SURGE',   specialty:'Volume'},
-  {id:'atlas',  name:'ATLAS',   specialty:'Macro'},
-  {id:'echo',   name:'ECHO',    specialty:'Fear'},
-  {id:'radar',  name:'RADAR',   specialty:'EMA'},
-  {id:'shield', name:'SHIELD',  specialty:'OB'},
-  {id:'oracle', name:'ORACLE',  specialty:'Flow'},
-  {id:'phantom',name:'PHNTM',   specialty:'Fut'},
-  {id:'titan',  name:'TITAN',   specialty:'Regime'},
-  {id:'hydra',  name:'HYDRA',   specialty:'Liq'},
-  {id:'delta',  name:'DELTA',   specialty:'Arb'},
-  {id:'razor',  name:'RAZOR',   specialty:'MACD'},
-  {id:'vector', name:'VECTR',   specialty:'ADX'},
-  {id:'neural', name:'NEURAL',  specialty:'AI'},
-  {id:'watch',  name:'WATCH',   specialty:'Health'},
-  {id:'cnsns',  name:'CNSNS',   specialty:'Vote'},
-  {id:'aegis',  name:'AEGIS',   specialty:'Risk'},
-];
-
-const AllAgentsPanel = ({agSt, act, dis}: {agSt:Record<string,any>, act:string[], dis:Set<string>}) => (
-  <div style={{borderRight:'1px solid #0A1D33',overflow:'hidden',display:'flex',flexDirection:'column'}}>
-    <div style={{padding:'4px 10px',borderBottom:'1px solid #0A1D33',fontSize:8,color:'#2A5070',letterSpacing:'.2em',flexShrink:0,display:'flex',justifyContent:'space-between'}}>
-      <span>◈ 18 COGNITIVE AGENTS</span>
-      <span style={{color:'#00FF88'}}>{act.length} ACTIVE</span>
-    </div>
-    <div style={{display:'grid',gridTemplateColumns:'repeat(6,1fr)',gap:2,padding:6,flex:1,overflow:'hidden',alignContent:'start'}}>
-      {ALL_AGENTS_LIST.map(ag=>{
-        const agId=ag.id==='levia'?'leviathan':ag.id==='cnsns'?'consensus':ag.id;
-        const state=agSt[agId];
-        const isActive=act.includes(agId)&&!dis.has(agId);
-        const sig=state?.sig||'HOLD';
-        const conf=state?.conf||0;
-        const col=ag.id==='cnsns'?'#00F2FE':sig==='BUY'?'#00FF88':sig==='SELL'?'#FF3366':'#2A5070';
-        return (
-          <div key={ag.id} style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:'3px 2px',background:isActive?`${col}10`:'rgba(6,10,18,0.6)',border:`1px solid ${isActive?col+'30':'#0A1D33'}`,borderRadius:4,opacity:isActive?1:0.4,transition:'all .3s'}}>
-            <svg width="22" height="22" viewBox="0 0 24 24">
-              <ellipse cx="12" cy="10" rx="7" ry="8" fill="#050A14" stroke={col} strokeWidth={isActive?1.2:0.5}/>
-              <polygon points="6,9 8,6 10,9 8,12" fill={isActive?col+'40':'transparent'} stroke={col} strokeWidth="0.8"/>
-              <polygon points="14,9 16,6 18,9 16,12" fill={isActive?col+'40':'transparent'} stroke={col} strokeWidth="0.8"/>
-              <circle cx="8" cy="9" r="1.5" fill={col} opacity={isActive?0.9:0.3}/>
-              <circle cx="16" cy="9" r="1.5" fill={col} opacity={isActive?0.9:0.3}/>
-              <line x1="6" y1="16" x2="12" y2="20" stroke={col} strokeWidth="0.7" opacity={isActive?0.6:0.2}/>
-              <line x1="18" y1="16" x2="12" y2="20" stroke={col} strokeWidth="0.7" opacity={isActive?0.6:0.2}/>
-            </svg>
-            <div style={{fontSize:6,color:isActive?col:'#1A3050',fontFamily:'monospace',fontWeight:700,textAlign:'center',lineHeight:1.2,marginTop:1}}>{ag.name}</div>
-            {isActive&&sig!=='HOLD'&&(
-              <div style={{fontSize:5.5,color:col,fontFamily:'monospace',fontWeight:700,marginTop:1,padding:'0 2px',background:col+'15',borderRadius:2}}>{sig}</div>
-            )}
-            {isActive&&conf>0&&(
-              <div style={{width:'85%',height:2,background:'#06090F',borderRadius:1,marginTop:2}}>
-                <div style={{width:`${conf}%`,height:'100%',background:col,borderRadius:1}}/>
-              </div>
-            )}
-          </div>
-        );
-      })}
-    </div>
-  </div>
-);
-
-const CardsPanel = ({trades}: {trades:any[]}) => {
-  const recent = trades.filter((t:any)=>t.pnl!==0).slice(-6);
-  return (
-    <div style={{borderRight:'1px solid #0A1D33',overflow:'hidden',display:'flex',flexDirection:'column'}}>
-      <div style={{padding:'4px 10px',borderBottom:'1px solid #0A1D33',fontSize:8,color:'#2A5070',letterSpacing:'.2em',flexShrink:0}}>◈ RECENT TRADES</div>
-      <div style={{flex:1,overflowY:'auto',display:'grid',gridTemplateColumns:'1fr 1fr',gap:4,padding:6,alignContent:'start'}}>
-        {recent.map((t:any,i:number)=>{
-          const col=t.pnl>=0?'#00FF88':'#FF3366';
-          return (
-            <div key={i} style={{padding:'5px 7px',background:`${col}08`,border:`1px solid ${col}25`,borderLeft:`3px solid ${col}`,borderRadius:4}}>
-              <div style={{display:'flex',justifyContent:'space-between',marginBottom:2}}>
-                <span style={{fontSize:7,color:col,fontWeight:700,fontFamily:'monospace'}}>{t.pnl>=0?'▲':'▼'} {t.sym}</span>
-                <span style={{fontSize:6,color:'#2A5070'}}>{(t.agent||'').slice(0,5)}</span>
-              </div>
-              <div style={{fontSize:14,fontWeight:900,color:col,fontFamily:'monospace',textShadow:`0 0 8px ${col}`}}>
-                {t.pnl>=0?'+':''}{typeof t.pnl==='number'?'$'+Math.abs(t.pnl).toFixed(2):''}
-              </div>
+    <div style={{flex:1,position:'relative',background:'#04060D',overflow:'hidden'}}>
+      <style>{`.tradingview-widget-container,.tradingview-widget-container>div,.tradingview-widget-container iframe{background:#04060D!important;background-color:#04060D!important;width:100%!important;height:100%!important}`}</style>
+      <div ref={ref} className="tradingview-widget-container" style={{width:'100%',height:'100%',position:'relative',background:'#04060D'}}/>
+      {entryPrice > 0 && (
+        <div style={{position:'absolute',top:12,left:12,display:'flex',flexDirection:'column',gap:5,zIndex:10,pointerEvents:'none'}}>
+          {[{l:'— TP',v:tp,c:'#00FF88'},{l:'— ENTRY',v:entryPrice,c:'#00F2FE'},{l:'— SL',v:sl,c:'#FF3366'}].map((lv,i) => (
+            <div key={i} style={{display:'flex',alignItems:'center',gap:6,padding:'4px 10px',background:'rgba(4,6,13,0.95)',border:`1px solid ${lv.c}50`,borderRadius:4,boxShadow:`0 0 12px ${lv.c}15`}}>
+              <span style={{fontSize:10,color:lv.c,fontWeight:700,fontFamily:'monospace'}}>{lv.l} ${lv.v.toFixed(2)}</span>
             </div>
-          );
-        })}
-        {recent.length===0&&(
-          <div style={{gridColumn:'1/-1',textAlign:'center',fontSize:9,color:'#0A1D33',fontFamily:'monospace',paddingTop:20}}>Waiting for first trade...</div>
-        )}
+          ))}
+        </div>
+      )}
+      <div style={{position:'absolute',top:12,right:12,zIndex:10,pointerEvents:'none'}}>
+        {[{n:'LENS',i:'RSI(14)',c:'#BD00FF'},{n:'RADAR',i:'EMA 9/21',c:'#00F2FE'},{n:'RAZOR',i:'MACD',c:'#FFD700'},{n:'SURGE',i:'Volume',c:'#00FF88'}].map((a,i) => (
+          <div key={i} style={{display:'flex',alignItems:'center',gap:5,padding:'2px 8px',marginBottom:2,background:'rgba(4,6,13,0.9)',border:`1px solid ${a.c}20`,borderRadius:3}}>
+            <div style={{width:5,height:5,borderRadius:'50%',background:a.c}}/>
+            <span style={{fontSize:8,color:a.c,fontWeight:700,fontFamily:'monospace'}}>{a.n}</span>
+            <span style={{fontSize:8,color:'#2A5070',fontFamily:'monospace'}}>{a.i}</span>
+          </div>
+        ))}
       </div>
     </div>
   );
 };
-
-const LogPanelCompact = ({logs, logRef, bP, sP, running}: {logs:any[], logRef:React.RefObject<HTMLDivElement|null>, bP:number, sP:number, running:boolean}) => (
-  <div style={{display:'flex',flexDirection:'column',overflow:'hidden'}}>
-    <div style={{padding:'4px 10px',borderBottom:'1px solid #0A1D33',fontSize:8,color:'#2A5070',letterSpacing:'.2em',flexShrink:0,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-      <div style={{display:'flex',gap:5,alignItems:'center'}}>
-        {running&&<div style={{width:4,height:4,borderRadius:'50%',background:'#00FF88',animation:'pu 1s infinite'}}/>}
-        <span>◈ LIVE REASONING</span>
-      </div>
-      <div style={{display:'flex',gap:8}}>
-        <span style={{color:'#00FF88'}}>▲{bP}%</span>
-        <span style={{color:'#FF3366'}}>▼{sP}%</span>
-      </div>
-    </div>
-    <div ref={logRef} style={{flex:1,overflowY:'auto',padding:'4px 0',scrollBehavior:'smooth'}}>
-      {logs.slice(-30).map((ln:any,i:number)=>(
-        <div key={i} style={{padding:'2px 8px',borderLeft:`2px solid ${ln.col||'#0A1D33'}`,marginBottom:1,display:'flex',gap:6,alignItems:'baseline'}}>
-          <span style={{fontSize:7,color:'#1A3050',flexShrink:0,fontFamily:'monospace'}}>{ln.t}</span>
-          <span style={{fontSize:8,color:ln.col||'#2A5070',fontWeight:700,flexShrink:0,fontFamily:'monospace'}}>[{ln.ag}]</span>
-          <span style={{fontSize:10,color:ln.col?`${ln.col}CC`:'#2A5070',fontFamily:'monospace',lineHeight:1.4}}>{ln.msg}</span>
-        </div>
-      ))}
-    </div>
-  </div>
-);
-
-const BottomSection = ({agSt, act, dis, logs, logRef, trades, bP, sP, running}: {agSt:Record<string,any>, act:string[], dis:Set<string>, logs:any[], logRef:React.RefObject<HTMLDivElement|null>, trades:any[], bP:number, sP:number, running:boolean}) => (
-  <div style={{gridColumn:'1/-1',display:'grid',gridTemplateColumns:'320px 1fr 1fr',borderTop:'2px solid #0A1D33',height:'200px',overflow:'hidden',background:'#040810'}}>
-    <AllAgentsPanel agSt={agSt} act={act} dis={dis}/>
-    <CardsPanel trades={trades}/>
-    <LogPanelCompact logs={logs} logRef={logRef} bP={bP} sP={sP} running={running}/>
-  </div>
-);
-
-const RightPanelChartMode = ({agSt, act, dis, sig, px, port: _portArg}: {agSt:Record<string,any>, act:string[], dis:Set<string>, sig?:string, px:Record<string,any>, port:any}) => (
-  <div style={{display:'flex',flexDirection:'column',height:'100%',background:'#040810',borderLeft:'1px solid #0A1D33',overflow:'hidden'}}>
-    <div style={{flex:'0 0 55%',borderBottom:'1px solid #0A1D33',position:'relative',overflow:'hidden',display:'flex',flexDirection:'column'}}>
-      <div style={{fontSize:8,color:'#2A5070',letterSpacing:'.2em',padding:'6px 10px',borderBottom:'1px solid #0A1D33',flexShrink:0}}>◈ SWARM ACTIVE · {act.length}/18</div>
-      <div style={{flex:1,overflow:'hidden'}}>
-        <MiniSwarmGraph agSt={agSt} act={act} dis={dis}/>
-      </div>
-    </div>
-    <div style={{flex:'0 0 45%',overflow:'hidden',display:'flex',flexDirection:'column'}}>
-      <div style={{fontSize:8,color:'#2A5070',letterSpacing:'.2em',padding:'6px 10px',borderBottom:'1px solid #0A1D33',flexShrink:0}}>◈ GLOBAL MACRO SPHERE</div>
-      <div style={{flex:1,overflow:'hidden'}}>
-        <MiniGlobePanel px={px} port={_portArg} sig={sig}/>
-      </div>
-    </div>
-  </div>
-);
 
 export default function KYMIA({isLive=false}:{isLive?:boolean}){
   const searchParams=useSearchParams();
@@ -3485,6 +3129,7 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
         if(ags2["vector"]?.conf&&ags2["vector"]?.sig)agSig2.vector={adx:Math.round(ags2["vector"].conf/2),signal:ags2["vector"].sig};
         setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym,side:"BUY",qty,price:p.price,pnl:0,conf:Math.round(weightedConf),t:ts(),ms:Date.now(),agentSignals:agSig2},...t.slice(0,99)]);
         log("EXEC","▶ LONG "+sym+" @ "+fPrice(p.price)+" alloc:$"+f2(alloc)+" wConf:"+Math.round(weightedConf)+"%",K.g);
+        setTimeout(()=>{showAutoChart(sym,portRef.current.pos[sym],{sym,side:"BUY",price:p.price,agent:"CONSENSUS",reason:""});},500);
         tradeCount++;
       }else if((cs.sig==="SELL"||sig.isSell)&&prt.pos[sym]&&prt.pos[sym].side!=="SHORT"){
         const pos=prt.pos[sym];
@@ -3587,6 +3232,36 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[]);
 
+  // Auto-chart overlay state
+  const [autoChart,setAutoChart]=useState<{sym:string,pos:any,trade:any}|null>(null);
+  const [autoChartTimer,setAutoChartTimer]=useState(15);
+  const autoChartTimeout=useRef<ReturnType<typeof setTimeout>|null>(null);
+  const autoChartInterval=useRef<ReturnType<typeof setInterval>|null>(null);
+
+  const showAutoChart=useCallback((sym:string,pos:any,trade:any)=>{
+    if(autoChartTimeout.current)clearTimeout(autoChartTimeout.current);
+    if(autoChartInterval.current)clearInterval(autoChartInterval.current);
+    setAutoChart({sym,pos,trade});
+    setAutoChartTimer(15);
+    let count=15;
+    autoChartInterval.current=setInterval(()=>{
+      count-=1;
+      setAutoChartTimer(count);
+      if(count<=0)clearInterval(autoChartInterval.current!);
+    },1000);
+    autoChartTimeout.current=setTimeout(()=>{
+      setAutoChart(null);
+      setAutoChartTimer(15);
+    },15000);
+  },[]);
+
+  useEffect(()=>{
+    return()=>{
+      if(autoChartTimeout.current)clearTimeout(autoChartTimeout.current);
+      if(autoChartInterval.current)clearInterval(autoChartInterval.current);
+    };
+  },[]);
+
   // Open a SHORT position directly (bypasses trader rules — used by demo + consensus path)
   const openShort=useCallback((sym:string,reason:string,agent:string,conf=70)=>{
     const p=pricesRef.current[sym];if(!p)return;
@@ -3597,9 +3272,10 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
     setPort(prev=>{if(prev.pos[sym])return prev;return{...prev,cash:prev.cash-alloc,pos:{...prev.pos,[sym]:{qty,avg:p.price,peak:p.price,entryMs:Date.now(),trailActive:false,side:"SHORT"}}};});
     setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym,side:"SHORT",qty,price:p.price,pnl:0,conf,t:ts(),ms:Date.now(),agent,reason},...t.slice(0,99)]);
     log("EXEC","▼ ["+agent+"] SHORT "+sym+" @ "+fPrice(p.price)+" conf:"+conf+"%",K.r);
+    setTimeout(()=>{showAutoChart(sym,portRef.current.pos[sym],{sym,side:"SHORT",price:p.price,agent,reason:""});},500);
     setSignalCount(n=>n+1);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[]);
+  },[showAutoChart]);
 
   // Pick best SHORT candidate — most overbought, not already held
   const selectBestShort=useCallback(():string|null=>{
@@ -3723,26 +3399,11 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
     log("USER","📊 Weekly report copied to clipboard — paste to X/Twitter",K.c);
   };
 
-  const [chartOpen,setChartOpen]=useState(false);
-  const [selectedTrade,setSelectedTrade]=useState<{sym:string;pos?:Position;price?:number;side?:string;agent?:string;agentSignals?:AgentSignals}|null>(null);
   const [tradingMode,setTradingMode]=useState<"day"|"swing"|"hybrid">("hybrid");
-  const firstTradeShownRef=useRef(false);
   const [selPair,setSelPair]=useState("SOL");
   const [rightPanelTab,setRightPanelTab]=useState<"signals"|"history">("signals");
-
-  useEffect(()=>{
-    const openPos=Object.entries(port.pos);
-    if(openPos.length>0&&!firstTradeShownRef.current){
-      firstTradeShownRef.current=true;
-      const[sym,pos]=openPos[0];
-      const rel=tradesRef.current.find(t=>t.sym===sym);
-      setTimeout(()=>{
-        setSelectedTrade({sym,pos,price:pos.avg,side:pos.side||"LONG",agent:rel?.agent||"CONSENSUS",agentSignals:rel?.agentSignals});
-        setChartOpen(true);
-        log("KYMIA",`◈ Chart opened: ${sym}/USD · Entry @$${f2(pos.avg)}`,"#00F2FE");
-      },800);
-    }
-  },[port.pos,log]);
+  const [chartOpen,setChartOpen]=useState(false);
+  const [selectedTrade,setSelectedTrade]=useState<{sym:string;pos?:Position;price?:number;side?:string;agent?:string;agentSignals?:AgentSignals}|null>(null);
 
   const handleStart=()=>{
     if(!running){
@@ -3776,7 +3437,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
   };
 
   return(
-<div style={{fontFamily:"'JetBrains Mono','Courier New',monospace",display:'grid',gridTemplateRows:chartOpen?'48px 1fr 200px 100px':'48px 1fr 100px 150px',gridTemplateColumns:chartOpen?'200px 1fr':'220px 1fr 260px',position:'fixed',inset:0,overflow:'hidden',background:'#04060D',color:K.hi,transition:'grid-template-columns .4s ease, grid-template-rows .4s ease'}}>
+<div style={{fontFamily:"'JetBrains Mono','Courier New',monospace",display:'grid',gridTemplateRows:'52px 1fr 220px',gridTemplateColumns:'220px 1fr 260px',position:'fixed',inset:0,overflow:'hidden',background:'#04060D',color:K.hi}}>
       <style>{`
         *{box-sizing:border-box;margin:0;padding:0}
         ::-webkit-scrollbar{width:3px}::-webkit-scrollbar-track{background:#020508}::-webkit-scrollbar-thumb{background:#0A1D33;border-radius:2px}
@@ -3805,6 +3466,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
         @keyframes swan{0%,100%{box-shadow:0 0 0 rgba(255,51,102,.2)}50%{box-shadow:0 0 24px rgba(255,51,102,.5)}}
         @keyframes agentGlobeAppear{0%{opacity:0;transform:translateX(-50%) translateY(-8px)}15%{opacity:1;transform:translateX(-50%) translateY(0)}75%{opacity:1}100%{opacity:0;transform:translateX(-50%) translateY(-12px)}}
         @keyframes slideInChart{from{opacity:0;transform:translateX(-16px)}to{opacity:1;transform:translateX(0)}}
+        @keyframes chartSlideIn{from{opacity:0;transform:scale(0.97) translateY(-8px)}to{opacity:1;transform:scale(1) translateY(0)}}
         .log-entry{animation:logSlideIn .3s ease forwards}
         .arc-debate{animation:arc-debate 0.12s infinite}
         .tab{background:none;border:none;cursor:pointer;font-family:inherit;font-size:12px;letter-spacing:.1em;padding:7px 14px;color:#1E3A55;transition:all .2s;text-transform:uppercase;border-bottom:2px solid transparent}
@@ -3973,26 +3635,44 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
         </div>
       </div>
 
-      {/* ══ ROW 2 CENTER: CHART / SWARM ══ */}
-      <div style={{gridColumn:chartOpen?'2 / -1':2,gridRow:2,height:'100%',overflow:"hidden",position:"relative",background:K.bg}}>
-        {chartOpen&&selectedTrade?(
-          <div style={{width:"100%",height:"100%",animation:"slideInChart .35s ease"}}>
-            <TradingViewChart sym={selectedTrade.sym} entryPrice={selectedTrade.pos?.avg||selectedTrade.price||0} sl={(selectedTrade.pos?.avg||selectedTrade.price||0)*0.97} tp={(selectedTrade.pos?.avg||selectedTrade.price||0)*1.06} trailPrice={null} interval="1"/>
-          </div>
-        ):(
-          <div style={{width:"100%",height:"100%"}}>
-            <SwarmGraph st={agSt} debate={debate} disabled={disabled} swarmRef={swarmRef} flashingAgent={flashingAgent}/>
-          </div>
-        )}
+      {/* ══ ROW 2 CENTER: SWARM ══ */}
+      <div style={{gridColumn:2,gridRow:2,height:'100%',overflow:"hidden",position:"relative",background:K.bg}}>
+        <div style={{width:"100%",height:"100%"}}>
+          <SwarmGraph st={agSt} debate={debate} disabled={disabled} swarmRef={swarmRef} flashingAgent={flashingAgent}/>
+        </div>
         {/* Center overlay: pair + mode badge */}
         <div style={{position:"absolute",top:8,left:12,display:"flex",gap:6,pointerEvents:"none"}}>
           <span style={{fontSize:9,color:K.dim,background:K.bg+"cc",padding:"2px 6px",borderRadius:2,border:"1px solid "+K.brd}}>{selPair}/USDT</span>
           <span style={{fontSize:9,color:K.c,background:K.c+"11",padding:"2px 6px",borderRadius:2,border:"1px solid "+K.c+"44",textTransform:"uppercase"}}>{tradingMode}</span>
         </div>
+        {/* Auto-chart overlay */}
+        {autoChart&&(
+          <div style={{position:'absolute',inset:0,zIndex:50,animation:'chartSlideIn 0.4s ease forwards',background:'#04060D',display:'flex',flexDirection:'column'}}>
+            {/* Header */}
+            <div style={{padding:'8px 16px',background:'rgba(4,6,13,0.98)',borderBottom:'1px solid rgba(0,242,254,0.15)',display:'flex',alignItems:'center',gap:12,flexShrink:0}}>
+              <span style={{fontSize:16,fontWeight:900,color:'#00F2FE',fontFamily:'monospace'}}>{autoChart.sym}/USD</span>
+              <span style={{padding:'2px 8px',background:autoChart.trade?.side==='SHORT'?'rgba(255,51,102,0.2)':'rgba(0,255,136,0.2)',border:`1px solid ${autoChart.trade?.side==='SHORT'?'rgba(255,51,102,0.5)':'rgba(0,255,136,0.5)'}`,borderRadius:3,fontSize:10,fontWeight:700,color:autoChart.trade?.side==='SHORT'?'#FF3366':'#00FF88'}}>{autoChart.trade?.side==='SHORT'?'▼ SHORT':'▲ LONG'}</span>
+              <span style={{fontSize:9,color:'#2A5070',fontFamily:'monospace'}}>Opened by {autoChart.trade?.agent||'CONSENSUS'}</span>
+              <div style={{flex:1}}/>
+              <div style={{display:'flex',alignItems:'center',gap:8,padding:'4px 12px',background:'rgba(0,242,254,0.06)',border:'1px solid rgba(0,242,254,0.2)',borderRadius:20}}>
+                <svg width="20" height="20" style={{flexShrink:0}}>
+                  <circle cx="10" cy="10" r="8" fill="none" stroke="#0A1D33" strokeWidth="2"/>
+                  <circle cx="10" cy="10" r="8" fill="none" stroke="#00F2FE" strokeWidth="2"
+                    strokeDasharray={`${(autoChartTimer/15)*50.3} 50.3`} strokeLinecap="round"
+                    transform="rotate(-90 10 10)" style={{transition:'stroke-dasharray 1s linear'}}/>
+                </svg>
+                <span style={{fontSize:11,color:'#00F2FE',fontFamily:'monospace',fontWeight:700,minWidth:18,textAlign:'center'}}>{autoChartTimer}s</span>
+                <span style={{fontSize:8,color:'#2A5070'}}>auto-close</span>
+              </div>
+              <button onClick={()=>{setAutoChart(null);if(autoChartTimeout.current)clearTimeout(autoChartTimeout.current);if(autoChartInterval.current)clearInterval(autoChartInterval.current);}} style={{background:'none',border:'none',color:'#2A5070',cursor:'pointer',fontSize:18,padding:'0 4px'}}>&#x2715;</button>
+            </div>
+            {/* Chart */}
+            <AutoChartView sym={autoChart.sym} trade={autoChart.trade} pos={autoChart.pos}/>
+          </div>
+        )}
       </div>
 
-      {/* ══ ROW 2 RIGHT: SIGNALS / HISTORY (hidden when chart open) ══ */}
-      {!chartOpen && (
+      {/* ══ ROW 2 RIGHT: SIGNALS / HISTORY ══ */}
       <div className="panel" style={{gridColumn:3,gridRow:2,height:'100%',overflow:"hidden",borderLeft:"1px solid "+K.brd,display:"flex",flexDirection:"column"}}>
         {/* Tabs */}
         <div style={{display:"flex",borderBottom:"1px solid "+K.brd}}>
@@ -4070,137 +3750,53 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
           </div>
         </div>
       </div>
-      )}
 
-      {/* ══ ROW 3: BOTTOM SECTION (chart open) or POSITIONS BAR (chart closed) ══ */}
-      {chartOpen ? (
-        <BottomSection
-          agSt={agSt}
-          act={actAgentIds}
-          dis={disabled}
-          logs={logs}
-          logRef={logRef}
-          trades={trades}
-          bP={bP}
-          sP={sP}
-          running={running}
-        />
-      ) : (
-      <div style={{gridColumn:"1/-1",gridRow:3,height:'100%',overflow:'hidden',borderTop:"1px solid "+K.brd,display:"flex",alignItems:"center",gap:8,padding:"0 12px",overflowX:"auto",background:"#020508"}}>
-        <span style={{fontSize:9,color:K.dim,letterSpacing:1,whiteSpace:"nowrap",minWidth:"fit-content"}}>POSITIONS</span>
-        {Object.entries(port.pos).length===0?(
-          <span style={{fontSize:9,color:K.dim+"66",fontStyle:"italic"}}>No open positions</span>
-        ):(
-          Object.entries(port.pos).map(([sym,pos])=>{
-            const pd=prices[sym]||null;
-            const cur=(pd as PriceData)?.price||pos.avg;
-            const pnlPct=pos.avg>0?(cur-pos.avg)/pos.avg*100*(pos.side==="SHORT"?-1:1):0;
-            const pnlUsd=pnlPct/100*pos.qty*pos.avg;
-            return(
-              <div key={sym} onClick={()=>{setSelectedTrade({sym:sym.replace("USDT","").replace("USD",""),pos,price:cur,side:pos.side||"LONG"});setChartOpen(true);}} style={{minWidth:120,maxHeight:84,background:pnlUsd>=0?K.g+"0a":K.r+"0a",border:"1px solid "+(pnlUsd>=0?K.g+"44":K.r+"44"),borderRadius:4,padding:"6px 10px",cursor:"pointer",flexShrink:0,transition:"border-color .2s",boxShadow:pnlUsd>=0?'inset 0 0 20px rgba(0,255,136,0.08),0 0 0 1px rgba(0,255,136,0.15)':'inset 0 0 20px rgba(255,51,102,0.06),0 0 0 1px rgba(255,51,102,0.1)',animation:pnlUsd>=0?'profitPulse 2s ease-in-out infinite':undefined}}>
-                <div style={{display:"flex",justifyContent:"space-between",marginBottom:2}}>
-                  <span style={{fontSize:9,fontWeight:700,color:K.hi}}>{sym.replace("USDT","").replace("USD","")}</span>
-                  <span style={{fontSize:8,color:pos.side==="SHORT"?K.r:K.g}}>{pos.side||"LONG"}</span>
+      {/* ══ ROW 3: POSITIONS + LOG PANEL ══ */}
+      <div style={{gridColumn:'1/-1',gridRow:3,height:'220px',overflow:'hidden',borderTop:"1px solid "+K.brd,display:'flex',flexDirection:'column',background:'#010407',position:'relative'}}>
+        {/* Positions bar */}
+        <div style={{flexShrink:0,display:'flex',alignItems:'center',gap:8,padding:'0 12px',height:44,overflowX:'auto',borderBottom:'1px solid '+K.brd+'44',background:'#020508'}}>
+          <span style={{fontSize:9,color:K.dim,letterSpacing:1,whiteSpace:'nowrap',minWidth:'fit-content'}}>POSITIONS</span>
+          {Object.entries(port.pos).length===0?(
+            <span style={{fontSize:9,color:K.dim+'66',fontStyle:'italic'}}>No open positions</span>
+          ):(
+            Object.entries(port.pos).map(([sym,pos])=>{
+              const pd=prices[sym]||null;
+              const cur=(pd as PriceData)?.price||pos.avg;
+              const pnlPct=pos.avg>0?(cur-pos.avg)/pos.avg*100*(pos.side==='SHORT'?-1:1):0;
+              const pnlUsd=pnlPct/100*pos.qty*pos.avg;
+              return(
+                <div key={sym} onClick={()=>{setSelectedTrade({sym:sym.replace('USDT','').replace('USD',''),pos,price:cur,side:pos.side||'LONG'});setChartOpen(true);}} style={{minWidth:110,background:pnlUsd>=0?K.g+'0a':K.r+'0a',border:'1px solid '+(pnlUsd>=0?K.g+'44':K.r+'44'),borderRadius:3,padding:'4px 8px',cursor:'pointer',flexShrink:0,animation:pnlUsd>=0?'profitPulse 2s ease-in-out infinite':undefined}}>
+                  <div style={{display:'flex',justifyContent:'space-between',marginBottom:1}}>
+                    <span style={{fontSize:8,fontWeight:700,color:K.hi}}>{sym.replace('USDT','').replace('USD','')}</span>
+                    <span style={{fontSize:7,color:pos.side==='SHORT'?K.r:K.g}}>{pos.side||'LONG'}</span>
+                  </div>
+                  <div style={{fontSize:8,fontWeight:600,color:pnlUsd>=0?K.g:K.r}}>{pnlUsd>=0?'+':''}{f2(pnlUsd)}</div>
                 </div>
-                <div style={{display:"flex",justifyContent:"space-between"}}>
-                  <span style={{fontSize:8,color:K.dim}}>{f2(pos.qty)} u</span>
-                  <span style={{fontSize:9,fontWeight:600,color:pnlUsd>=0?K.g:K.r}}>{pnlUsd>=0?"+":""}{f2(pnlUsd)}</span>
-                </div>
-                <div style={{fontSize:7,color:K.dim,marginTop:2}}>@{f2(pos.avg)} → {f2(cur)}</div>
-              </div>
-            );
-          })
-        )}
-        <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:12,paddingLeft:8,borderLeft:"1px solid "+K.brd}}>
-          <div style={{textAlign:"right"}}>
-            <div style={{fontSize:8,color:K.dim}}>UNREALIZED</div>
-            <div style={{fontSize:11,color:totalPnL>=0?K.g:K.r}}>{totalPnL>=0?"+":""}{f2(totalPnL)}</div>
-          </div>
-          <div style={{textAlign:"right"}}>
-            <div style={{fontSize:8,color:K.dim}}>CASH</div>
-            <div style={{fontSize:11,color:K.hi}}>${f2(port.cash)}</div>
+              );
+            })
+          )}
+          <div style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:10,paddingLeft:8,borderLeft:'1px solid '+K.brd,flexShrink:0}}>
+            <div style={{textAlign:'right'}}>
+              <div style={{fontSize:7,color:K.dim}}>P&L</div>
+              <div style={{fontSize:10,color:totalPnL>=0?K.g:K.r}}>{totalPnL>=0?'+':''}{f2(totalPnL)}</div>
+            </div>
+            <div style={{textAlign:'right'}}>
+              <div style={{fontSize:7,color:K.dim}}>CASH</div>
+              <div style={{fontSize:10,color:K.hi}}>${f2(port.cash)}</div>
+            </div>
           </div>
         </div>
-      </div>
-      )}
-
-      {/* ══ ROW 4: POSITIONS BAR (chart open) or LOG PANEL (chart closed) ══ */}
-      {chartOpen ? (
-      <div style={{gridColumn:"1/-1",gridRow:4,height:'100%',overflow:'hidden',borderTop:"1px solid "+K.brd,display:"flex",alignItems:"center",gap:8,padding:"0 12px",overflowX:"auto",background:"#020508"}}>
-        <span style={{fontSize:9,color:K.dim,letterSpacing:1,whiteSpace:"nowrap",minWidth:"fit-content"}}>POSITIONS</span>
-        {Object.entries(port.pos).length===0?(
-          <span style={{fontSize:9,color:K.dim+"66",fontStyle:"italic"}}>No open positions</span>
-        ):(
-          Object.entries(port.pos).map(([sym,pos])=>{
-            const pd=prices[sym]||null;
-            const cur=(pd as PriceData)?.price||pos.avg;
-            const pnlPct=pos.avg>0?(cur-pos.avg)/pos.avg*100*(pos.side==="SHORT"?-1:1):0;
-            const pnlUsd=pnlPct/100*pos.qty*pos.avg;
-            return(
-              <div key={sym} onClick={()=>{setSelectedTrade({sym:sym.replace("USDT","").replace("USD",""),pos,price:cur,side:pos.side||"LONG"});setChartOpen(true);}} style={{minWidth:120,maxHeight:84,background:pnlUsd>=0?K.g+"0a":K.r+"0a",border:"1px solid "+(pnlUsd>=0?K.g+"44":K.r+"44"),borderRadius:4,padding:"6px 10px",cursor:"pointer",flexShrink:0,transition:"border-color .2s",boxShadow:pnlUsd>=0?'inset 0 0 20px rgba(0,255,136,0.08),0 0 0 1px rgba(0,255,136,0.15)':'inset 0 0 20px rgba(255,51,102,0.06),0 0 0 1px rgba(255,51,102,0.1)',animation:pnlUsd>=0?'profitPulse 2s ease-in-out infinite':undefined}}>
-                <div style={{display:"flex",justifyContent:"space-between",marginBottom:2}}>
-                  <span style={{fontSize:9,fontWeight:700,color:K.hi}}>{sym.replace("USDT","").replace("USD","")}</span>
-                  <span style={{fontSize:8,color:pos.side==="SHORT"?K.r:K.g}}>{pos.side||"LONG"}</span>
-                </div>
-                <div style={{display:"flex",justifyContent:"space-between"}}>
-                  <span style={{fontSize:8,color:K.dim}}>{f2(pos.qty)} u</span>
-                  <span style={{fontSize:9,fontWeight:600,color:pnlUsd>=0?K.g:K.r}}>{pnlUsd>=0?"+":""}{f2(pnlUsd)}</span>
-                </div>
-                <div style={{fontSize:7,color:K.dim,marginTop:2}}>@{f2(pos.avg)} → {f2(cur)}</div>
-              </div>
-            );
-          })
-        )}
-        <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:12,paddingLeft:8,borderLeft:"1px solid "+K.brd}}>
-          <div style={{textAlign:"right"}}>
-            <div style={{fontSize:8,color:K.dim}}>UNREALIZED</div>
-            <div style={{fontSize:11,color:totalPnL>=0?K.g:K.r}}>{totalPnL>=0?"+":""}{f2(totalPnL)}</div>
-          </div>
-          <div style={{textAlign:"right"}}>
-            <div style={{fontSize:8,color:K.dim}}>CASH</div>
-            <div style={{fontSize:11,color:K.hi}}>${f2(port.cash)}</div>
-          </div>
-        </div>
-      </div>
-      ) : (
-      <div style={{gridColumn:"1/-1",gridRow:4,height:'150px',overflow:"hidden",borderTop:"1px solid "+K.brd,display:"flex",flexDirection:"column",background:"#010407",position:"relative"}}>
-        {/* Matrix rain overlay */}
-        <div style={{position:'absolute',right:0,top:0,bottom:0,width:60,overflow:'hidden',opacity:0.06,pointerEvents:'none'}}>
-          {['01','10','11','00','10','01'].map((ch,i)=>(
-            <div key={i} style={{position:'absolute',left:i*10,top:0,color:'#00FF88',fontSize:9,fontFamily:'monospace',animation:`matrixFall ${1.5+i*0.3}s linear infinite`,animationDelay:`${i*0.4}s`}}>{ch}</div>
-          ))}
-        </div>
-        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"3px 12px",borderBottom:"1px solid "+K.brd+"44",flexShrink:0}}>
-          <span style={{fontSize:9,color:K.dim,letterSpacing:1}}>LIVE REASONING</span>
-          <span style={{fontSize:8,color:K.dim+"66"}}>{logs.length} entries</span>
-        </div>
-        {/* Live stats bar */}
-        <div style={{display:'flex',gap:16,padding:'3px 12px',borderBottom:'1px solid #0A1D33',background:'rgba(4,6,13,0.9)',alignItems:'center',flexShrink:0}}>
-          <div style={{display:'flex',gap:4,alignItems:'center'}}>
-            <span style={{fontSize:7,color:'#2A5070'}}>WIN RATE</span>
-            <span style={{fontSize:10,color:'#00FF88',fontWeight:700,fontFamily:'monospace'}}>{cl.length>0?Math.round(cl.filter((t:Trade)=>t.pnl>0).length/cl.length*100):0}%</span>
-          </div>
-          <div style={{display:'flex',gap:4,alignItems:'center'}}>
-            <div style={{width:4,height:4,borderRadius:'50%',background:'#00F2FE',animation:'pu 1s infinite'}}/>
-            <span style={{fontSize:7,color:'#2A5070'}}>REGIME</span>
-            <span style={{fontSize:9,color:'#FFD700',fontWeight:700,fontFamily:'monospace'}}>{marketRegime?.regime||'SCANNING'}</span>
-          </div>
-          <div style={{marginLeft:'auto',display:'flex',gap:4,alignItems:'center'}}>
-            <span style={{fontSize:7,color:'#2A5070'}}>POSITIONS</span>
-            <span style={{fontSize:10,color:'#00F2FE',fontWeight:700,fontFamily:'monospace'}}>{Object.keys(port.pos).length}</span>
-          </div>
-        </div>
-        <div style={{flex:1,overflowY:"auto",padding:"4px 12px",display:"flex",flexDirection:"column",gap:1}} ref={logRef}>
-          {logs.slice(-60).map((l,i)=>(
-            <div key={i} className="log-entry" style={{display:"flex",gap:8,alignItems:"baseline",padding:"2px 4px",borderLeft:`2px solid ${l.col||K.hi}44`,marginBottom:1,borderRadius:'0 2px 2px 0'}}>
-              <span style={{fontSize:8,color:K.dim,whiteSpace:"nowrap",minWidth:48,flexShrink:0}}>{l.t}</span>
-              <span style={{fontSize:9,color:l.col||K.hi,fontWeight:700,flexShrink:0}}>[{l.ag}]</span>
-              <span style={{fontSize:9,color:K.hi+"cc",lineHeight:1.3}}>{l.msg}</span>
+        {/* Log area */}
+        <div style={{flex:1,overflowY:'auto',padding:'4px 12px',display:'flex',flexDirection:'column',gap:1}} ref={logRef}>
+          {logs.slice(-80).map((l,i)=>(
+            <div key={i} style={{display:'flex',gap:8,alignItems:'baseline',padding:'2px 4px',borderLeft:`2px solid ${l.col||K.hi}44`,marginBottom:1,borderRadius:'0 2px 2px 0'}}>
+              <span style={{fontSize:9,color:K.dim,whiteSpace:'nowrap',minWidth:48,flexShrink:0}}>{l.t}</span>
+              <span style={{fontSize:10,color:l.col||K.hi,fontWeight:700,flexShrink:0}}>[{l.ag}]</span>
+              <span style={{fontSize:11,color:K.hi+'cc',lineHeight:1.3}}>{l.msg}</span>
             </div>
           ))}
         </div>
       </div>
-      )}
 
       {/* ══ OVERLAYS ══ */}
       {showOnboarding&&<OnboardingWizard onComplete={handleOnboardingComplete} isLive={isLive}/>}
