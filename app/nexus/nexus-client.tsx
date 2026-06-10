@@ -1700,6 +1700,41 @@ function PerformanceCard({trades,totalPnL,onClose}:{trades:Trade[],totalPnL:numb
   );
 }
 
+const TransparencyModal = ({onClose}:{onClose:()=>void}) => (
+  <div style={{position:'fixed',inset:0,zIndex:900,background:'rgba(2,4,10,0.96)',backdropFilter:'blur(16px)',display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
+    <div style={{maxWidth:560,width:'90%',background:'#060A12',border:'1px solid rgba(0,242,254,0.2)',borderRadius:12,padding:36}} onClick={e=>e.stopPropagation()}>
+      <div style={{fontSize:11,color:'#00F2FE',letterSpacing:'.3em',marginBottom:16}}>◈ HOW KYMIA ACTUALLY WORKS</div>
+      <p style={{fontSize:13,color:'#A8D0EC',lineHeight:1.9,marginBottom:20}}>
+        KYMIA is not a mysterious AI black box. It is <strong style={{color:'white'}}>18 mathematical functions</strong> running in parallel on real market data.
+      </p>
+      {[
+        {agent:'LENS',code:`fetch Kraken candles\ncalcRSI(14)\nif RSI < 40 → BUY\nif RSI > 65 → SELL`,col:'#BD00FF'},
+        {agent:'LEVIATHAN',code:`fetch DexScreener flow\nbuyRatio = buys/(buys+sells)\nif ratio > 0.62 → BUY`,col:'#BD00FF'},
+        {agent:'CONSENSUS',code:`count all 17 votes\nif 60%+ agree → execute\nelse → wait`,col:'#00F2FE'},
+      ].map((a,i)=>(
+        <div key={i} style={{marginBottom:12,padding:'10px 14px',background:'rgba(4,6,13,0.8)',border:`1px solid ${a.col}20`,borderRadius:6}}>
+          <div style={{fontSize:9,color:a.col,fontWeight:700,marginBottom:6,fontFamily:'monospace'}}>{a.agent} AGENT</div>
+          <pre style={{fontSize:10,color:'#2A5070',fontFamily:'monospace',margin:0,lineHeight:1.7,whiteSpace:'pre'}}>{a.code}</pre>
+        </div>
+      ))}
+      <div style={{padding:'12px 16px',marginTop:8,background:'rgba(0,255,136,0.05)',border:'1px solid rgba(0,255,136,0.15)',borderRadius:6}}>
+        <div style={{fontSize:11,color:'#00FF88',marginBottom:6,fontWeight:700}}>3 GUARANTEES</div>
+        {[
+          '✓ Full source code on GitHub — readable by anyone',
+          '✓ Non-custodial — your keys, your funds, always',
+          '✓ Every live trade on Solana blockchain — verifiable',
+        ].map((g,i)=>(
+          <div key={i} style={{fontSize:11,color:'#2A5070',marginBottom:4}}>{g}</div>
+        ))}
+      </div>
+      <div style={{display:'flex',gap:10,marginTop:20}}>
+        <a href="https://github.com/cbompemo-byte/Nexus-V2" target="_blank" rel="noopener" style={{flex:1,padding:'10px',background:'rgba(168,208,236,0.06)',border:'1px solid rgba(168,208,236,0.2)',borderRadius:6,textAlign:'center',color:'#A8D0EC',textDecoration:'none',fontSize:11,fontFamily:'monospace',fontWeight:700}}>READ THE CODE →</a>
+        <button onClick={onClose} style={{flex:1,padding:'10px',background:'rgba(0,242,254,0.08)',border:'1px solid rgba(0,242,254,0.2)',borderRadius:6,cursor:'pointer',color:'#00F2FE',fontSize:11,fontFamily:'monospace',fontWeight:700}}>UNDERSTOOD ✓</button>
+      </div>
+    </div>
+  </div>
+);
+
 export default function KYMIA({isLive=false}:{isLive?:boolean}){
   const prices=usePrices();
   const pricesRef=useRef(prices);
@@ -1725,6 +1760,7 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   const [dnaData,setDnaData]=useState<{[k:string]:unknown}|null>(null);
   const [analyzing,setAnalyzing]=useState(false);
   const [dnaLoading,setDnaLoading]=useState(false);
+  const [showTransparency,setShowTransparency]=useState(false);
   const [running,setRunning]=useState(false);
   const [liveUsers,setLiveUsers]=useState(()=>847+Math.floor(Math.random()*200));
   const [circuit,setCircuit]=useState(false);
@@ -2748,6 +2784,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
             <span style={{fontSize:7,color:K.dim,letterSpacing:".06em"}}>TRADES</span>
           </div>
           <div style={{display:"flex",gap:5}}>
+            <button className="btn" onClick={()=>setShowTransparency(true)} style={{background:"rgba(0,242,254,0.06)",color:"#00F2FE",border:"1px solid rgba(0,242,254,0.2)"}}>ℹ HOW IT WORKS</button>
             <button className="btn" onClick={()=>setModal("share")} style={{background:"#0A1428",color:K.gold,border:"1px solid "+K.gold+"50"}}>◈ SHARE</button>
             <button className="btn" onClick={()=>setFocusMode(f=>!f)} style={{background:focusMode?K.c+"20":"#040810",color:focusMode?K.c:K.dim,border:"1px solid "+(focusMode?K.c+"50":K.brd)}}>{focusMode?"◈ EXIT FOCUS":"◈ FOCUS"}</button>
             <button className="btn" onClick={runAI} disabled={analyzing} style={{background:analyzing?"#06111E":"#001428",color:analyzing?"#1A4A6A":K.c,border:"1px solid "+(analyzing?"#0A2040":K.c+"60")}}>{analyzing?"⟳":"⚡ DEBATE"}</button>
@@ -3465,6 +3502,8 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
       </div>
 
       <TimeScrubber sessionStart={sessionStartRef.current} trades={trades}/>
+
+      {showTransparency&&<TransparencyModal onClose={()=>setShowTransparency(false)}/>}
     </div>
   );
 }

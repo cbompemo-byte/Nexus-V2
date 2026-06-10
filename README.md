@@ -200,6 +200,57 @@ nexus-v2/
 
 ---
 
+## How It Works — Transparency
+
+KYMIA is not a mysterious AI black box. It is **18 mathematical functions** running in parallel on real market data.
+
+### Agent Logic (plain English)
+
+**LENS Agent**
+```
+fetch Kraken candles
+calcRSI(14)
+if RSI < 40 → BUY
+if RSI > 65 → SELL
+```
+
+**LEVIATHAN Agent**
+```
+fetch DexScreener flow
+buyRatio = buys / (buys + sells)
+if ratio > 0.62 → BUY
+```
+
+**CONSENSUS Agent**
+```
+count all 17 votes
+if 60%+ agree → execute
+else → wait
+```
+
+Every agent follows the same pattern: fetch public market data → run a deterministic calculation → emit BUY / SELL / HOLD. No black box, no magic.
+
+### 3 Guarantees
+
+- **Full source code on GitHub** — readable by anyone
+- **Non-custodial** — your keys, your funds, always
+- **Every live trade on Solana blockchain** — verifiable on-chain
+
+### Data Sources (all public APIs)
+
+| Agent | Data Source | Calculation |
+|---|---|---|
+| LENS | Kraken OHLCV | RSI(14) |
+| RADAR | Kraken OHLCV | EMA(9) / EMA(21) crossover |
+| RAZOR | Kraken OHLCV | MACD histogram |
+| LEVIATHAN | DexScreener | Buy/sell flow ratio |
+| ECHO | Alternative.me | Fear & Greed Index |
+| SURGE | CoinGecko | Volume spike vs 7-day avg |
+| CONSENSUS | All 17 agents | Weighted vote aggregation |
+| AEGIS | Portfolio state | Drawdown + risk limits |
+
+---
+
 ## License
 
 Private — all rights reserved. Not open source.
