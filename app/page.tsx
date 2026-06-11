@@ -461,7 +461,7 @@ function Boot({ onDone }:{ onDone:()=>void }) {
 // ── Demo Video ───────────────────────────────────────────────────────────────
 function DemoVideoSection() {
   return (
-    <div style={{ maxWidth:900, margin:"0 auto 80px", padding:"0 20px", position:"relative" }}>
+    <div style={{ maxWidth:1100, margin:"0 auto 80px", padding:"40px 20px 60px", position:"relative" }}>
       <div style={{ textAlign:"center", marginBottom:32 }}>
         <div style={{ fontSize:10, color:K.c, letterSpacing:".4em", marginBottom:12 }}>◈ WATCH KYMIA IN ACTION</div>
         <div style={{ fontSize:28, fontWeight:900, color:"white" }}>18 agents. Real markets. Live trading.</div>
@@ -488,7 +488,7 @@ function DemoVideoSection() {
 
         {/* Video */}
         <video autoPlay loop muted playsInline
-          style={{ width:"100%", display:"block", aspectRatio:"16/9", objectFit:"cover" }}
+          className="kymia-video" style={{ width:"100%", display:"block", aspectRatio:"16/9", objectFit:"cover", minHeight:480 }}
           poster="/kymia-poster.jpg">
           <source src="/kymia-demo.mp4" type="video/mp4"/>
           <source src="/kymia-demo.webm" type="video/webm"/>
@@ -2185,6 +2185,10 @@ export default function LandingPage() {
           .kymia-bento-card { padding: 18px !important; }
           .kymia-debate-full { width: 100% !important; max-width: 100% !important; }
           .kymia-swarm-layout { grid-template-columns: 1fr !important; }
+        }
+
+        @media (max-width: 768px) {
+          .kymia-video { min-height: auto !important; }
         }
 
         @media (max-width: 480px) {
