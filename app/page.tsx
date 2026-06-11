@@ -1316,6 +1316,75 @@ const LiveTradesPreview = () => {
   );
 };
 
+const LossesPreview = () => {
+  const losses=[
+    {sym:'JUP', side:'LONG',entry:1.24,    exit:1.21,    pnl:-16.77,pct:-1.42,reason:'STOP LOSS HIT',agent:'CONSENSUS',duration:'24min'},
+    {sym:'WEN', side:'LONG',entry:0.0000412,exit:0.0000398,pnl:-8.43, pct:-1.34,reason:'STOP LOSS HIT',agent:'RADAR',    duration:'18min'},
+    {sym:'GUAC',side:'LONG',entry:0.00342, exit:0.00331, pnl:-21.39,pct:-1.84,reason:'STOP LOSS HIT',agent:'AEGIS',     duration:'48min'},
+    {sym:'WIF', side:'LONG',entry:0.99,    exit:0.965,   pnl:-14.75,pct:-1.88,reason:'STOP LOSS HIT',agent:'LEVIATHAN', duration:'31min'},
+  ];
+  return (
+    <div style={{background:'rgba(4,6,13,0.97)',border:'1px solid rgba(255,51,102,0.15)',borderRadius:12,overflow:'hidden',boxShadow:'0 0 40px rgba(255,51,102,0.04)'}}>
+      {/* Terminal bar */}
+      <div style={{padding:'10px 16px',background:'rgba(4,6,13,0.98)',borderBottom:'1px solid rgba(255,51,102,0.1)',display:'flex',alignItems:'center',gap:8}}>
+        {['#FF3366','#FFD700','#00FF88'].map((c,i)=><div key={i} style={{width:9,height:9,borderRadius:'50%',background:c}}/>)}
+        <span style={{flex:1,textAlign:'center',fontSize:9,color:'#2A5070',fontFamily:'monospace',letterSpacing:'.12em'}}>KYMIA LOSS REPORT · TRANSPARENCY MODE</span>
+        <div style={{display:'flex',alignItems:'center',gap:4,padding:'2px 7px',background:'rgba(255,51,102,0.1)',border:'1px solid rgba(255,51,102,0.3)',borderRadius:10}}>
+          <span style={{fontSize:7,color:'#FF3366',fontFamily:'monospace'}}>⚠ LOSSES</span>
+        </div>
+      </div>
+      {/* Honesty banner */}
+      <div style={{padding:'10px 16px',background:'rgba(255,51,102,0.04)',borderBottom:'1px solid rgba(255,51,102,0.08)',fontSize:10,color:'#2A5070',fontFamily:'monospace',lineHeight:1.6}}>
+        We show losses too — because real intelligence means knowing when to be wrong.
+        <span style={{color:'#FF3366',marginLeft:6}}>Every loss was contained by AEGIS stop-loss.</span>
+      </div>
+      {/* 2×2 grid */}
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:1,background:'#0A1D33'}}>
+        {losses.map((p,i)=>(
+          <div key={i} style={{padding:'14px 16px',background:'#04060D',borderLeft:'3px solid #FF3366',position:'relative',overflow:'hidden'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+              <div style={{display:'flex',gap:6,alignItems:'center'}}>
+                <span style={{fontSize:14,fontWeight:900,color:'#FF3366',fontFamily:'monospace'}}>{p.sym}</span>
+                <span style={{padding:'1px 6px',background:'rgba(255,51,102,0.12)',border:'1px solid rgba(255,51,102,0.3)',borderRadius:3,fontSize:8,color:'#FF3366',fontWeight:700}}>▲ {p.side}</span>
+              </div>
+              <div style={{textAlign:'right'}}>
+                <div style={{fontSize:15,fontWeight:900,color:'#FF3366',fontFamily:'monospace'}}>-${Math.abs(p.pnl).toFixed(2)}</div>
+                <div style={{fontSize:9,color:'#FF3366',fontFamily:'monospace'}}>{p.pct.toFixed(2)}%</div>
+              </div>
+            </div>
+            <div style={{display:'flex',justifyContent:'space-between',fontSize:9,color:'#2A5070',fontFamily:'monospace',marginBottom:8}}>
+              <span>Entry ${p.entry<0.01?p.entry.toFixed(6):p.entry.toFixed(2)}</span>
+              <span style={{color:'#FF3366'}}>Exit ${p.exit<0.01?p.exit.toFixed(6):p.exit.toFixed(2)}</span>
+            </div>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <div style={{padding:'2px 7px',background:'rgba(255,51,102,0.08)',border:'1px solid rgba(255,51,102,0.2)',borderRadius:3,fontSize:8,color:'#FF3366',fontFamily:'monospace'}}>⛔ {p.reason}</div>
+              <span style={{fontSize:8,color:'#1A3050',fontFamily:'monospace'}}>{p.duration} · {p.agent}</span>
+            </div>
+            <div style={{position:'absolute',inset:0,background:'radial-gradient(ellipse at top right,rgba(255,51,102,0.04),transparent 70%)',pointerEvents:'none'}}/>
+          </div>
+        ))}
+      </div>
+      {/* AEGIS note */}
+      <div style={{padding:'12px 16px',background:'rgba(4,6,13,0.95)',borderTop:'1px solid #0A1D33',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+        <div>
+          <div style={{fontSize:9,color:'#FF3366',fontFamily:'monospace',letterSpacing:'.15em',marginBottom:3}}>◈ AEGIS RISK ENGINE</div>
+          <div style={{fontSize:9,color:'#2A5070',fontFamily:'monospace'}}>Max loss per trade capped at -2.5%</div>
+        </div>
+        <div style={{textAlign:'right'}}>
+          <div style={{fontSize:9,color:'#2A5070',fontFamily:'monospace',marginBottom:2}}>TOTAL LOSS EXPOSURE</div>
+          <div style={{fontSize:18,fontWeight:900,color:'#FF3366',fontFamily:'monospace'}}>-$61.34</div>
+          <div style={{fontSize:8,color:'#2A5070',fontFamily:'monospace'}}>vs +$247.83 wins this session</div>
+        </div>
+      </div>
+      {/* Footer */}
+      <div style={{padding:'8px 16px',borderTop:'1px solid #0A1D33',display:'flex',justifyContent:'space-between',fontSize:9,color:'#2A5070',fontFamily:'monospace'}}>
+        <span>LOSS RATE ~35% · NORMAL FOR ANY STRATEGY</span>
+        <span style={{color:'#00FF88'}}>NET SESSION: +$186.49</span>
+      </div>
+    </div>
+  );
+};
+
 function ProofSection() {
   const [activeTab,setActiveTab]=useState('trades');
   const TABS=[
@@ -1444,28 +1513,7 @@ function ProofSection() {
           )}
 
           {/* ── LOSSES ── */}
-          {activeTab==='losses'&&(
-            <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(320px,1fr))',gap:16}}>
-              {[1,2,3].map(i=>(
-                <div key={i} style={{background:'rgba(6,10,18,0.8)',border:'1px solid rgba(0,242,254,0.1)',borderRadius:12,overflow:'hidden',transition:'all .3s',cursor:'pointer'}}
-                  onMouseEnter={e=>{(e.currentTarget as HTMLDivElement).style.borderColor='rgba(0,242,254,0.3)';(e.currentTarget as HTMLDivElement).style.transform='translateY(-4px)';(e.currentTarget as HTMLDivElement).style.boxShadow='0 12px 40px rgba(0,0,0,0.4)';}}
-                  onMouseLeave={e=>{(e.currentTarget as HTMLDivElement).style.borderColor='rgba(0,242,254,0.1)';(e.currentTarget as HTMLDivElement).style.transform='translateY(0)';(e.currentTarget as HTMLDivElement).style.boxShadow='none';}}>
-                  <div style={{width:'100%',aspectRatio:'16/10',background:'#060A12',display:'flex',alignItems:'center',justifyContent:'center',position:'relative',overflow:'hidden'}}>
-                    <div style={{textAlign:'center',color:'#0A1828',fontFamily:'monospace'}}>
-                      <div style={{fontSize:32,marginBottom:8}}>◌</div>
-                      <div style={{fontSize:10,letterSpacing:'.2em'}}>SCREENSHOT {i}</div>
-                      <div style={{fontSize:9,marginTop:4,opacity:.7}}>/public/screenshots/losses-{i}.png</div>
-                    </div>
-                    <div style={{position:'absolute',inset:0,pointerEvents:'none',background:'repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,242,254,0.015) 3px,rgba(0,242,254,0.015) 4px)'}}/>
-                  </div>
-                  <div style={{padding:'12px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-                    <span style={{fontSize:10,color:K.dim,fontFamily:'monospace'}}>▼ LOSS CONTAINED</span>
-                    <span style={{fontSize:10,color:K.r,fontFamily:'monospace',fontWeight:700}}>-$18.40</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+          {activeTab==='losses'&&<LossesPreview/>}
         </Fade>
         <Fade delay={.2}>
           <div style={{marginTop:24,display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))',gap:8}}>
