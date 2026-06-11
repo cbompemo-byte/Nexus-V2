@@ -1252,6 +1252,70 @@ function TAProofSection() {
 }
 
 // ── Proof Section ────────────────────────────────────────────────────────────
+const LiveTradesPreview = () => {
+  const positions=[
+    {sym:'SOL',side:'LONG', entry:76.83,current:77.25,pnl:8.15, pct:0.54, stop:74.91,peak:77.60,col:'#00FF88',progress:65},
+    {sym:'JUP',side:'LONG', entry:1.24, current:1.22, pnl:-16.77,pct:-1.42,stop:1.21, peak:1.26, col:'#FF3366',progress:25},
+    {sym:'JTO',side:'SHORT',entry:3.19, current:3.16, pnl:5.07,  pct:0.97, stop:3.27, peak:3.19, col:'#00FF88',progress:55},
+    {sym:'WIF',side:'TRAIL',entry:2.95, current:3.07, pnl:42.31, pct:4.13, stop:3.04, peak:3.09, col:'#00FF88',progress:88},
+  ];
+  return (
+    <div style={{background:'rgba(4,6,13,0.97)',border:'1px solid rgba(0,255,136,0.15)',borderRadius:12,overflow:'hidden',boxShadow:'0 0 40px rgba(0,255,136,0.04)'}}>
+      {/* Terminal bar */}
+      <div style={{padding:'10px 16px',background:'rgba(4,6,13,0.98)',borderBottom:'1px solid rgba(0,255,136,0.1)',display:'flex',alignItems:'center',gap:8}}>
+        {['#FF3366','#FFD700','#00FF88'].map((c,i)=><div key={i} style={{width:9,height:9,borderRadius:'50%',background:c}}/>)}
+        <span style={{flex:1,textAlign:'center',fontSize:9,color:'#2A5070',fontFamily:'monospace',letterSpacing:'.12em'}}>KYMIA LIVE POSITIONS · DEMO SESSION</span>
+        <div style={{display:'flex',alignItems:'center',gap:4,padding:'2px 7px',background:'rgba(0,255,136,0.12)',border:'1px solid rgba(0,255,136,0.3)',borderRadius:10}}>
+          <div style={{width:4,height:4,borderRadius:'50%',background:'#00FF88',animation:'pu 1s infinite'}}/>
+          <span style={{fontSize:7,color:'#00FF88',fontFamily:'monospace'}}>LIVE</span>
+        </div>
+      </div>
+      {/* 2×2 grid */}
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:1,background:'#0A1D33'}}>
+        {positions.map((p,i)=>(
+          <div key={i} style={{padding:'14px 16px',background:'#04060D',borderLeft:`3px solid ${p.col}`,position:'relative',overflow:'hidden'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+              <div style={{display:'flex',gap:6,alignItems:'center'}}>
+                <span style={{fontSize:14,fontWeight:900,color:p.col,fontFamily:'monospace'}}>{p.sym}</span>
+                <span style={{padding:'1px 6px',background:`${p.col}18`,border:`1px solid ${p.col}35`,borderRadius:3,fontSize:8,color:p.col,fontWeight:700}}>
+                  {p.side==='SHORT'?'▼ SHORT':p.side==='TRAIL'?'🔒 TRAIL':'▲ LONG'}
+                </span>
+              </div>
+              <div style={{textAlign:'right'}}>
+                <div style={{fontSize:15,fontWeight:900,color:p.col,fontFamily:'monospace',textShadow:`0 0 10px ${p.col}`}}>{p.pnl>=0?'+$':'-$'}{Math.abs(p.pnl).toFixed(2)}</div>
+                <div style={{fontSize:9,color:p.col,fontFamily:'monospace'}}>{p.pct>=0?'+':''}{p.pct.toFixed(2)}%</div>
+              </div>
+            </div>
+            <div style={{display:'flex',justifyContent:'space-between',fontSize:9,color:'#2A5070',fontFamily:'monospace',marginBottom:8}}>
+              <span>@${p.entry}</span>
+              <span style={{color:'#A8D0EC'}}>${p.current}</span>
+              <span style={{color:'#FF3366'}}>SL ${p.stop}</span>
+            </div>
+            <div style={{height:3,background:'#06090F',borderRadius:2,overflow:'hidden'}}>
+              <div style={{height:'100%',width:`${p.progress}%`,background:`linear-gradient(90deg,${p.col}60,${p.col})`,borderRadius:2,boxShadow:`0 0 6px ${p.col}`}}/>
+            </div>
+            {p.pnl>0&&<div style={{position:'absolute',inset:0,background:`radial-gradient(ellipse at top right,${p.col}08,transparent 70%)`,pointerEvents:'none'}}/>}
+          </div>
+        ))}
+      </div>
+      {/* Best trade */}
+      <div style={{padding:'14px 16px',background:'rgba(0,255,136,0.04)',borderTop:'1px solid rgba(0,255,136,0.1)',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+        <div>
+          <div style={{fontSize:9,color:'#00FF88',fontFamily:'monospace',letterSpacing:'.15em',marginBottom:3}}>▲ CLOSED · BEST TRADE · POPCAT</div>
+          <div style={{fontSize:9,color:'#2A5070',fontFamily:'monospace'}}>Trailing stop locked gains · AEGIS</div>
+        </div>
+        <div style={{fontSize:24,fontWeight:900,color:'#00FF88',fontFamily:'monospace',textShadow:'0 0 16px #00FF88'}}>+$67.06</div>
+      </div>
+      {/* Footer */}
+      <div style={{padding:'8px 16px',borderTop:'1px solid #0A1D33',display:'flex',justifyContent:'space-between',fontSize:9,color:'#2A5070',fontFamily:'monospace'}}>
+        <span>4 SIMULTANEOUS POSITIONS</span>
+        <span style={{color:'#00FF88'}}>LONG + SHORT ACTIVE</span>
+        <span>REAL PRICES</span>
+      </div>
+    </div>
+  );
+};
+
 function ProofSection() {
   const [activeTab,setActiveTab]=useState('trades');
   const TABS=[
@@ -1300,21 +1364,8 @@ function ProofSection() {
           {/* ── OPEN TRADES ── */}
           {activeTab==='trades'&&(
             <div className="kymia-grid-2" style={{display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(280px, 1fr))',gap:24,alignItems:'start'}}>
-              {/* Left: screenshot in terminal frame */}
-              <div style={{background:'#060A12',border:'1px solid rgba(0,242,254,0.2)',borderRadius:10,overflow:'hidden'}}>
-                <div style={{background:'rgba(6,10,18,0.95)',borderBottom:'1px solid rgba(0,242,254,0.1)',padding:'8px 14px',display:'flex',alignItems:'center',gap:6}}>
-                  {['#FF3366','#FFD700','#00FF88'].map((c,i)=><div key={i} style={{width:8,height:8,borderRadius:'50%',background:c}}/>)}
-                  <span style={{flex:1,textAlign:'center',fontSize:9,color:K.dim,fontFamily:'monospace',letterSpacing:'.12em'}}>KYMIA · LIVE SESSION</span>
-                  <div style={{display:'flex',alignItems:'center',gap:4,padding:'2px 7px',background:'rgba(0,255,136,0.1)',border:'1px solid rgba(0,255,136,0.3)',borderRadius:10}}>
-                    <div style={{width:4,height:4,borderRadius:'50%',background:K.g,animation:'pu 1s infinite'}}/>
-                    <span style={{fontSize:7,color:K.g}}>LIVE</span>
-                  </div>
-                </div>
-                <div style={{position:'relative'}}>
-                  <img src="/screenshots/trades-1.png" alt="KYMIA Live Trades — 4 simultaneous positions" style={{width:'100%',display:'block',height:'auto'}}/>
-                  <div style={{position:'absolute',inset:0,pointerEvents:'none',background:'repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,242,254,0.012) 3px,rgba(0,242,254,0.012) 4px)'}}/>
-                </div>
-              </div>
+              {/* Left: live trades UI */}
+              <LiveTradesPreview />
               {/* Right: position cards */}
               <div style={{display:'flex',flexDirection:'column',gap:10}}>
                 <div style={{fontSize:9,color:K.dim,fontFamily:'monospace',letterSpacing:'.15em',marginBottom:4}}>◈ 4 SIMULTANEOUS POSITIONS · LONG + SHORT</div>
