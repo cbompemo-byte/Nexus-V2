@@ -584,9 +584,9 @@ function Nav() {
     return ()=>window.removeEventListener("scroll",fn);
   },[]);
   return (
-    <div style={{position:"fixed",top:0,left:0,right:0,zIndex:900,height:52,display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 32px",background:"rgba(4,6,13,0.92)",backdropFilter:"blur(16px)",borderBottom:"1px solid rgba(0,242,254,0.08)",fontFamily:F,transform:show?"translateY(0)":"translateY(-100%)",transition:"transform .3s ease"}}>
+    <div className="kymia-nav" style={{position:"fixed",top:0,left:0,right:0,zIndex:900,height:52,display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 32px",background:"rgba(4,6,13,0.92)",backdropFilter:"blur(16px)",borderBottom:"1px solid rgba(0,242,254,0.08)",fontFamily:F,transform:show?"translateY(0)":"translateY(-100%)",transition:"transform .3s ease"}}>
       <a href="/" style={{fontSize:15,fontWeight:900,color:K.c,textDecoration:"none",letterSpacing:".2em",textShadow:`0 0 16px ${K.c}`}}>◈ KYMIA</a>
-      <div style={{display:"flex",gap:28,fontSize:10,color:K.dim,letterSpacing:".1em"}}>
+      <div className="kymia-nav-links" style={{display:"flex",gap:28,fontSize:10,color:K.dim,letterSpacing:".1em"}}>
         {[["HOW IT WORKS","#how"],["DATA","#data"],["PERFORMANCE","#perf"],["PRICING","/pricing"],["CRISIS","#crisis"]].map(([l,h])=>(
           <a key={l} href={h} style={{color:K.dim,textDecoration:"none",transition:"color .2s"}}
             onMouseEnter={e=>(e.currentTarget.style.color=K.c)} onMouseLeave={e=>(e.currentTarget.style.color=K.dim)}>{l}</a>
@@ -631,18 +631,18 @@ function LivePrices() {
 function PerformanceSection() {
   const WALLET = (process.env.NEXT_PUBLIC_KYMIA_WALLET as string|undefined)||null;
   return (
-    <section id="performance" style={{padding:'100px 40px',background:'rgba(6,10,18,0.5)',position:'relative',borderTop:'1px solid rgba(0,242,254,0.06)',borderBottom:'1px solid rgba(0,242,254,0.06)'}}>
+    <section id="performance" className="kymia-section" style={{padding:'100px 40px',background:'rgba(6,10,18,0.5)',position:'relative',borderTop:'1px solid rgba(0,242,254,0.06)',borderBottom:'1px solid rgba(0,242,254,0.06)'}}>
       <div style={{position:'absolute',inset:0,opacity:0.03,backgroundImage:`linear-gradient(#00F2FE 1px,transparent 1px),linear-gradient(90deg,#00F2FE 1px,transparent 1px)`,backgroundSize:'40px 40px'}}/>
       <div style={{maxWidth:1100,margin:'0 auto',position:'relative'}}>
         <Fade>
           <div style={{textAlign:'center',marginBottom:64}}>
             <div style={{fontSize:10,color:K.c,letterSpacing:'.4em',marginBottom:12,fontFamily:'monospace'}}>◈ PROOF OF INTELLIGENCE</div>
-            <h2 style={{fontSize:38,fontWeight:900,color:'white',margin:0,marginBottom:12}}>Verifiable on Solana blockchain.</h2>
+            <h2 className="kymia-h2" style={{fontSize:38,fontWeight:900,color:'white',margin:0,marginBottom:12}}>Verifiable on Solana blockchain.</h2>
             <p style={{fontSize:14,color:K.dim,lineHeight:1.8,margin:0}}>Every live trade is recorded on-chain. No claims. No promises.<br/>Just transparent, verifiable results anyone can check.</p>
           </div>
         </Fade>
         <Fade delay={.1}>
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:24,marginBottom:32}}>
+          <div className="kymia-grid-2" style={{display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(280px, 1fr))',gap:24,marginBottom:32}}>
             {/* LEFT — stats */}
             <div style={{background:'rgba(4,6,13,0.9)',border:'1px solid rgba(0,242,254,0.1)',borderRadius:12,padding:'32px 36px',backdropFilter:'blur(12px)'}}>
               <div style={{fontSize:10,color:K.dim,letterSpacing:'.2em',marginBottom:24,fontFamily:'monospace'}}>◉ AGENT PERFORMANCE METRICS</div>
@@ -735,17 +735,28 @@ function APISection() {
   };
 
   return (
-    <section style={{padding:'100px 40px',background:'#04060D',position:'relative'}}>
+    <section className="kymia-section" style={{padding:'100px 40px',background:'#04060D',position:'relative'}}>
       <div style={{maxWidth:1000,margin:'0 auto'}}>
         <Fade>
           <div style={{textAlign:'center',marginBottom:64}}>
             <div style={{fontSize:10,color:K.c,letterSpacing:'.4em',marginBottom:12,fontFamily:'monospace'}}>◈ REAL DATA SOURCES</div>
-            <h2 style={{fontSize:36,fontWeight:900,color:'white',margin:'0 0 12px'}}>Not simulated. Not estimated.</h2>
+            <h2 className="kymia-h2" style={{fontSize:36,fontWeight:900,color:'white',margin:'0 0 12px'}}>Not simulated. Not estimated.</h2>
             <p style={{fontSize:14,color:K.dim,lineHeight:1.8,margin:0}}>Every signal comes from real institutional APIs.<br/>Hover any source to see which agents use it.</p>
           </div>
         </Fade>
         <Fade delay={.1}>
-          <div style={{position:'relative',width:600,height:600,margin:'0 auto'}}>
+          <div>
+          {/* Mobile API grid */}
+          <div className="kymia-mobile-api-grid" style={{display:'none',gridTemplateColumns:'repeat(4,1fr)',gap:8,maxWidth:360,margin:'0 auto 32px'}}>
+            {APIS.map((api,i)=>(
+              <div key={api.name} style={{display:'flex',flexDirection:'column',alignItems:'center',gap:4,padding:'10px 4px',background:'rgba(6,10,18,0.8)',border:`1px solid ${api.col}25`,borderRadius:8}}>
+                <div style={{opacity:0.8}}>{api.logo}</div>
+                <div style={{fontSize:7,color:api.col,fontFamily:'monospace',fontWeight:700,textAlign:'center',lineHeight:1.2}}>{api.name}</div>
+              </div>
+            ))}
+          </div>
+          {/* Desktop orbital */}
+          <div className="kymia-desktop-api" style={{position:'relative',width:600,height:600,margin:'0 auto'}}>
             <svg width="600" height="600" style={{position:'absolute',inset:0,overflow:'visible'}}>
               <defs>
                 <filter id="api-glow" x="-50%" y="-50%" width="200%" height="200%">
@@ -805,7 +816,8 @@ function APISection() {
                 </div>
               );
             })}
-          </div>
+          </div>{/* end kymia-desktop-api */}
+          </div>{/* end Fade wrapper */}
         </Fade>
         <Fade delay={.2}>
           <div style={{textAlign:'center',marginTop:32,fontSize:11,color:K.dim,fontFamily:'monospace',lineHeight:2}}>
@@ -1097,11 +1109,11 @@ function DebateTerminal({onSignalChange}:{onSignalChange?:(s:string)=>void}={}) 
 function GlobeDebateSection() {
   const [sig,setSig]=useState('BUY');
   return (
-    <section style={{padding:'60px 40px',background:'#04060D',position:'relative',borderTop:'1px solid rgba(0,242,254,0.06)',overflow:'hidden'}}>
+    <section className="kymia-section" style={{padding:'60px 40px',background:'#04060D',position:'relative',borderTop:'1px solid rgba(0,242,254,0.06)',overflow:'hidden'}}>
       <div style={{position:'absolute',inset:0,pointerEvents:'none',background:'repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,242,254,0.012) 3px,rgba(0,242,254,0.012) 4px)'}}/>
-      <div style={{maxWidth:1100,margin:'0 auto',display:'grid',gridTemplateColumns:'320px 1fr',gap:40,alignItems:'start',position:'relative'}}>
+      <div className="kymia-grid-2 kymia-hero-grid" style={{maxWidth:1100,margin:'0 auto',display:'grid',gridTemplateColumns:'320px 1fr',gap:40,alignItems:'start',position:'relative'}}>
         {/* LEFT — globe + stats */}
-        <div style={{display:'flex',flexDirection:'column',gap:16}}>
+        <div className="kymia-globe-hide" style={{display:'flex',flexDirection:'column',gap:16}}>
           <div style={{fontSize:10,color:K.c,letterSpacing:'.4em',fontFamily:'monospace'}}>◈ GLOBAL MACRO SPHERE</div>
           <div style={{background:'#060A12',border:'1px solid rgba(0,242,254,0.12)',borderRadius:12,padding:16,display:'flex',flexDirection:'column',alignItems:'center',boxShadow:'0 0 40px rgba(0,242,254,0.04),inset 0 0 30px rgba(0,0,0,0.5)'}}>
             <CyberGlobe sig={sig}/>
@@ -1121,10 +1133,10 @@ function GlobeDebateSection() {
           </div>
         </div>
         {/* RIGHT — debate terminal */}
-        <div>
+        <div className="kymia-debate-full">
           <div style={{marginBottom:20}}>
             <div style={{fontSize:10,color:K.c,letterSpacing:'.4em',marginBottom:8,fontFamily:'monospace'}}>◈ LIVE SWARM INTELLIGENCE</div>
-            <h2 style={{fontSize:40,fontWeight:900,color:'white',margin:0,lineHeight:1.2}}>Agents debate.<br/><span style={{color:K.c}}>Markets obey.</span></h2>
+            <h2 className="kymia-h2" style={{fontSize:40,fontWeight:900,color:'white',margin:0,lineHeight:1.2}}>Agents debate.<br/><span style={{color:K.c}}>Markets obey.</span></h2>
             <p style={{fontSize:13,color:K.dim,lineHeight:1.8,marginTop:10,marginBottom:0}}>Every 15 seconds, 18 agents analyze real data and debate until one signal emerges.</p>
           </div>
           <DebateTerminal onSignalChange={setSig}/>
@@ -1173,7 +1185,7 @@ function TAProofSection() {
           <div style={{fontSize:22,fontWeight:900,color:'white'}}>Every trade has a technical thesis.</div>
         </div>
       </div>
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:24}}>
+      <div className="kymia-grid-2" style={{display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(280px, 1fr))',gap:24}}>
         {/* LEFT — step reveal */}
         <div>
           <div style={{fontSize:10,color:K.dim,fontFamily:'monospace',marginBottom:14,letterSpacing:'.1em'}}>SOL/USD · 5m · BINANCE · BEFORE ENTRY @$81.22</div>
@@ -1266,12 +1278,12 @@ function ProofSection() {
   ];
   const TICKER_ITEMS='SOL +$8.15 · JUP -$16.77 · JTO SHORT +$5.07 · WIF TRAIL +$42.31 · POPCAT +$67.06 · SOL +$8.15 · JUP -$16.77 · JTO SHORT +$5.07 · WIF TRAIL +$42.31 · POPCAT +$67.06';
   return (
-    <section style={{padding:'100px 40px',background:'#04060D',position:'relative',borderTop:'1px solid rgba(0,242,254,0.06)'}}>
+    <section className="kymia-section" style={{padding:'100px 40px',background:'#04060D',position:'relative',borderTop:'1px solid rgba(0,242,254,0.06)'}}>
       <div style={{maxWidth:1100,margin:'0 auto'}}>
         <Fade>
           <div style={{textAlign:'center',marginBottom:48}}>
             <div style={{fontSize:10,color:K.c,letterSpacing:'.4em',marginBottom:12,fontFamily:'monospace'}}>◈ PROOF OF RESULTS</div>
-            <h2 style={{fontSize:38,fontWeight:900,color:'white',margin:'0 0 12px'}}>No claims. Just results.</h2>
+            <h2 className="kymia-h2" style={{fontSize:38,fontWeight:900,color:'white',margin:'0 0 12px'}}>No claims. Just results.</h2>
             <p style={{fontSize:14,color:K.dim,lineHeight:1.8,margin:0}}>Real sessions. Real trades. Real P&L.<br/>Including the losses — because that's what trust looks like.</p>
           </div>
         </Fade>
@@ -1287,7 +1299,7 @@ function ProofSection() {
         <Fade delay={.15}>
           {/* ── OPEN TRADES ── */}
           {activeTab==='trades'&&(
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:24,alignItems:'start'}}>
+            <div className="kymia-grid-2" style={{display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(280px, 1fr))',gap:24,alignItems:'start'}}>
               {/* Left: screenshot in terminal frame */}
               <div style={{background:'#060A12',border:'1px solid rgba(0,242,254,0.2)',borderRadius:10,overflow:'hidden'}}>
                 <div style={{background:'rgba(6,10,18,0.95)',borderBottom:'1px solid rgba(0,242,254,0.1)',padding:'8px 14px',display:'flex',alignItems:'center',gap:6}}>
@@ -1340,7 +1352,7 @@ function ProofSection() {
 
           {/* ── TRADE PROFILE ── */}
           {activeTab==='profile'&&(
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:24,alignItems:'start'}}>
+            <div className="kymia-grid-2" style={{display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(280px, 1fr))',gap:24,alignItems:'start'}}>
               {/* Left: DNA card screenshot */}
               <div style={{border:'1px solid rgba(189,0,255,0.3)',borderRadius:10,overflow:'hidden',boxShadow:'0 0 40px rgba(189,0,255,0.08)'}}>
                 <img src="/screenshots/profile-1.png" alt="KYMIA Performance DNA — Momentum Predator" style={{width:'100%',display:'block',height:'auto'}}/>
@@ -1442,12 +1454,12 @@ function ProofSection() {
 // ── Founder Section ───────────────────────────────────────────────────────────
 function FounderSection() {
   return (
-    <section style={{padding:'100px 40px',background:'rgba(6,10,18,0.4)',position:'relative',borderTop:'1px solid rgba(0,242,254,0.06)',overflow:'hidden'}}>
+    <section className="kymia-section" style={{padding:'100px 40px',background:'rgba(6,10,18,0.4)',position:'relative',borderTop:'1px solid rgba(0,242,254,0.06)',overflow:'hidden'}}>
       <div style={{position:'absolute',inset:0,opacity:0.02,backgroundImage:`linear-gradient(rgba(0,242,254,1) 1px,transparent 1px),linear-gradient(90deg,rgba(0,242,254,1) 1px,transparent 1px)`,backgroundSize:'60px 60px'}}/>
-      <div style={{maxWidth:900,margin:'0 auto',position:'relative',display:'grid',gridTemplateColumns:'1fr 1.6fr',gap:64,alignItems:'center'}}>
+      <div className="kymia-founder-grid" style={{maxWidth:900,margin:'0 auto',position:'relative',display:'grid',gridTemplateColumns:'1fr 1.6fr',gap:64,alignItems:'center'}}>
         {/* LEFT — hexagonal avatar */}
         <Fade>
-          <div style={{position:'relative'}}>
+          <div className="kymia-founder-avatar" style={{position:'relative'}}>
             <div style={{width:260,height:260,position:'relative',margin:'0 auto'}}>
               <svg width="260" height="260" style={{position:'absolute',inset:0}}>
                 <polygon points="130,8 244,68 244,192 130,252 16,192 16,68" fill="none" stroke={K.c} strokeWidth="1" opacity="0.3"/>
@@ -1478,7 +1490,7 @@ function FounderSection() {
         <Fade delay={.15}>
           <div>
             <div style={{fontSize:10,color:K.c,letterSpacing:'.4em',marginBottom:16,fontFamily:'monospace'}}>◈ THE FOUNDER</div>
-            <h2 style={{fontSize:38,fontWeight:900,color:'white',margin:'0 0 8px',lineHeight:1.2,fontFamily:'monospace'}}>Cedrick B.</h2>
+            <h2 className="kymia-h2" style={{fontSize:38,fontWeight:900,color:'white',margin:'0 0 8px',lineHeight:1.2,fontFamily:'monospace'}}>Cedrick B.</h2>
             <div style={{fontSize:12,color:K.c,fontFamily:'monospace',letterSpacing:'.15em',marginBottom:24,opacity:0.7}}>BUILDER · ENTREPRENEUR · ITALY</div>
             <p style={{fontSize:14,color:K.dim,lineHeight:1.9,marginBottom:24,margin:'0 0 24px'}}>
               "I built KYMIA because I was tired of watching dashboards that looked intelligent but traded on random signals. I wanted something that actually reasons — like a real trading desk, but autonomous."
@@ -1521,12 +1533,12 @@ const FAQS=[
 function FAQSection() {
   const [open,setOpen]=useState<number|null>(0);
   return (
-    <section style={{padding:'100px 40px',background:'#04060D',borderTop:'1px solid rgba(0,242,254,0.06)'}}>
+    <section className="kymia-section" style={{padding:'clamp(60px, 8vw, 100px) clamp(20px, 5vw, 80px)',background:'#04060D',borderTop:'1px solid rgba(0,242,254,0.06)'}}>
       <div style={{maxWidth:780,margin:'0 auto'}}>
         <Fade>
           <div style={{textAlign:'center',marginBottom:56}}>
             <div style={{fontSize:10,color:K.c,letterSpacing:'.4em',marginBottom:12,fontFamily:'monospace'}}>◈ QUESTIONS & ANSWERS</div>
-            <h2 style={{fontSize:36,fontWeight:900,color:'white',margin:0}}>Everything you need to know.</h2>
+            <h2 className="kymia-h2" style={{fontSize:36,fontWeight:900,color:'white',margin:0}}>Everything you need to know.</h2>
           </div>
         </Fade>
         <div style={{display:'flex',flexDirection:'column',gap:4}}>
@@ -1597,14 +1609,14 @@ function PricingPreview() {
     {name:"INSTITUTIONAL",price:"$499/mo",col:"#BD00FF",cta:"Contact Us",link:"mailto:contact@kymia.ai"},
   ];
   return(
-    <section style={{padding:"80px 40px",background:"rgba(6,10,18,0.4)",borderTop:"1px solid rgba(0,242,254,0.06)"}}>
+    <section className="kymia-section" style={{padding:"80px 40px",background:"rgba(6,10,18,0.4)",borderTop:"1px solid rgba(0,242,254,0.06)"}}>
       <div style={{maxWidth:920,margin:"0 auto",textAlign:"center"}}>
         <div style={{fontSize:10,color:K.c,letterSpacing:".4em",marginBottom:12,fontFamily:F}}>◈ PRICING</div>
-        <h2 style={{fontSize:34,fontWeight:900,color:"white",margin:"0 0 12px",fontFamily:F,lineHeight:1.2}}>Free to start. Fair to scale.</h2>
+        <h2 className="kymia-h2" style={{fontSize:34,fontWeight:900,color:"white",margin:"0 0 12px",fontFamily:F,lineHeight:1.2}}>Free to start. Fair to scale.</h2>
         <p style={{fontSize:14,color:K.dim,lineHeight:1.85,marginBottom:40}}>Sandbox is always free. Pay only when you go live.</p>
-        <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:32}}>
+        <div className="kymia-pricing-grid" style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:32}}>
           {MINI_PLANS.map((p,i)=>(
-            <div key={i} style={{padding:"22px 16px",background:p.popular?"rgba(0,242,254,0.06)":"rgba(6,10,18,0.8)",border:`1px solid ${p.popular?"rgba(0,242,254,0.3)":p.col+"25"}`,borderRadius:10,textAlign:"center",boxShadow:p.popular?"0 0 32px rgba(0,242,254,0.08)":"none",position:"relative"}}>
+            <div className="kymia-pricing-card" key={i} style={{padding:"22px 16px",background:p.popular?"rgba(0,242,254,0.06)":"rgba(6,10,18,0.8)",border:`1px solid ${p.popular?"rgba(0,242,254,0.3)":p.col+"25"}`,borderRadius:10,textAlign:"center",boxShadow:p.popular?"0 0 32px rgba(0,242,254,0.08)":"none",position:"relative"}}>
               {p.popular&&<div style={{position:"absolute",top:-11,left:"50%",transform:"translateX(-50%)",padding:"3px 14px",background:"linear-gradient(90deg,#00F2FE,#0051FF)",borderRadius:20,fontSize:8,color:"white",fontWeight:700,letterSpacing:".12em",whiteSpace:"nowrap"}}>MOST POPULAR</div>}
               <div style={{fontSize:11,color:p.col,fontWeight:700,letterSpacing:".15em",marginBottom:8,fontFamily:F}}>{p.name}</div>
               <div style={{fontSize:17,fontWeight:900,color:"white",marginBottom:14,fontFamily:F}}>{p.price}</div>
@@ -1622,9 +1634,9 @@ function Footer() {
   return (
     <footer style={{background:'rgba(4,6,13,0.98)',borderTop:'1px solid rgba(0,242,254,0.08)',padding:'60px 40px 32px'}}>
       <div style={{maxWidth:1100,margin:'0 auto'}}>
-        <div style={{display:'grid',gridTemplateColumns:'2fr 1fr 1fr 1fr',gap:48,marginBottom:48}}>
+        <div className="kymia-footer-grid" style={{display:'grid',gridTemplateColumns:'2fr 1fr 1fr 1fr',gap:48,marginBottom:48}}>
           {/* Brand */}
-          <div>
+          <div className="kymia-footer-brand">
             <div style={{fontSize:24,fontWeight:900,color:K.c,fontFamily:'monospace',letterSpacing:'.2em',textShadow:'0 0 20px #00F2FE',marginBottom:12}}>◈ KYMIA</div>
             <div style={{fontSize:10,color:K.dim,letterSpacing:'.2em',marginBottom:16}}>AUTONOMOUS QUANT INTELLIGENCE</div>
             <p style={{fontSize:12,color:'#1A3050',lineHeight:1.8,maxWidth:280,margin:0}}>18 AI agents analyzing Solana markets 24/7. Real data. Real signals. Verifiable on-chain.</p>
@@ -1731,7 +1743,7 @@ export default function LandingPage() {
       <div style={{position:"fixed",inset:0,pointerEvents:"none",zIndex:1,background:"radial-gradient(ellipse at center,transparent 60%,rgba(2,4,10,0.65) 100%)"}}/>
 
       {/* ── HERO ─────────────────────────────────────────────────────────── */}
-      <section style={{minHeight:"100vh",display:"flex",alignItems:"center",position:"relative",padding:"80px 48px 80px",maxWidth:1280,margin:"0 auto",gap:40,flexWrap:"wrap"}}>
+      <section className="kymia-section kymia-hero-grid" style={{minHeight:"100vh",display:"grid",gridTemplateColumns:"1fr 1fr",alignItems:"center",position:"relative",padding:"80px 48px 80px",maxWidth:1280,margin:"0 auto",gap:40}}>
         <motion.div initial={{opacity:0,x:-28}} animate={{opacity:1,x:0}} transition={{duration:.8,delay:.1}} style={{flex:"1 1 440px",minWidth:0}}>
           <div style={{marginBottom:18}}>
             <div style={{fontSize:72,fontWeight:900,color:K.c,letterSpacing:".18em",lineHeight:1,textShadow:`0 0 40px ${K.c},0 0 80px ${K.c}40`}}>◈ KYMIA</div>
@@ -1743,13 +1755,13 @@ export default function LandingPage() {
           </div>
           {/* Animated headline */}
           <div style={{marginBottom:24,lineHeight:1.2}}>
-            <div style={{display:"flex",flexWrap:"wrap",gap:12,fontSize:48,fontWeight:900}}>
+            <div className="kymia-h1" style={{display:"flex",flexWrap:"wrap",gap:12,fontSize:"clamp(28px, 7vw, 52px)",fontWeight:900}}>
               {words.map((w,i)=>(
                 <span key={i} style={{color:i>=3?K.c:"#FFFFFF",opacity:wordIdx>=i?1:0,transform:wordIdx>=i?"translateY(0)":"translateY(14px)",transition:`opacity .35s, transform .35s`,display:"inline-block",textShadow:i>=3?`0 0 20px ${K.c}50`:undefined}}>{w}</span>
               ))}
             </div>
           </div>
-          <div style={{fontSize:14,color:K.dim,lineHeight:1.9,marginBottom:28,maxWidth:460}}>
+          <div className="kymia-body" style={{fontSize:"clamp(13px, 3.5vw, 15px)",color:K.dim,lineHeight:1.9,marginBottom:28,maxWidth:460}}>
             18 AI agents are trading Solana right now.<br/>
             <span style={{color:K.hi}}>Watch them debate, decide, and execute — live.</span>
           </div>
@@ -1765,9 +1777,9 @@ export default function LandingPage() {
           </div>
           {/* CTAs */}
           <div style={{display:"flex",flexDirection:"column",gap:10,marginBottom:14}}>
-            <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+            <div className="kymia-cta-row" style={{display:"flex",gap:10,flexWrap:"wrap"}}>
               <div>
-                <a href="/nexus?mode=demo" style={{display:"block",padding:"13px 24px",background:"rgba(0,255,136,0.12)",border:"1.5px solid rgba(0,255,136,0.5)",color:K.g,borderRadius:6,fontSize:13,textDecoration:"none",letterSpacing:".03em",fontFamily:F,fontWeight:700,transition:"all .25s"}}
+                <a className="kymia-cta" href="/nexus?mode=demo" style={{display:"block",padding:"13px 24px",background:"rgba(0,255,136,0.12)",border:"1.5px solid rgba(0,255,136,0.5)",color:K.g,borderRadius:6,fontSize:13,textDecoration:"none",letterSpacing:".03em",fontFamily:F,fontWeight:700,transition:"all .25s"}}
                   onMouseEnter={e=>(e.currentTarget.style.boxShadow=`0 0 30px rgba(0,255,136,0.3)`)}
                   onMouseLeave={e=>(e.currentTarget.style.boxShadow="none")}>
                   Watch AI Trade Live →
@@ -1775,7 +1787,7 @@ export default function LandingPage() {
                 <div style={{fontSize:9,color:K.dim,marginTop:5,letterSpacing:".1em"}}>Free · No signup · $10K virtual capital</div>
               </div>
               <div>
-                <a href="/nexus?mode=live" style={{display:"block",padding:"13px 24px",background:"rgba(0,242,254,0.12)",border:"1.5px solid rgba(0,242,254,0.5)",color:K.c,borderRadius:6,fontSize:13,textDecoration:"none",letterSpacing:".03em",fontFamily:F,fontWeight:700,transition:"all .25s"}}
+                <a className="kymia-cta" href="/nexus?mode=live" style={{display:"block",padding:"13px 24px",background:"rgba(0,242,254,0.12)",border:"1.5px solid rgba(0,242,254,0.5)",color:K.c,borderRadius:6,fontSize:13,textDecoration:"none",letterSpacing:".03em",fontFamily:F,fontWeight:700,transition:"all .25s"}}
                   onMouseEnter={e=>(e.currentTarget.style.boxShadow=`0 0 30px rgba(0,242,254,0.3)`)}
                   onMouseLeave={e=>(e.currentTarget.style.boxShadow="none")}>
                   ⚡ Connect Phantom → Real Trading
@@ -1794,7 +1806,7 @@ export default function LandingPage() {
           style={{flex:"1 1 460px",minWidth:0,display:"flex",flexDirection:"column",gap:20,paddingTop:16}}>
           <div style={{position:"relative",borderRadius:12,overflow:"hidden",border:"1px solid rgba(0,242,254,0.25)",boxShadow:"0 0 60px rgba(0,242,254,0.08)"}}>
             {/* Terminal bar */}
-            <div style={{background:"rgba(6,10,18,0.95)",borderBottom:"1px solid rgba(0,242,254,0.1)",padding:"8px 14px",display:"flex",alignItems:"center",gap:6}}>
+            <div className="kymia-video-bar" style={{background:"rgba(6,10,18,0.95)",borderBottom:"1px solid rgba(0,242,254,0.1)",padding:"8px 14px",display:"flex",alignItems:"center",gap:6}}>
               {["#FF3366","#FFD700","#00FF88"].map((c,i)=>(
                 <div key={i} style={{width:9,height:9,borderRadius:"50%",background:c}}/>
               ))}
@@ -1818,7 +1830,7 @@ export default function LandingPage() {
       </section>
 
       {/* ── LANDING SWARM ────────────────────────────────────────────────── */}
-      <section style={{padding:"100px 40px",background:"#04060D",position:"relative",overflow:"hidden"}}>
+      <section className="kymia-section" style={{padding:"100px 40px",background:"#04060D",position:"relative",overflow:"hidden"}}>
         {/* ambient glow */}
         <div style={{position:"absolute",top:"50%",left:"50%",transform:"translate(-50%,-50%)",width:600,height:600,borderRadius:"50%",background:"radial-gradient(circle,rgba(0,242,254,0.04) 0%,transparent 70%)",pointerEvents:"none"}}/>
         <Fade>
@@ -1829,9 +1841,9 @@ export default function LandingPage() {
           </div>
         </Fade>
         <Fade delay={.1}>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 560px 1fr",gap:48,alignItems:"center",maxWidth:1280,margin:"0 auto"}}>
+          <div className="kymia-swarm-layout" style={{display:"grid",gridTemplateColumns:"1fr 560px 1fr",gap:48,alignItems:"center",maxWidth:1280,margin:"0 auto"}}>
             <ExplanationPanel steps={LEFT_STEPS}/>
-            <LandingSwarm/>
+            <div className="kymia-agent-network"><LandingSwarm/></div>
             <ExplanationPanel steps={RIGHT_STEPS}/>
           </div>
         </Fade>
@@ -1861,17 +1873,17 @@ export default function LandingPage() {
       <FAQSection/>
 
       {/* ── BENTO GRID ───────────────────────────────────────────────────── */}
-      <section style={{padding:"80px 48px",maxWidth:1280,margin:"0 auto"}}>
+      <section className="kymia-section" style={{padding:"80px 48px",maxWidth:1280,margin:"0 auto"}}>
         <Fade>
           <div style={{textAlign:"center",marginBottom:48}}>
             <div style={{fontSize:11,color:K.c,letterSpacing:".3em",fontFamily:F,marginBottom:12}}>◈ INSIDE THE SWARM</div>
             <div style={{fontSize:13,color:K.dim,lineHeight:1.8}}>18 specialized agents. Real market data. Autonomous decisions.</div>
           </div>
         </Fade>
-        <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:16}}>
+        <div className="kymia-grid-2" style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:16}}>
           {/* Swarm */}
           <Fade delay={.1}>
-            <div style={{...PANEL,padding:24,transition:"all .3s",gridRow:"span 1"}}
+            <div className="kymia-bento-card" style={{...PANEL,padding:24,transition:"all .3s",gridRow:"span 1"}}
               onMouseEnter={e=>{(e.currentTarget as HTMLDivElement).style.borderColor="rgba(0,242,254,0.25)";(e.currentTarget as HTMLDivElement).style.boxShadow="0 8px 32px rgba(0,0,0,.4)";}}
               onMouseLeave={e=>{(e.currentTarget as HTMLDivElement).style.borderColor="rgba(0,242,254,0.08)";(e.currentTarget as HTMLDivElement).style.boxShadow="";}}>
               <div style={{fontSize:9,color:K.c,letterSpacing:".2em",marginBottom:16}}>NEURAL SWARM GRAPH</div>
@@ -1881,7 +1893,7 @@ export default function LandingPage() {
           </Fade>
           {/* Debate */}
           <Fade delay={.18}>
-            <div style={{...PANEL,padding:20,transition:"border-color .3s"}}
+            <div className="kymia-bento-card" style={{...PANEL,padding:20,transition:"border-color .3s"}}
               onMouseEnter={e=>(e.currentTarget as HTMLDivElement).style.borderColor="rgba(0,242,254,0.25)"}
               onMouseLeave={e=>(e.currentTarget as HTMLDivElement).style.borderColor="rgba(0,242,254,0.08)"}>
               <div style={{fontSize:9,color:K.c,letterSpacing:".2em",marginBottom:14}}>SWARM DEBATE</div>
@@ -1904,7 +1916,7 @@ export default function LandingPage() {
           </Fade>
           {/* Radar */}
           <Fade delay={.14}>
-            <div style={{...PANEL,padding:20,transition:"border-color .3s"}}
+            <div className="kymia-bento-card" style={{...PANEL,padding:20,transition:"border-color .3s"}}
               onMouseEnter={e=>(e.currentTarget as HTMLDivElement).style.borderColor="rgba(0,242,254,0.25)"}
               onMouseLeave={e=>(e.currentTarget as HTMLDivElement).style.borderColor="rgba(0,242,254,0.08)"}>
               <div style={{fontSize:9,color:K.c,letterSpacing:".2em",marginBottom:14}}>EDGE RADAR</div>
@@ -1920,7 +1932,7 @@ export default function LandingPage() {
           </Fade>
           {/* Performance */}
           <Fade delay={.2}>
-            <div style={{...PANEL,padding:20,transition:"border-color .3s"}}
+            <div className="kymia-bento-card" style={{...PANEL,padding:20,transition:"border-color .3s"}}
               onMouseEnter={e=>(e.currentTarget as HTMLDivElement).style.borderColor="rgba(0,242,254,0.25)"}
               onMouseLeave={e=>(e.currentTarget as HTMLDivElement).style.borderColor="rgba(0,242,254,0.08)"}>
               <div style={{fontSize:9,color:K.c,letterSpacing:".2em",marginBottom:14}}>ALPHA PERFORMANCE</div>
@@ -1940,7 +1952,7 @@ export default function LandingPage() {
           </Fade>
           {/* Whale */}
           <Fade delay={.24}>
-            <div style={{...PANEL,padding:20,transition:"border-color .3s",gridColumn:"2"}}
+            <div className="kymia-bento-card" style={{...PANEL,padding:20,transition:"border-color .3s",gridColumn:"2"}}
               onMouseEnter={e=>(e.currentTarget as HTMLDivElement).style.borderColor="rgba(0,242,254,0.25)"}
               onMouseLeave={e=>(e.currentTarget as HTMLDivElement).style.borderColor="rgba(0,242,254,0.08)"}>
               <div style={{fontSize:9,color:K.c,letterSpacing:".2em",marginBottom:14}}>WHALE TRACKER</div>
@@ -1957,7 +1969,7 @@ export default function LandingPage() {
       </section>
 
       {/* ── HOW IT WORKS ─────────────────────────────────────────────────── */}
-      <section id="how" style={{padding:"80px 48px",maxWidth:1280,margin:"0 auto"}}>
+      <section id="how" className="kymia-section" style={{padding:"80px 48px",maxWidth:1280,margin:"0 auto"}}>
         <Fade><div style={{textAlign:"center",marginBottom:56}}><div style={{fontSize:11,color:K.c,letterSpacing:".3em"}}>◈ THE INTELLIGENCE PROCESS</div></div></Fade>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:0,position:"relative"}}>
           <div style={{position:"absolute",top:52,left:"16.7%",right:"16.7%",height:1,background:`linear-gradient(90deg,${K.g},${K.c})`,opacity:.4}}/>
@@ -1979,12 +1991,12 @@ export default function LandingPage() {
       </section>
 
       {/* ── DATA SOURCES ─────────────────────────────────────────────────── */}
-      <section id="data" style={{padding:"80px 48px",maxWidth:1280,margin:"0 auto"}}>
+      <section id="data" className="kymia-section" style={{padding:"80px 48px",maxWidth:1280,margin:"0 auto"}}>
         <Fade><div style={{textAlign:"center",marginBottom:48}}>
           <div style={{fontSize:11,color:K.c,letterSpacing:".3em",marginBottom:12}}>◈ REAL DATA. VERIFIABLE INTELLIGENCE.</div>
           <div style={{fontSize:13,color:K.dim}}>Not a simulation. Every signal backed by real APIs.</div>
         </div></Fade>
-        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,marginBottom:32}}>
+        <div className="kymia-grid-3" style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(280px, 1fr))",gap:12,marginBottom:32}}>
           {DATA_SOURCES.map((ds,i)=>(
             <Fade key={i} delay={i*.07}>
               <div style={{...PANEL,padding:"16px 18px",transition:"border-color .3s"}}
@@ -2003,9 +2015,9 @@ export default function LandingPage() {
       </section>
 
       {/* ── PERFORMANCE DNA ───────────────────────────────────────────────── */}
-      <section id="perf" style={{padding:"80px 48px",maxWidth:1280,margin:"0 auto"}}>
+      <section id="perf" className="kymia-section" style={{padding:"80px 48px",maxWidth:1280,margin:"0 auto"}}>
         <Fade><div style={{textAlign:"center",marginBottom:48}}><div style={{fontSize:11,color:K.c,letterSpacing:".3em"}}>◈ DISCOVER YOUR TRADING DNA</div></div></Fade>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:48,alignItems:"center"}}>
+        <div className="kymia-grid-2" style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(280px, 1fr))",gap:48,alignItems:"center"}}>
           <Fade delay={.1}>
             <div style={{border:'1px solid rgba(189,0,255,0.3)',borderRadius:12,overflow:'hidden',boxShadow:'0 0 40px rgba(189,0,255,0.08)'}}>
               <img src="/screenshots/profile-1.png" alt="KYMIA Performance DNA — Momentum Predator" style={{width:'100%',display:'block',objectFit:'cover'}}/>
@@ -2050,12 +2062,12 @@ export default function LandingPage() {
       </section>
 
       {/* ── CRISIS REPLAY ─────────────────────────────────────────────────── */}
-      <section id="crisis" style={{padding:"80px 48px",maxWidth:1280,margin:"0 auto"}}>
+      <section id="crisis" className="kymia-section" style={{padding:"80px 48px",maxWidth:1280,margin:"0 auto"}}>
         <Fade><div style={{textAlign:"center",marginBottom:48}}>
           <div style={{fontSize:11,color:K.c,letterSpacing:".3em",marginBottom:12}}>◈ BATTLE-TESTED AGAINST HISTORY</div>
           <div style={{fontSize:13,color:K.dim}}>We replayed every major crash. Here's what happened.</div>
         </div></Fade>
-        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:16,marginBottom:28}}>
+        <div className="kymia-grid-3" style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(280px, 1fr))",gap:16,marginBottom:28}}>
           {CRISIS.map((c,i)=>(
             <Fade key={i} delay={i*.12}>
               <div style={{...PANEL,padding:"22px 20px",borderColor:`${K.g}15`,transition:"border-color .3s"}}
@@ -2082,11 +2094,11 @@ export default function LandingPage() {
       </section>
 
       {/* ── FINAL CTA ────────────────────────────────────────────────────── */}
-      <section style={{padding:"100px 48px",textAlign:"center",position:"relative",overflow:"hidden"}}>
+      <section className="kymia-section" style={{padding:"100px 48px",textAlign:"center",position:"relative",overflow:"hidden"}}>
         <div style={{position:"absolute",inset:0,background:`radial-gradient(ellipse at center,rgba(0,242,254,0.04) 0%,transparent 70%)`}}/>
         <Fade>
-          <div style={{fontSize:52,fontWeight:900,color:"#FFFFFF",marginBottom:6,position:"relative",lineHeight:1.2}}>The future of trading</div>
-          <div style={{fontSize:52,fontWeight:900,color:K.c,marginBottom:52,textShadow:`0 0 40px ${K.c}60`,position:"relative",lineHeight:1.2}}>is autonomous.</div>
+          <div className="kymia-h1" style={{fontSize:"clamp(28px, 7vw, 52px)",fontWeight:900,color:"#FFFFFF",marginBottom:6,position:"relative",lineHeight:1.2}}>The future of trading</div>
+          <div className="kymia-h1" style={{fontSize:"clamp(28px, 7vw, 52px)",fontWeight:900,color:K.c,marginBottom:52,textShadow:`0 0 40px ${K.c}60`,position:"relative",lineHeight:1.2}}>is autonomous.</div>
         </Fade>
         <Fade delay={.12}>
           <p style={{fontSize:14,color:K.dim,lineHeight:1.85,marginBottom:28,position:"relative"}}>
@@ -2095,13 +2107,13 @@ export default function LandingPage() {
           </p>
         </Fade>
         <Fade delay={.18}>
-          <div style={{display:"flex",gap:16,justifyContent:"center",marginBottom:16,flexWrap:"wrap",position:"relative"}}>
+          <div className="kymia-cta-row" style={{display:"flex",gap:16,justifyContent:"center",marginBottom:16,flexWrap:"wrap",position:"relative"}}>
             {[
               {href:"/nexus?mode=demo",txt:"Watch AI Trade Live →",sub:"Free · No signup · $10K virtual capital",col:K.g,bg:"rgba(0,255,136,0.12)",brd:"2px solid rgba(0,255,136,0.5)",glow:"rgba(0,255,136,0.3)"},
               {href:"/nexus?mode=live",txt:"⚡ Connect Phantom → Real Trading",sub:"Non-custodial · Your keys · Real Solana",col:K.c,bg:"rgba(0,242,254,0.12)",brd:"2px solid rgba(0,242,254,0.5)",glow:"rgba(0,242,254,0.3)"},
             ].map(b=>(
               <div key={b.href}>
-                <a href={b.href} style={{display:"block",padding:"16px 36px",background:b.bg,border:b.brd,color:b.col,borderRadius:8,fontSize:14,textDecoration:"none",letterSpacing:".04em",fontFamily:F,fontWeight:700,transition:"all .25s"}}
+                <a className="kymia-cta" href={b.href} style={{display:"block",padding:"16px 36px",background:b.bg,border:b.brd,color:b.col,borderRadius:8,fontSize:14,textDecoration:"none",letterSpacing:".04em",fontFamily:F,fontWeight:700,transition:"all .25s"}}
                   onMouseEnter={e=>(e.currentTarget.style.boxShadow=`0 0 40px ${b.glow}`)}
                   onMouseLeave={e=>(e.currentTarget.style.boxShadow="")}>{b.txt}</a>
                 <div style={{fontSize:9,color:K.dim,marginTop:7,letterSpacing:".1em"}}>{b.sub}</div>
@@ -2144,6 +2156,44 @@ export default function LandingPage() {
         @media(max-width:767px){
           .agent-network-wrap{width:90vw}
           .agent-specialty{display:none}
+        }
+
+        /* ── MOBILE RESPONSIVE ─────────────────────────────────────────────── */
+        @media (max-width: 768px) {
+          .kymia-nav-links { display: none !important; }
+          .kymia-nav { padding: 0 16px !important; height: 52px !important; }
+          .kymia-section { padding: 60px 20px !important; }
+          .kymia-grid-2, .kymia-grid-3, .kymia-grid-4 {
+            grid-template-columns: 1fr !important;
+          }
+          .kymia-h1 { font-size: clamp(26px, 8vw, 40px) !important; line-height: 1.25 !important; }
+          .kymia-h2 { font-size: clamp(22px, 6vw, 32px) !important; }
+          .kymia-body { font-size: 13px !important; }
+          .kymia-cta { width: 100% !important; display: block !important; text-align: center !important; box-sizing: border-box !important; }
+          .kymia-cta-row { flex-direction: column !important; gap: 10px !important; align-items: stretch !important; }
+          .kymia-globe-hide { display: none !important; }
+          .kymia-hero-grid { grid-template-columns: 1fr !important; }
+          .kymia-pricing-grid { display: flex !important; overflow-x: auto !important; scroll-snap-type: x mandatory !important; -webkit-overflow-scrolling: touch !important; gap: 12px !important; padding: 0 20px 16px !important; }
+          .kymia-pricing-card { min-width: 280px !important; flex-shrink: 0 !important; scroll-snap-align: start !important; }
+          .kymia-founder-grid { grid-template-columns: 1fr !important; }
+          .kymia-founder-avatar { margin: 0 auto 24px !important; width: 200px !important; }
+          .kymia-footer-grid { grid-template-columns: 1fr 1fr !important; }
+          .kymia-footer-brand { grid-column: 1 / -1 !important; }
+          .kymia-mobile-api-grid { display: grid !important; }
+          .kymia-desktop-api { display: none !important; }
+          .kymia-video-bar { height: 24px !important; }
+          .kymia-bento-card { padding: 18px !important; }
+          .kymia-debate-full { width: 100% !important; max-width: 100% !important; }
+          .kymia-swarm-layout { grid-template-columns: 1fr !important; }
+        }
+
+        @media (max-width: 480px) {
+          .kymia-h1 { font-size: 26px !important; }
+          .kymia-agent-network { transform: scale(0.75); transform-origin: top center; }
+        }
+
+        @media (min-width: 769px) {
+          .kymia-mobile-api-grid { display: none !important; }
         }
       `}</style>
     </div>
