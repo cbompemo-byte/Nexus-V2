@@ -1971,14 +1971,8 @@ export default function LandingPage() {
       <FounderSection/>
       <FAQSection/>
 
-      {/* ── BENTO GRID ───────────────────────────────────────────────────── */}
-      <section className="kymia-section" style={{padding:"80px 48px",maxWidth:1280,margin:"0 auto"}}>
-        <Fade>
-          <div style={{textAlign:"center",marginBottom:48}}>
-            <div style={{fontSize:11,color:K.c,letterSpacing:".3em",fontFamily:F,marginBottom:12}}>◈ INSIDE THE SWARM</div>
-            <div style={{fontSize:13,color:K.dim,lineHeight:1.8}}>18 specialized agents. Real market data. Autonomous decisions.</div>
-          </div>
-        </Fade>
+      {/* ── BENTO GRID — REMOVED (replaced by LandingSwarm + GlobeDebateSection) */}
+      {false && <section className="kymia-section" style={{padding:"80px 48px",maxWidth:1280,margin:"0 auto"}}>
         <div className="kymia-grid-2" style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:16}}>
           {/* Swarm */}
           <Fade delay={.1}>
@@ -2065,7 +2059,7 @@ export default function LandingPage() {
             </div>
           </Fade>
         </div>
-      </section>
+      </section>}
 
       {/* ── HOW IT WORKS ─────────────────────────────────────────────────── */}
       <section id="how" className="kymia-section" style={{padding:"80px 48px",maxWidth:1280,margin:"0 auto"}}>
