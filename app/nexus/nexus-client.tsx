@@ -45,7 +45,8 @@ const getStop=(pos:{avg:number,peak?:number},cur:number):number=>{
   if(pct>=5)return(pos.peak||cur)*0.99;
   if(pct>=3)return(pos.peak||cur)*0.985;
   if(pct>=1.5)return pos.avg;
-  return pos.avg*0.975;
+  // Tighter SL: -1.8% (was -2.5%) → smaller losses, bigger net positive EV
+  return pos.avg*(1-SWARM_SL_PCT[SWARM_CONFIG.profile]);
 };
 const CORRELATED:{[k:string]:string[]}={
   SOL:["JUP","RAY","ORCA","JTO","DRIFT"],BTC:["ETH"],ETH:["BTC"],
@@ -62,18 +63,24 @@ const MISSIONS=[
 // ── Experienced Trader Rules ──────────────────────────────────────────────────
 const TRADER_RULES={
   peakHoursUTC:[[7,9],[13,17]] as [number,number][],
-  offPeakMinConf:72,
-  peakMinConf:55,
-  peakConfBoost:15,           // +15% confidence during peak hours
-  loss2SizeMultiplier:0.60,   // 2 losses → -40% size
-  loss3SizeMultiplier:0.40,   // 3 losses → -60% size + 5min pause
-  loss3PauseMs:5*60*1000,     // 5 minute pause after 3 losses
+  offPeakMinConf:80,          // raised from 72 — only high-conviction off-peak
+  peakMinConf:70,             // raised from 55
+  peakConfBoost:10,
+  loss2SizeMultiplier:0.60,
+  loss3SizeMultiplier:0.40,
+  loss3PauseMs:5*60*1000,
   maxDailyDrawdownPct:0.08,
-  macroBtcThreshold:4,        // BTC ±4% triggers macro filter
-  scaleInInitialFrac:0.07,    // 7% first entry (replaces Kelly)
-  scaleInAddFrac:0.04,        // +4% when price confirms +1%
-  scaleInTriggerPct:1.0,      // add at +1% gain
+  macroBtcThreshold:1.5,      // tightened from 4% → block on BTC ±1.5%
+  scaleInInitialFrac:0.07,
+  scaleInAddFrac:0.04,
+  scaleInTriggerPct:1.0,
 };
+
+// ── Swarm leverage & profile config ───────────────────────────────────────────
+const SWARM_CONFIG={leverage:3,profile:"balanced" as "safe"|"balanced"|"aggressive"};
+const SWARM_BASE_ALLOC:{[k:string]:number}={safe:0.04,balanced:0.07,aggressive:0.12};
+const SWARM_SL_PCT:{[k:string]:number}={safe:0.012,balanced:0.018,aggressive:0.025};
+const SWARM_TP_PCT:{[k:string]:number}={safe:0.04,balanced:0.08,aggressive:0.15};
 
 function isPeakHour():boolean{
   const h=new Date().getUTCHours();
@@ -256,7 +263,7 @@ type PriceData={price:number,prev:number,trend:string,change:number,rsi:number,h
 type AgentState={on:boolean,conf:number|null,sig:string|null,th:string,real?:boolean};
 type NewToken={address:string,name:string,price:string,change1h:number,volume24h:number,liquidity:number,rugScore:number,buys:number,sells:number};
 type DataStatus={jupiter:"ok"|"err"|"loading",binance:"ok"|"err"|"loading",coingecko:"ok"|"err"|"loading",lastUpdate:number};
-type Position={qty:number,avg:number,peak?:number,entryMs?:number,trailActive?:boolean,side?:"LONG"|"SHORT",scaledIn?:boolean};
+type Position={qty:number,avg:number,peak?:number,entryMs?:number,trailActive?:boolean,side?:"LONG"|"SHORT",scaledIn?:boolean,leverage?:number,leveragedSize?:number};
 type AgentSignals={lens?:{rsi:number,signal:string},radar?:{ema9:number,ema21:number,signal:string},razor?:{rsi:number,macd:number,signal:string},vector?:{adx:number,signal:string},surge?:{volumeChange:number,signal:string},leviathan?:{buyPressure:number,signal:string},echo?:{fg:number,signal:string}};
 type Trade={id:string,sym:string,side:string,qty:number,price:number,pnl:number,conf:number,t:string,ms:number,agent?:string,reason?:string,agentSignals?:AgentSignals};
 type LogEntry={t:string,ag:string,msg:string,col:string};
@@ -1799,6 +1806,8 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   const sessionStartEquityRef=useRef(CAP);
   const logRef=useRef<HTMLDivElement>(null);
   const swarmRef=useRef<HTMLDivElement>(null);
+  // Symbol-level loss tracker — blacklists symbols after 2 losses
+  const symLossRef=useRef<Record<string,number>>({});
   const entropyRef=useRef(entropy);
   useEffect(()=>{entropyRef.current=entropy;},[entropy]);
 
@@ -1876,10 +1885,11 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
       const r=await tf("DEX-LVTH","/api/dexscreener?type=whale&pair=So11111111111111111111111111111111111111112");
       const d=await r.json();
       const bp:number=d.buyPressure??0.5;
-      const sig=bp>0.62?"BUY":bp<0.38?"SELL":"HOLD";
+      // Tightened: 0.65 (was 0.62) — only strong whale conviction
+      const sig=bp>0.65?"BUY":bp<0.35?"SELL":"HOLD";
       const conf=Math.round(60+bp*40);
       console.log("[LEVIATHAN] buyPressure="+bp.toFixed(3)+" → SIG:"+sig+" CONF:"+conf);
-      updates["leviathan"]={sig,conf,real:true,th:`DEX buy pressure: ${(bp*100).toFixed(0)}%\nVol 24h: $${(d.volume24h/1e6).toFixed(2)}M\n${bp>0.62?"Whale accumulation":"Whale distribution"}`};
+      updates["leviathan"]={sig,conf,real:true,th:`DEX buy pressure: ${(bp*100).toFixed(0)}%\nVol 24h: $${(d.volume24h/1e6).toFixed(2)}M\n${bp>0.65?"Whale accumulation":"Whale distribution"}`};
       setDataStatus(s=>({...s,lastUpdate:Date.now()}));
     }catch(e){console.error("[LEVIATHAN] FAILED",e);updates["leviathan"]={real:false};}
 
@@ -1889,10 +1899,11 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
       const d=await r.json();
       const closes:number[]=(d.data||[]).map((c:unknown[])=>parseFloat(String(c[4])));
       const rsi=calcRSI(closes,14);
-      const sig=rsi<40?"BUY":rsi>65?"SELL":"HOLD";
+      // Tightened: RSI<35 BUY (was <40), RSI>68 SELL (was >65) — extreme zones only
+      const sig=rsi<35?"BUY":rsi>68?"SELL":"HOLD";
       const conf=Math.round(50+Math.abs(rsi-50)*0.9);
       console.log("[LENS] RSI(14)="+rsi.toFixed(2)+" candles="+closes.length+" → SIG:"+sig+" CONF:"+conf);
-      updates["lens"]={sig,conf,real:true,th:`Kraken RSI(14): ${rsi.toFixed(1)}\n${rsi<40?"Oversold — BUY signal":rsi>65?"Overbought — SELL signal":"Neutral zone"}\n1m candles: ${closes.length}`};
+      updates["lens"]={sig,conf,real:true,th:`Kraken RSI(14): ${rsi.toFixed(1)}\n${rsi<35?"Extreme oversold — BUY":rsi>68?"Extreme overbought — SELL":"Neutral zone (35–68)"}\n1m candles: ${closes.length}`};
       setDataStatus(s=>({...s,binance:"ok",lastUpdate:Date.now()}));
     }catch(e){console.error("[LENS] FAILED",e);updates["lens"]={real:false};setDataStatus(s=>({...s,binance:"err"}));}
 
@@ -1902,7 +1913,8 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
       const d=await r.json();
       const change=parseFloat(d.data?.priceChangePercent||"0");
       const vol=parseFloat(d.data?.volume||"0");
-      const sig=change>3&&vol>1e6?"BUY":change<-3?"SELL":"HOLD";
+      // Tightened: >5% change (was >3%) — only strong volume breakouts
+      const sig=change>5&&vol>1e6?"BUY":change<-5?"SELL":"HOLD";
       const conf=Math.round(55+Math.min(Math.abs(change)*3,40));
       console.log("[SURGE] change="+change.toFixed(2)+"% vol="+vol.toFixed(0)+" → SIG:"+sig+" CONF:"+conf);
       updates["surge"]={sig,conf,real:true,th:`24h change: ${change>0?"+":""}${change.toFixed(2)}%\nVolume: ${(vol/1e3).toFixed(0)}K SOL\nHigh: $${parseFloat(d.data?.highPrice||"0").toFixed(2)}`};
@@ -1925,7 +1937,8 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
       const r=await tf("F&G","/api/market?type=fear");
       const d=await r.json();
       const fng:number=d.value??50;
-      const sig=fng<30?"BUY":fng>75?"SELL":"HOLD";
+      // Tightened: extreme fear <25 BUY (was <30), extreme greed >80 SELL (was >75)
+      const sig=fng<25?"BUY":fng>80?"SELL":"HOLD";
       const conf=Math.round(45+Math.abs(fng-50)*0.8);
       console.log("[ECHO] F&G="+fng+" ("+d.label+") → SIG:"+sig+" CONF:"+conf);
       updates["echo"]={sig,conf,real:true,th:`Fear & Greed: ${fng} (${d.label||"Neutral"})\n${fng<30?"Extreme Fear — contrarian BUY":fng>75?"Extreme Greed — reduce exposure":"Sentiment neutral"}`};
@@ -1937,7 +1950,9 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
       const d=await r.json();
       const closes5m:number[]=(d.data||[]).map((c:unknown[])=>parseFloat(String(c[4])));
       const ema9=calcEMA(closes5m,9),ema21=calcEMA(closes5m,21);
-      const cross=ema9>ema21?"BUY":ema9<ema21?"SELL":"HOLD";
+      // Only signal if EMA gap ≥0.3% — filters out choppy micro-crossovers
+      const emaGap=Math.abs(ema9-ema21)/ema21*100;
+      const cross=emaGap>=0.3?(ema9>ema21?"BUY":ema9<ema21?"SELL":"HOLD"):"HOLD";
       const conf=Math.round(60+Math.abs(ema9-ema21)/ema21*5000);
       console.log("[RADAR] EMA9="+ema9.toFixed(4)+" EMA21="+ema21.toFixed(4)+" → SIG:"+cross+" CONF:"+conf);
       updates["radar"]={sig:cross,conf,real:true,th:`EMA9: $${ema9.toFixed(2)} | EMA21: $${ema21.toFixed(2)}\n${ema9>ema21?"Bullish crossover ▲":"Bearish crossover ▼"}\n5m candles: ${closes5m.length}`};
@@ -2100,10 +2115,11 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
       const sellPct=totalW>0?sellW/totalW:0;
       const dir=buyPct>=sellPct?"BUY":"SELL";
       const agreePct=dir==="BUY"?buyPct:sellPct;
-      const sig=agreePct>=0.60?dir:"HOLD";
+      // Raised consensus threshold: 75% (was 60%) — only high-conviction entries
+      const sig=agreePct>=0.75?dir:"HOLD";
       const conf=Math.round(agreePct*100);
       console.log("[CONSENSUS] active="+active.length+" BUY="+Math.round(buyPct*100)+"% SELL="+Math.round(sellPct*100)+"% agree="+Math.round(agreePct*100)+"% → SIG:"+sig+" CONF:"+conf);
-      updates["consensus"]={sig,conf,real:true,on:true,th:`${active.length}/17 agents reporting\nBUY weight: ${Math.round(buyPct*100)}% | SELL: ${Math.round(sellPct*100)}%\nAgreement: ${Math.round(agreePct*100)}%\n${sig==="HOLD"?"No consensus (need 60%+)":dir+" consensus confirmed"}`};
+      updates["consensus"]={sig,conf,real:true,on:true,th:`${active.length}/17 agents reporting\nBUY weight: ${Math.round(buyPct*100)}% | SELL: ${Math.round(sellPct*100)}%\nAgreement: ${Math.round(agreePct*100)}%\n${sig==="HOLD"?"No consensus (need 75%+)":dir+" consensus confirmed"}`};
     }catch(e){console.error("[CONSENSUS] FAILED",e);updates["consensus"]={real:false};}
 
     // Apply all updates + track last-active timestamps
@@ -2210,8 +2226,10 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
       const pct=isShort?((pos.avg-cur)/pos.avg)*100:((cur-pos.avg)/pos.avg)*100;
 
       if(isShort){
-        // SHORT: SL = entry*1.025, TP = entry*0.945
-        const sl=pos.avg*1.025,tp=pos.avg*0.945;
+        // SHORT: SL = entry*(1+1.8%), TP = entry*(1-8%) — tighter SL, bigger TP
+        const slPct=SWARM_SL_PCT[SWARM_CONFIG.profile];
+        const tpPct=SWARM_TP_PCT[SWARM_CONFIG.profile];
+        const sl=pos.avg*(1+slPct),tp=pos.avg*(1-tpPct);
         // 4h expiry
         if(pos.entryMs&&now-pos.entryMs>4*60*60*1000){
           setPort(prev=>{const p2={...prev.pos};delete p2[sym];return{...prev,cash:prev.cash+pos.avg*pos.qty+pnl,pos:p2};});
@@ -2232,6 +2250,15 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
       }
 
       // LONG path
+      // ── Take Profit: exit at +8% (profile: balanced) ─────────────────────
+      const tpPctL=SWARM_TP_PCT[SWARM_CONFIG.profile];
+      if(pct>=tpPctL*100){
+        setPort(prev=>{const p2={...prev.pos};delete p2[sym];return{...prev,cash:prev.cash+cur*pos.qty,pos:p2};});
+        addWinCard(sym,pnl,pct,cur,"AEGIS","TP +"+f2(tpPctL*100,0)+"%");
+        const effPnl=pos.leverage&&pos.leverage>1?pnl*pos.leverage:pnl;
+        log("AEGIS","💰 TP HIT "+sym+" +"+f2(pct,1)+"% | "+fU(pnl)+(pos.leverage&&pos.leverage>1?" (x"+pos.leverage+" eff: "+fU(effPnl)+")":""),K.g);
+        continue;
+      }
       // ── Scale-in: add 4% when position confirms +1% gain ────────────────
       if(pos.side!=="SHORT"&&!pos.scaledIn&&pct>=TRADER_RULES.scaleInTriggerPct){
         const addFrac=TRADER_RULES.scaleInAddFrac;
@@ -2260,9 +2287,10 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
       const stop=getStop(pos,cur);
       if(cur<=stop){
         setPort(prev=>{const p2={...prev.pos};delete p2[sym];return{...prev,cash:prev.cash+cur*pos.qty,pos:p2};});
-        const reason=pct>=5?"Lock +5%":pct>=3?"Trail -1.5%":pct>=1.5?"Breakeven":"SL -2.5%";
+        const slLabel="SL -"+f2(SWARM_SL_PCT[SWARM_CONFIG.profile]*100,1)+"%";
+        const reason=pct>=5?"Lock +5%":pct>=3?"Trail -1.5%":pct>=1.5?"Breakeven":slLabel;
         addWinCard(sym,pnl,pct,cur,pct>=1.5?"TRAIL":"AEGIS",reason);
-        const label=pct>=5?"🔒 LOCK +5%":pct>=3?"🔒 TRAIL -1.5%":pct>=1.5?"✓ BREAKEVEN":"⛔ SL -2.5%";
+        const label=pct>=5?"🔒 LOCK +5%":pct>=3?"🔒 TRAIL -1.5%":pct>=1.5?"✓ BREAKEVEN":"⛔ "+slLabel;
         log(pct>=1.5?"TRAIL":"AEGIS",label+" "+sym+" | "+fU(pnl),pnl>=0?K.g:K.r);
       }
     }
@@ -2270,6 +2298,16 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   },[prices,running]);
 
   const addWinCard=(sym:string,pnl:number,pct:number,price:number,agent:string,reason?:string)=>{
+    // Track per-symbol losses for cooldown filter
+    if(pnl<0){
+      symLossRef.current[sym]=(symLossRef.current[sym]||0)+1;
+      if(symLossRef.current[sym]>=2){
+        log("AEGIS",`⛔ ${sym} blacklisted 30min after ${symLossRef.current[sym]} losses`,K.r);
+        setTimeout(()=>{symLossRef.current[sym]=0;log("AEGIS",`◈ ${sym} blacklist cleared — resuming`,K.g);},1800000);
+      }
+    }else{
+      symLossRef.current[sym]=0; // reset on win
+    }
     const origin=(()=>{
       const el=swarmRef.current;if(!el)return undefined;
       const rect=el.getBoundingClientRect();
@@ -2365,6 +2403,18 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
       if(!canOpen&&!prt.pos[sym]){
         log("AEGIS","[AEGIS] Exposure: "+fU(exposure)+"/"+fU(prt.equity||prt.cash)+" ("+f2(exposure/(prt.equity||prt.cash)*100,0)+"%) — max reached, waiting",K.gold);
       }
+      // ── SESSION WR GATE (≥10 closed trades, WR <50% → 5min cooldown) ──────
+      {const clTrades=tradesRef.current.filter((t:Trade)=>t.pnl!==0);
+      if(clTrades.length>=10&&!traderIsPaused){
+        const sessWR=clTrades.slice(0,20).filter((t:Trade)=>t.pnl>0).length/Math.min(clTrades.length,20);
+        if(sessWR<0.50){
+          setTraderIsPaused(true);
+          log("AEGIS","[AEGIS] ⚠ Session WR "+Math.round(sessWR*100)+"% — 5min cooldown",K.r);
+          if(traderPauseTimerRef.current)clearTimeout(traderPauseTimerRef.current);
+          traderPauseTimerRef.current=setTimeout(()=>{setTraderIsPaused(false);log("AEGIS","[AEGIS] WR gate lifted — resuming",K.g);},TRADER_RULES.loss3PauseMs);
+          return;
+        }
+      }}
       // ── MACRO TREND FILTER (BTC ±4% blocks directional trades) ────────
       const btcChange=pricesRef.current["BTC"]?.change??0;
       const btcBearish=btcChange<=-TRADER_RULES.macroBtcThreshold;
@@ -2385,6 +2435,8 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
         if(heldSyms.some(h=>corr.includes(h)||((CORRELATED[h]||[]).includes(sym)))){
           log("RISK","⊘ Anti-corr block: "+sym+" — diversify",K.gold);return;
         }
+        // symLoss blacklist filter (2+ losses on sym → blocked until cleared)
+        if((symLossRef.current[sym]||0)>=2){log("AEGIS","[AEGIS] ⛔ "+sym+" blacklisted (2 losses) — skip",K.gold);return;}
         // Scale-in sizing + experienced trader rules
         const cl=tradesRef.current.filter((t:Trade)=>t.pnl!==0);
         const wr=cl.length?cl.filter((t:Trade)=>t.pnl>0).length/cl.length:0.5;
@@ -2405,10 +2457,12 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
         setTraderConsecLosses(traderCheck.consecLosses);
         setTraderScaleMode(true);
         const allocFrac=traderCheck.frac;
-        log("AEGIS","[AEGIS] Scale-in entry: $"+f2(prt.cash*allocFrac,0)+" ("+f2(allocFrac*100,0)+"% init @ "+Math.round(sig.conf)+"% conf)",K.co);
-        const alloc=Math.min(prt.cash*allocFrac,prt.cash*.9);
-        const qty=alloc/p.price;
-        setPort(prev=>{if(prev.pos[sym])return prev;return{...prev,cash:prev.cash-alloc,pos:{...prev.pos,[sym]:{qty,avg:p.price,peak:p.price,entryMs:Date.now(),trailActive:false,side:"LONG",scaledIn:false}}};});
+        const lev=SWARM_CONFIG.leverage;
+        const baseAlloc=Math.min(prt.cash*allocFrac,prt.cash*.9);
+        const leveragedSize=Math.min(baseAlloc*lev,(prt.equity||prt.cash)*0.40);
+        const qty=leveragedSize/p.price;
+        log("AEGIS","[AEGIS] Scale-in entry: $"+f2(baseAlloc,0)+" margin (x"+lev+" → $"+f2(leveragedSize,0)+", "+f2(allocFrac*100,0)+"% @ "+Math.round(sig.conf)+"% conf)",K.co);
+        setPort(prev=>{if(prev.pos[sym])return prev;return{...prev,cash:prev.cash-baseAlloc,pos:{...prev.pos,[sym]:{qty,avg:p.price,peak:p.price,entryMs:Date.now(),trailActive:false,side:"LONG",scaledIn:false,leverage:lev,leveragedSize}}};});
         setSignalCount(n=>n+1);
         const ags2=agStRef.current;
         const agSig2:AgentSignals={};
@@ -2493,9 +2547,11 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
     const prt=portRef.current;
     if(side==="BUY"){
       if(prt.cash<500||prt.pos[sym])return;
-      const alloc=Math.min(prt.cash*.12,prt.cash*.9);
-      const qty=alloc/p.price;
-      setPort(prev=>{if(prev.pos[sym])return prev;return{...prev,cash:prev.cash-alloc,pos:{...prev.pos,[sym]:{qty,avg:p.price,entryMs:Date.now()}}};});
+      const lev=SWARM_CONFIG.leverage;
+      const baseAlloc=Math.min(prt.cash*.12,prt.cash*.9);
+      const leveragedSize=Math.min(baseAlloc*lev,(prt.equity||prt.cash)*0.40);
+      const qty=leveragedSize/p.price;
+      setPort(prev=>{if(prev.pos[sym])return prev;return{...prev,cash:prev.cash-baseAlloc,pos:{...prev.pos,[sym]:{qty,avg:p.price,entryMs:Date.now(),leverage:lev,leveragedSize}}};});
       const agsFt=agStRef.current;
       const agSigFt:AgentSignals={};
       if(agsFt["lens"]?.sig)agSigFt.lens={rsi:38,signal:agsFt["lens"].sig||"BUY"};
@@ -2518,9 +2574,11 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
     const p=pricesRef.current[sym];if(!p)return;
     const prt=portRef.current;
     if(prt.pos[sym]||prt.cash<500)return;
-    const alloc=Math.min(prt.cash*0.08,prt.cash*0.9);
-    const qty=alloc/p.price;
-    setPort(prev=>{if(prev.pos[sym])return prev;return{...prev,cash:prev.cash-alloc,pos:{...prev.pos,[sym]:{qty,avg:p.price,peak:p.price,entryMs:Date.now(),trailActive:false,side:"SHORT"}}};});
+    const lev=SWARM_CONFIG.leverage;
+    const baseAlloc=Math.min(prt.cash*0.08,prt.cash*0.9);
+    const leveragedSize=Math.min(baseAlloc*lev,(prt.equity||prt.cash)*0.40);
+    const qty=leveragedSize/p.price;
+    setPort(prev=>{if(prev.pos[sym])return prev;return{...prev,cash:prev.cash-baseAlloc,pos:{...prev.pos,[sym]:{qty,avg:p.price,peak:p.price,entryMs:Date.now(),trailActive:false,side:"SHORT",leverage:lev,leveragedSize}}};});
     setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym,side:"SHORT",qty,price:p.price,pnl:0,conf,t:ts(),ms:Date.now(),agent,reason},...t.slice(0,99)]);
     log("EXEC","▼ ["+agent+"] SHORT "+sym+" @ "+fPrice(p.price)+" conf:"+conf+"%",K.r);
     setSignalCount(n=>n+1);
@@ -2913,7 +2971,11 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
                 const mp=nextM?Math.min(100,pct/(nextM.target*100)*100):100;
                 return(<>
                   <div style={{fontSize:19,fontWeight:900,color:pnlCol,textShadow:`0 0 12px ${pnlCol}`,marginBottom:2,fontFamily:"monospace"}}>{pnl>=0?"+":""}{fU(pnl)}</div>
-                  <div style={{fontSize:8,color:"#2A5070",marginBottom:8}}>{fP(pct)} since start · WR {f2(wr,0)}% · {signalCount} signals</div>
+                  <div style={{fontSize:8,color:"#2A5070",marginBottom:4}}>{fP(pct)} since start · WR {f2(wr,0)}% · {signalCount} signals</div>
+                  <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:8}}>
+                    <span style={{fontSize:7,padding:"1px 6px",background:"#BD00FF15",border:"1px solid #BD00FF40",borderRadius:2,color:"#BD00FF",fontWeight:700}}>x{SWARM_CONFIG.leverage} LEV</span>
+                    <span style={{fontSize:7,color:"#2A5070"}}>{SWARM_CONFIG.profile.toUpperCase()}</span>
+                  </div>
                   {nextM&&(<>
                     <div style={{display:"flex",justifyContent:"space-between",fontSize:8,marginBottom:3}}>
                       <span style={{color:nextM.color}}>{nextM.icon} {nextM.name}</span>
@@ -3024,7 +3086,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
                   return(
                     <div key={sym} onClick={()=>{const tr=trades.find(t=>t.sym===sym&&(t.side==="BUY"||t.side==="SHORT"));setChartTrade({trade:tr||null,position:pos,agentSignals:tr?.agentSignals});}} style={{marginBottom:6,padding:7,background:(pnl>=0?K.g:K.r)+"08",borderRadius:2,border:"1px solid "+(pnl>=0?K.g:K.r)+"20",cursor:"pointer",transition:"border-color .2s"}} title="Click to view chart">
                       <div style={{display:"flex",justifyContent:"space-between",marginBottom:2}}>
-                        <span style={{color:posCol,fontWeight:700,fontSize:10}}>{sym} {isShort?"▼ SHORT":"LONG"} {pos.trailActive&&<span style={{color:K.gold,fontSize:8}}> ◈TRAIL</span>}</span>
+                        <span style={{color:posCol,fontWeight:700,fontSize:10}}>{sym} {isShort?"▼ SHORT":"LONG"} {pos.trailActive&&<span style={{color:K.gold,fontSize:8}}> ◈TRAIL</span>}{pos.leverage&&pos.leverage>1&&<span style={{fontSize:7,padding:"0 3px",background:"#BD00FF20",border:"1px solid #BD00FF55",borderRadius:2,color:"#BD00FF",marginLeft:3}}>x{pos.leverage}</span>}</span>
                         <span style={{color:pnl>=0?K.g:K.r,fontSize:10}}>{fU(pnl)}</span>
                       </div>
                       <div style={{display:"flex",justifyContent:"space-between",fontSize:8,color:K.tx}}>
