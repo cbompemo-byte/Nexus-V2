@@ -86,6 +86,31 @@ function isPeakHour():boolean{
   const h=new Date().getUTCHours();
   return TRADER_RULES.peakHoursUTC.some(([s,e])=>h>=s&&h<e);
 }
+function getSessionQuality():{quality:"PRIME"|"GOOD"|"LOW"|"AVOID",multiplier:number,label:string,col:string}{
+  const h=new Date().getUTCHours();
+  if(h>=8&&h<=10)return{quality:"PRIME",multiplier:1.0,label:"EU OPEN",col:K.g};
+  if(h>=13&&h<=16)return{quality:"PRIME",multiplier:1.0,label:"NY OPEN",col:K.g};
+  if(h>=10&&h<=13)return{quality:"GOOD",multiplier:0.7,label:"EU SESSION",col:K.gold};
+  if(h>=16&&h<=20)return{quality:"GOOD",multiplier:0.7,label:"NY SESSION",col:K.gold};
+  if(h>=0&&h<=6)return{quality:"AVOID",multiplier:0,label:"DEAD ZONE",col:K.r};
+  return{quality:"LOW",multiplier:0.4,label:"ASIAN",col:K.dim};
+}
+async function detectManipulation(sym:string):Promise<{risk:"LOW"|"MEDIUM"|"HIGH",score:number,flags:string[]}>{
+  try{
+    const res=await fetch(`https://api.dexscreener.com/latest/dex/search?q=${sym}USDC`);
+    const data=await res.json();
+    const pair=data?.pairs?.[0];
+    if(!pair)return{risk:"LOW",score:0,flags:[]};
+    let s=0;const flags:string[]=[];
+    const pc=Math.abs(pair.priceChange?.h1||0),vr=(pair.volume?.h1||0)/(pair.volume?.h24||1)*24;
+    if(pc>15&&vr<2){s+=35;flags.push("Spike w/o vol");}
+    if((Date.now()-(pair.pairCreatedAt||0))/3600000<24){s+=25;flags.push("< 24h old");}
+    if((pair.liquidity?.usd||0)<100000){s+=20;flags.push("Liq < $100K");}
+    const b=pair.txns?.h1?.buys||0,sl2=pair.txns?.h1?.sells||0,br=b/(b+sl2||1);
+    if(br>0.90||br<0.10){s+=20;flags.push(`Buy ratio ${(br*100).toFixed(0)}%`);}
+    return{risk:s>60?"HIGH":s>30?"MEDIUM":"LOW",score:s,flags};
+  }catch{return{risk:"LOW",score:0,flags:[]};}
+}
 
 function applyTraderRules(
   conf:number,
@@ -1808,6 +1833,13 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   const swarmRef=useRef<HTMLDivElement>(null);
   // Symbol-level loss tracker — blacklists symbols after 2 losses
   const symLossRef=useRef<Record<string,number>>({});
+  // Pullback entry system — pending entries waiting for price pullback
+  const pendingEntriesRef=useRef<Record<string,{signal:string,target:number,expiry:number,agent:string,reason:string,originalPrice:number,conf:number,leveragedSize:number,baseAlloc:number,lev:number}>>({});
+  const [pendingEntries,setPendingEntries]=useState<Record<string,{signal:string,target:number,expiry:number}>>({});
+  // Scale-in timers — cleared on unmount
+  const scaleInTimersRef=useRef<ReturnType<typeof setInterval>[]>([]);
+  // Session quality — updates every minute
+  const [sessionQuality,setSessionQuality]=useState(getSessionQuality());
   const entropyRef=useRef(entropy);
   useEffect(()=>{entropyRef.current=entropy;},[entropy]);
 
@@ -2361,6 +2393,77 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[running,disabled,log]);
 
+  // Session quality ticker — updates every 60s
+  useEffect(()=>{
+    const iv=setInterval(()=>setSessionQuality(getSessionQuality()),60000);
+    return()=>clearInterval(iv);
+  },[]);
+
+  // Pending pullback entries checker — every 5s, fires trade when price hits target
+  useEffect(()=>{
+    if(!running)return;
+    const iv=setInterval(async()=>{
+      const now=Date.now();
+      const uiSnap:Record<string,{signal:string,target:number,expiry:number}>={};
+      for(const [sym,entry] of Object.entries(pendingEntriesRef.current)){
+        if(now>entry.expiry){
+          delete pendingEntriesRef.current[sym];
+          log("WATCH","⏱ "+sym+" entry expired — signal too old",K.dim);
+          continue;
+        }
+        const cur=pricesRef.current[sym]?.price;
+        if(!cur){uiSnap[sym]={signal:entry.signal,target:entry.target,expiry:entry.expiry};continue;}
+        const targetHit=entry.signal==="BUY"?cur<=entry.target:cur>=entry.target;
+        if(!targetHit){uiSnap[sym]={signal:entry.signal,target:entry.target,expiry:entry.expiry};continue;}
+        // Pullback hit — run manipulation check then execute
+        const improvement=Math.abs((cur-entry.originalPrice)/entry.originalPrice*100);
+        log("RADR","✓ Pullback entry "+sym+" — "+improvement.toFixed(2)+"% better than signal",K.g);
+        delete pendingEntriesRef.current[sym];
+        const manip=await detectManipulation(sym);
+        if(manip.risk==="HIGH"){log("WATCH","⛔ "+sym+" blocked — HIGH manip risk: "+manip.flags.join(" · "),K.r);continue;}
+        let{leveragedSize,baseAlloc,lev,conf}=entry;
+        if(manip.risk==="MEDIUM"){leveragedSize*=0.5;baseAlloc*=0.5;log("WATCH","⚠ "+sym+" size halved — MEDIUM manip risk",K.gold);}
+        // Tranche 1: 60% of size
+        const t1Size=leveragedSize*0.60,t1Alloc=baseAlloc*0.60;
+        const qty1=t1Size/cur;
+        const prt=portRef.current;
+        if(prt.pos[sym]||prt.cash<t1Alloc)continue;
+        setPort(prev=>{if(prev.pos[sym])return prev;return{...prev,cash:prev.cash-t1Alloc,pos:{...prev.pos,[sym]:{qty:qty1,avg:cur,peak:cur,entryMs:Date.now(),trailActive:false,side:"LONG" as const,scaledIn:false,leverage:lev,leveragedSize:t1Size}}};});
+        setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym,side:"BUY",qty:qty1,price:cur,pnl:0,conf,t:ts(),ms:Date.now(),reason:"Pullback T1 (60%)"},...t.slice(0,99)]);
+        log("AEGIS","◈ T1 pullback "+sym+": $"+f2(t1Alloc,0)+" margin (x"+lev+" → $"+f2(t1Size,0)+", 60%)",K.co);
+        setSignalCount(n=>n+1);
+        // Tranche 2: 40% after +1% confirmation
+        const entryP=cur;
+        const sivId=setInterval(()=>{
+          const c2=pricesRef.current[sym]?.price;
+          if(!c2)return;
+          const pos2=portRef.current.pos[sym];
+          if(!pos2||pos2.scaledIn){clearInterval(sivId);return;}
+          if(c2>entryP*1.01){
+            clearInterval(sivId);
+            const t2Size=leveragedSize*0.40,t2Alloc=baseAlloc*0.40;
+            const prt2=portRef.current;
+            if(prt2.cash<t2Alloc)return;
+            const qty2=t2Size/c2;
+            const newQty=pos2.qty+qty2;
+            const newAvg=(pos2.avg*pos2.qty+c2*qty2)/newQty;
+            setPort(prev=>{const pp=prev.pos[sym];if(!pp||pp.scaledIn)return prev;return{...prev,cash:prev.cash-t2Alloc,pos:{...prev.pos,[sym]:{...pp,qty:newQty,avg:newAvg,scaledIn:true,leveragedSize:(pp.leveragedSize||0)+t2Size}}};});
+            log("AEGIS","◈ T2 scale-in "+sym+": +$"+f2(t2Alloc,0)+" (40%) — position complete",K.g);
+          }
+        },10000);
+        scaleInTimersRef.current.push(sivId);
+        setTimeout(()=>clearInterval(sivId),600000);
+      }
+      setPendingEntries(uiSnap);
+    },5000);
+    return()=>{
+      clearInterval(iv);
+      scaleInTimersRef.current.forEach(clearInterval);
+      scaleInTimersRef.current=[];
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[running,log]);
+
   // Trade execution — multi-TF + Kelly + momentum + anti-correlation
   useEffect(()=>{
     if(!running||circuit)return;
@@ -2381,6 +2484,9 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
     const iv=setInterval(()=>{
       const cs=agStRef.current["consensus"];
       if(!cs?.on||!cs.conf||cs.conf<45)return;
+      // ── SESSION TIME FILTER ───────────────────────────────────────────────
+      const sess=getSessionQuality();
+      if(sess.quality==="AVOID"){log("WATCH","⛔ Dead zone ("+sess.label+") — no trades 00h-06h UTC",K.dim);return;}
       // Pick volatile non-stable token
       const allKeys=Object.keys(SYMS);
       const pool=allKeys.filter(sym=>{
@@ -2458,23 +2564,16 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
         setTraderScaleMode(true);
         const allocFrac=traderCheck.frac;
         const lev=SWARM_CONFIG.leverage;
-        const baseAlloc=Math.min(prt.cash*allocFrac,prt.cash*.9);
+        // Session multiplier reduces size in lower-quality sessions
+        const baseAlloc=Math.min(prt.cash*allocFrac*sess.multiplier,prt.cash*.9);
         const leveragedSize=Math.min(baseAlloc*lev,(prt.equity||prt.cash)*0.40);
-        const qty=leveragedSize/p.price;
-        log("AEGIS","[AEGIS] Scale-in entry: $"+f2(baseAlloc,0)+" margin (x"+lev+" → $"+f2(leveragedSize,0)+", "+f2(allocFrac*100,0)+"% @ "+Math.round(sig.conf)+"% conf)",K.co);
-        setPort(prev=>{if(prev.pos[sym])return prev;return{...prev,cash:prev.cash-baseAlloc,pos:{...prev.pos,[sym]:{qty,avg:p.price,peak:p.price,entryMs:Date.now(),trailActive:false,side:"LONG",scaledIn:false,leverage:lev,leveragedSize}}};});
-        setSignalCount(n=>n+1);
-        const ags2=agStRef.current;
-        const agSig2:AgentSignals={};
-        if(ags2["lens"]?.conf&&ags2["lens"]?.sig)agSig2.lens={rsi:calcRSI(p.hist.slice(-15),14),signal:ags2["lens"].sig};
-        if(ags2["radar"]?.conf&&ags2["radar"]?.sig)agSig2.radar={ema9:p.price,ema21:p.price*(ags2["radar"].sig==="BUY"?0.998:1.002),signal:ags2["radar"].sig};
-        if(ags2["leviathan"]?.conf&&ags2["leviathan"]?.sig)agSig2.leviathan={buyPressure:ags2["leviathan"].sig==="BUY"?0.65:0.35,signal:ags2["leviathan"].sig};
-        if(ags2["surge"]?.conf&&ags2["surge"]?.sig)agSig2.surge={volumeChange:ags2["surge"].conf/10,signal:ags2["surge"].sig};
-        if(ags2["echo"]?.conf&&ags2["echo"]?.sig)agSig2.echo={fg:Math.round(entropyRef.current),signal:ags2["echo"].sig};
-        if(ags2["razor"]?.conf&&ags2["razor"]?.sig)agSig2.razor={rsi:calcRSI(p.hist.slice(-15),14),macd:0.002,signal:ags2["razor"].sig};
-        if(ags2["vector"]?.conf&&ags2["vector"]?.sig)agSig2.vector={adx:Math.round(ags2["vector"].conf/2),signal:ags2["vector"].sig};
-        setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym,side:"BUY",qty,price:p.price,pnl:0,conf:Math.round(sig.conf),t:ts(),ms:Date.now(),agentSignals:agSig2},...t.slice(0,99)]);
-        log("EXEC","▶ LONG "+sym+" @ "+fPrice(p.price)+" init:"+f2(allocFrac*100,0)+"% sig:"+sig.quality,K.g);
+        // Queue pullback entry — wait for -0.8% dip before executing
+        if(!pendingEntriesRef.current[sym]){
+          const pullbackTarget=p.price*0.992;
+          pendingEntriesRef.current[sym]={signal:"BUY",target:pullbackTarget,expiry:Date.now()+120000,agent:"AEGIS",reason:sig.quality+" signal",originalPrice:p.price,conf:Math.round(sig.conf),leveragedSize,baseAlloc,lev};
+          setPendingEntries(prev=>({...prev,[sym]:{signal:"BUY",target:pullbackTarget,expiry:Date.now()+120000}}));
+          log("RADR","⏳ Pending BUY "+sym+" — pullback to "+fPrice(pullbackTarget)+" ("+sess.label+" x"+sess.multiplier+")",K.gold);
+        }
         tradeCount++;
       }else if((cs.sig==="SELL"||sig.isSell)&&prt.pos[sym]&&prt.pos[sym].side!=="SHORT"){
         // Close existing LONG position
@@ -2883,6 +2982,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
             ))}
             {dataStatus.lastUpdate>0&&<span style={{color:"#0D1E30",fontSize:7}}>{Math.round((Date.now()-dataStatus.lastUpdate)/1000)}s ago</span>}
           </div>
+          <div style={{padding:"2px 8px",background:sessionQuality.col+"15",border:"1px solid "+sessionQuality.col+"40",borderRadius:2,fontSize:8,color:sessionQuality.col,fontFamily:"monospace",letterSpacing:".06em"}}>{sessionQuality.label} · {sessionQuality.quality}</div>
           <span style={{padding:"2px 8px",background:K.c+"10",border:"1px solid "+K.c+"20",color:K.c,borderRadius:2,fontSize:8,letterSpacing:".06em"}}>◈ DEMO · REAL PRICES · VIRTUAL $10K</span>
         </div>
       </div>
@@ -3073,6 +3173,18 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
                 })}
               </div>
             </div>
+            {Object.keys(pendingEntries).length>0&&(
+              <div style={{padding:"7px 9px",background:K.gold+"06",border:"1px solid "+K.gold+"20",borderRadius:3,marginBottom:0}}>
+                <div style={{fontSize:7,color:K.gold,marginBottom:4,letterSpacing:".12em"}}>⏳ PENDING ENTRIES</div>
+                {Object.entries(pendingEntries).map(([sym,e])=>(
+                  <div key={sym} style={{display:"flex",justifyContent:"space-between",fontSize:8,color:K.dim,fontFamily:"monospace",marginBottom:1}}>
+                    <span style={{color:K.tx}}>{sym} {e.signal}</span>
+                    <span>→ {fPrice(e.target)}</span>
+                    <span style={{color:K.dim,fontSize:7}}>{Math.max(0,Math.round((e.expiry-Date.now())/1000))}s</span>
+                  </div>
+                ))}
+              </div>
+            )}
             <div className="panel" style={{padding:9,flex:1,overflow:"auto"}}>
               <div style={{fontSize:8,color:K.dim,marginBottom:6,letterSpacing:".12em"}}>◉ POSITIONS</div>
               {Object.keys(port.pos).length===0
