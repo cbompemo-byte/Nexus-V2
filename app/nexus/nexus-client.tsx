@@ -1840,6 +1840,10 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   const scaleInTimersRef=useRef<ReturnType<typeof setInterval>[]>([]);
   // Session quality — updates every minute
   const [sessionQuality,setSessionQuality]=useState(getSessionQuality());
+  // Performance fee state (live mode only)
+  const [feePercent,setFeePercent]=useState(10);
+  const [totalFeesPaid,setTotalFeesPaid]=useState(0);
+  const [highWaterMark,setHighWaterMark]=useState(CAP);
   const entropyRef=useRef(entropy);
   useEffect(()=>{entropyRef.current=entropy;},[entropy]);
 
@@ -2861,13 +2865,40 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
           <button onClick={async()=>{
             const ph=(window as unknown as {phantom?:{solana?:{connect:()=>Promise<{publicKey:{toString:()=>string}}>,isPhantom?:boolean}}}).phantom?.solana;
             if(!ph?.isPhantom){window.open("https://phantom.app/","_blank");return;}
-            try{const r=await ph.connect();setWalletAddress(r.publicKey.toString());setWalletConnected(true);log("SYS","⚡ LIVE MODE — Phantom connected: "+r.publicKey.toString().slice(0,8)+"...",K.g);}
+            try{
+              const r=await ph.connect();
+              const addr=r.publicKey.toString();
+              setWalletAddress(addr);setWalletConnected(true);
+              log("SYS","⚡ LIVE MODE — Phantom connected: "+addr.slice(0,8)+"...",K.g);
+              // Load per-wallet fee state from localStorage
+              const stored=localStorage.getItem("kymia_fee_"+addr);
+              if(stored){const fs=JSON.parse(stored);setTotalFeesPaid(fs.totalFeesPaid||0);setFeePercent(fs.feePercent||10);setHighWaterMark(fs.highWaterMark||CAP);}
+            }
             catch{log("SYS","Phantom connection rejected",K.r);}
           }} style={{background:"rgba(0,242,254,0.15)",border:"2px solid rgba(0,242,254,0.5)",color:K.c,fontFamily:"inherit",fontSize:13,borderRadius:6,padding:"12px 36px",cursor:"pointer",letterSpacing:".1em",transition:"all .2s"}}>
             ⚡ CONNECT PHANTOM
           </button>
           <div style={{padding:"10px 24px",maxWidth:380,background:"rgba(255,215,0,0.06)",border:"1px solid rgba(255,215,0,0.2)",borderRadius:4,fontSize:10,color:K.gold,textAlign:"center",lineHeight:1.8}}>
             ⚠ Real funds will be used for trading.<br/>KYMIA never holds your funds.<br/>Non-custodial · You keep your keys.
+          </div>
+          {/* ── Performance fee transparency ── */}
+          <div style={{maxWidth:400,padding:"14px 18px",background:"rgba(255,215,0,0.05)",border:"1px solid rgba(255,215,0,0.2)",borderRadius:6,fontFamily:"'JetBrains Mono','Courier New',monospace"}}>
+            <div style={{fontSize:11,color:K.gold,fontWeight:700,marginBottom:10,letterSpacing:".1em"}}>◈ HOW THE PERFORMANCE FEE WORKS</div>
+            <div style={{fontSize:10,color:"#A8D0EC",lineHeight:2}}>
+              • KYMIA takes {feePercent}% <em>only</em> on winning trades<br/>
+              • Fee is included in the same transaction you sign to close<br/>
+              • Your funds never leave your wallet without your signature<br/>
+              • Losing trades: zero fee, zero cost<br/>
+              • High-water mark: we never charge twice on the same gains
+            </div>
+            <div style={{marginTop:12,display:"flex",alignItems:"center",gap:10}}>
+              <span style={{fontSize:9,color:K.dim}}>FEE TIER:</span>
+              {[5,10,15].map(pct=>(
+                <button key={pct} onClick={()=>setFeePercent(pct)} style={{padding:"3px 10px",fontSize:10,fontFamily:"inherit",cursor:"pointer",borderRadius:3,background:feePercent===pct?K.gold+"25":"transparent",color:feePercent===pct?K.gold:K.dim,border:"1px solid "+(feePercent===pct?K.gold+"60":"#1A3050")}}>
+                  {pct}%
+                </button>
+              ))}
+            </div>
           </div>
           <a href="/" style={{fontSize:10,color:K.dim,textDecoration:"none",marginTop:4}}>← Back to DEMO mode</a>
         </div>
@@ -3072,10 +3103,17 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
                 return(<>
                   <div style={{fontSize:19,fontWeight:900,color:pnlCol,textShadow:`0 0 12px ${pnlCol}`,marginBottom:2,fontFamily:"monospace"}}>{pnl>=0?"+":""}{fU(pnl)}</div>
                   <div style={{fontSize:8,color:"#2A5070",marginBottom:4}}>{fP(pct)} since start · WR {f2(wr,0)}% · {signalCount} signals</div>
-                  <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:8}}>
+                  <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:isLive?4:8}}>
                     <span style={{fontSize:7,padding:"1px 6px",background:"#BD00FF15",border:"1px solid #BD00FF40",borderRadius:2,color:"#BD00FF",fontWeight:700}}>x{SWARM_CONFIG.leverage} LEV</span>
                     <span style={{fontSize:7,color:"#2A5070"}}>{SWARM_CONFIG.profile.toUpperCase()}</span>
                   </div>
+                  {isLive&&(
+                    <div style={{marginBottom:8,padding:"6px 8px",background:K.gold+"08",border:"1px solid "+K.gold+"25",borderRadius:3}}>
+                      <div style={{fontSize:7,color:K.dim,marginBottom:2,letterSpacing:".08em"}}>KYMIA EARNED (this session)</div>
+                      <div style={{fontSize:16,fontWeight:700,color:K.gold,fontFamily:"monospace"}}>${f2(totalFeesPaid)}</div>
+                      <div style={{fontSize:7,color:K.dim,marginTop:1}}>{feePercent}% of profits · paid on-chain · HWM ${f2(highWaterMark)}</div>
+                    </div>
+                  )}
                   {nextM&&(<>
                     <div style={{display:"flex",justifyContent:"space-between",fontSize:8,marginBottom:3}}>
                       <span style={{color:nextM.color}}>{nextM.icon} {nextM.name}</span>
