@@ -2352,64 +2352,12 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
     if(!mint){log("KYMIA","⚠ No mint for "+sym+" — skipping live close",K.r);return false;}
     const decimals=TOKEN_DECIMALS[sym]??6;
     const rawAmt=Math.round(pos.qty*Math.pow(10,decimals));
-    // Cost basis = entry price × qty (leverage doesn't change USD entry value for fee calc)
     const entryUsd=pos.avg*pos.qty;
     const exitUsd=exitPrice*pos.qty;
     try{
+      const {PublicKey:PK}=await import("@solana/web3.js");
       const result=await closeLiveTrade({
-        // wallet.toString() is used for HWM key — pass as minimal object
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        wallet:{toString:()=>walletAddress} as any,
-        connection:{
-          sendRawTransaction:async(raw:unknown)=>{
-            // Send via Solana mainnet JSON-RPC (no @solana/web3.js needed)
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const bytes=raw instanceof Uint8Array?raw:Uint8Array.from(raw as any);
-            const b64=btoa(String.fromCharCode(...bytes));
-            const res=await fetch("https://api.mainnet-beta.solana.com",{
-              method:"POST",headers:{"Content-Type":"application/json"},
-              body:JSON.stringify({jsonrpc:"2.0",id:1,method:"sendTransaction",
-                params:[b64,{encoding:"base64",skipPreflight:false,preflightCommitment:"confirmed"}]}),
-            });
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const d=await res.json() as any;
-            if(d.error)throw new Error(d.error.message);
-            return d.result as string;
-          },
-          confirmTransaction:async(sig:string)=>{
-            // Poll getSignatureStatuses until confirmed/finalized or timeout (60s)
-            for(let i=0;i<30;i++){
-              await new Promise(r=>setTimeout(r,2000));
-              const res=await fetch("https://api.mainnet-beta.solana.com",{
-                method:"POST",headers:{"Content-Type":"application/json"},
-                body:JSON.stringify({jsonrpc:"2.0",id:1,method:"getSignatureStatuses",
-                  params:[[sig],{searchTransactionHistory:true}]}),
-              });
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              const d=await res.json() as any;
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              const st=d?.result?.value?.[0] as any;
-              if(st&&(st.confirmationStatus==="confirmed"||st.confirmationStatus==="finalized"))return;
-              if(st?.err)throw new Error("tx failed: "+JSON.stringify(st.err));
-            }
-            throw new Error("confirmation timeout (60s)");
-          },
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        } as any,
-        signTransaction:async(tx:unknown)=>{
-          // closeLiveTrade passes raw Buffer when @solana/web3.js VersionedTransaction is absent.
-          // Attempt to use @solana/web3.js if available (dynamic — no build-time dep).
-          let txObj=tx;
-          try{
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const w3=(globalThis as any).__solanaWeb3;
-            if(w3?.VersionedTransaction){
-              txObj=w3.VersionedTransaction.deserialize(tx instanceof Buffer?tx:Buffer.from(tx as ArrayBuffer));
-            }
-          }catch{/* no @solana/web3.js loaded — pass raw buffer, Phantom v2+ handles it */}
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          return ph.signTransaction(txObj) as any;
-        },
+        wallet:new PK(walletAddress),
         inputMint:mint,
         outputMint:USDC_MINT,
         amount:rawAmt,
@@ -2417,10 +2365,41 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
         exitValueUsd:exitUsd,
         feePercent,
         log:(msg:string)=>log("KYMIA",msg,K.gold),
+        signTransaction:async(tx)=>{
+          // Phantom's signTransaction accepts VersionedTransaction directly
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          return ph.signTransaction(tx) as Promise<typeof tx>;
+        },
+        sendAndConfirm:async(signedTx)=>{
+          // Serialize → base64 → Solana JSON-RPC sendTransaction
+          const raw=signedTx.serialize();
+          const b64=Buffer.from(raw).toString("base64");
+          const sendRes=await fetch("https://api.mainnet-beta.solana.com",{
+            method:"POST",headers:{"Content-Type":"application/json"},
+            body:JSON.stringify({jsonrpc:"2.0",id:1,method:"sendTransaction",
+              params:[b64,{encoding:"base64",skipPreflight:false,preflightCommitment:"confirmed"}]}),
+          });
+          const sendData=await sendRes.json() as {result?:string,error?:{message:string}};
+          if(sendData.error)throw new Error(sendData.error.message);
+          const sig=sendData.result!;
+          // Poll getSignatureStatuses until confirmed or 60s timeout
+          for(let i=0;i<30;i++){
+            await new Promise(r=>setTimeout(r,2000));
+            const pollRes=await fetch("https://api.mainnet-beta.solana.com",{
+              method:"POST",headers:{"Content-Type":"application/json"},
+              body:JSON.stringify({jsonrpc:"2.0",id:1,method:"getSignatureStatuses",
+                params:[[sig],{searchTransactionHistory:true}]}),
+            });
+            const pollData=await pollRes.json() as {result?:{value?:Array<{confirmationStatus?:string,err?:unknown}>}};
+            const st=pollData?.result?.value?.[0];
+            if(st&&(st.confirmationStatus==="confirmed"||st.confirmationStatus==="finalized"))return sig;
+            if(st?.err)throw new Error("tx failed: "+JSON.stringify(st.err));
+          }
+          throw new Error("confirmation timeout (60s)");
+        },
       });
       setTotalFeesPaid(p=>p+result.feeAmountUsd);
       if(result.feeAmountUsd>0)setHighWaterMark(hm=>Math.max(hm,exitUsd));
-      // Remove position from portfolio after confirmed on-chain close
       setPort(prev=>{const p2={...prev.pos};delete p2[sym];return{...prev,cash:prev.cash+exitUsd,pos:p2};});
       log("KYMIA","◈ "+sym+" closed on-chain · tx: "+result.txSignature.slice(0,8)+"...",K.g);
       return true;

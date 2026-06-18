@@ -1,9 +1,6 @@
 /**
  * KYMIA — Close a live (SPOT) trade via Jupiter with embedded performance fee.
  *
- * ⚠  DEPENDENCIES NOT YET INSTALLED — run before using:
- *    npm install @solana/web3.js
- *
  * ⚠  JUPITER API NOTE:
  *    Endpoints below reflect Jupiter v6 (quote-api.jup.ag/v6).
  *    Always verify at https://station.jup.ag/docs/apis/swap-api before
@@ -21,26 +18,16 @@
  *    Confirm the fee transfer appears in the transaction on Solscan.
  */
 
+import { VersionedTransaction, PublicKey } from "@solana/web3.js";
 import {
   calculatePerformanceFee,
   getTaxableProfit,
   recordFeePaid,
 } from "./performanceFee";
 
-// ── Types ────────────────────────────────────────────────────────────────────
-// Using `any` for @solana/web3.js types until the package is installed.
-// Replace with proper imports once `npm install @solana/web3.js` is run:
-//   import { PublicKey, VersionedTransaction, Connection } from "@solana/web3.js"
-/* eslint-disable @typescript-eslint/no-explicit-any */
-type PublicKey = any;
-type VersionedTransaction = any;
-type Connection = any;
-
 export interface CloseLiveTradeParams {
   /** Connected Solana wallet public key */
   wallet: PublicKey;
-  /** RPC connection (e.g. new Connection("https://mainnet.helius-rpc.com/?api-key=...")) */
-  connection: Connection;
   /** Token mint being sold (e.g. SOL mint, or any SPL token) */
   inputMint: string;
   /** Output mint — should be USDC for the fee account to work correctly */
@@ -53,8 +40,19 @@ export interface CloseLiveTradeParams {
   exitValueUsd: number;
   /** Performance fee percentage chosen by the user (5–15) */
   feePercent: number;
-  /** Phantom / wallet adapter signTransaction function */
+  /**
+   * Phantom / wallet adapter signTransaction.
+   * Receives a VersionedTransaction; must return the signed copy.
+   * Phantom v1+ supports this directly:
+   *   const { signTransaction } = window.phantom.solana
+   */
   signTransaction: (tx: VersionedTransaction) => Promise<VersionedTransaction>;
+  /**
+   * Send the signed, serialized transaction and return the signature string.
+   * Use connection.sendRawTransaction(tx.serialize()) with @solana/web3.js Connection,
+   * or send via the Solana JSON-RPC sendTransaction method directly.
+   */
+  sendAndConfirm: (tx: VersionedTransaction) => Promise<string>;
   /** Optional logger — defaults to console.log */
   log?: (msg: string) => void;
 }
@@ -74,21 +72,19 @@ export async function closeLiveTrade(
   params: CloseLiveTradeParams,
 ): Promise<CloseLiveTradeResult> {
   const {
-    wallet, connection, inputMint, outputMint, amount,
+    wallet, inputMint, outputMint, amount,
     entryValueUsd, exitValueUsd, feePercent,
-    signTransaction, log = console.log,
+    signTransaction, sendAndConfirm, log = console.log,
   } = params;
 
-  const walletStr: string = typeof wallet.toString === "function"
-    ? wallet.toString()
-    : String(wallet);
+  const walletStr = wallet.toString();
 
   // ── 1. Calculate fee using high-water mark ───────────────────────────────
-  const currentEquity = exitValueUsd; // approximate: treat close proceeds as equity proxy
+  const currentEquity = exitValueUsd;
   const rawProfit = exitValueUsd - entryValueUsd;
   const taxableProfit = getTaxableProfit(walletStr, currentEquity, rawProfit);
 
-  // Adjusted entry so fee math yields (feePercent% of taxable profit only)
+  // Adjusted entry so fee = feePercent% of taxable profit only (not total exit)
   const adjustedEntry = exitValueUsd - taxableProfit;
   const fee = calculatePerformanceFee(adjustedEntry, exitValueUsd, feePercent);
 
@@ -109,7 +105,7 @@ export async function closeLiveTrade(
 
   const quoteRes = await fetch(quoteUrl.toString());
   if (!quoteRes.ok) throw new Error(`Jupiter quote failed: ${quoteRes.status}`);
-  const quote = await quoteRes.json();
+  const quote: unknown = await quoteRes.json();
 
   // ── 3. Build swap transaction with fee account ───────────────────────────
   const feeWallet = process.env.NEXT_PUBLIC_KYMIA_FEE_WALLET;
@@ -120,10 +116,10 @@ export async function closeLiveTrade(
   const swapBody: Record<string, unknown> = {
     quoteResponse: quote,
     userPublicKey: walletStr,
-    wrapAndUnwrapSol: true, // auto-wraps SOL → wSOL and unwraps back
+    wrapAndUnwrapSol: true, // auto-wraps native SOL → wSOL and back
   };
   if (fee.platformFeeBps > 0 && feeWallet) {
-    // feeAccount must be the USDC ATA of the kymia.sol fee wallet, NOT a raw wallet address.
+    // feeAccount MUST be the USDC ATA of the fee wallet, NOT the raw wallet address.
     swapBody.feeAccount = feeWallet;
   }
 
@@ -133,32 +129,16 @@ export async function closeLiveTrade(
     body: JSON.stringify(swapBody),
   });
   if (!swapRes.ok) throw new Error(`Jupiter swap build failed: ${swapRes.status}`);
-  const { swapTransaction } = await swapRes.json();
+  const { swapTransaction } = await swapRes.json() as { swapTransaction: string };
 
-  // ── 4. User signs ONE transaction (swap + fee in the same ix) ────────────
-  // Requires @solana/web3.js: import { VersionedTransaction } from "@solana/web3.js"
+  // ── 4. Deserialize → sign → send (one user signature) ───────────────────
   const txBuf = Buffer.from(swapTransaction, "base64");
-  // VersionedTransaction.deserialize is from @solana/web3.js — install the package first
-  const tx = (globalThis as any).VersionedTransaction
-    ? (globalThis as any).VersionedTransaction.deserialize(txBuf)
-    : txBuf; // fallback: pass raw buffer if VersionedTransaction not imported
+  const tx = VersionedTransaction.deserialize(txBuf);
 
   const signedTx = await signTransaction(tx);
+  const txSignature = await sendAndConfirm(signedTx);
 
-  // ── 5. Send and confirm ───────────────────────────────────────────────────
-  // connection.sendRawTransaction requires @solana/web3.js Connection
-  const rawTx = typeof signedTx.serialize === "function"
-    ? signedTx.serialize()
-    : signedTx;
-
-  const txSignature: string = await connection.sendRawTransaction(rawTx, {
-    skipPreflight: false,
-    preflightCommitment: "confirmed",
-  });
-
-  await connection.confirmTransaction(txSignature, "confirmed");
-
-  // ── 6. Post-success bookkeeping ───────────────────────────────────────────
+  // ── 5. Post-success bookkeeping ───────────────────────────────────────────
   if (fee.isProfit) {
     recordFeePaid(walletStr, fee.feeAmountUsd, currentEquity);
   }
@@ -170,9 +150,5 @@ export async function closeLiveTrade(
     ` · tx: ${txSignature}`,
   );
 
-  return {
-    txSignature,
-    feeAmountUsd: fee.feeAmountUsd,
-    userProfitAfterFee: fee.userProfitAfterFee,
-  };
+  return { txSignature, feeAmountUsd: fee.feeAmountUsd, userProfitAfterFee: fee.userProfitAfterFee };
 }
