@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect, useRef, useCallback, useLayoutEffect } from "react";
 import { closeLiveTrade } from "../../lib/closeLiveTrade";
+import { openLiveTrade } from "../../lib/openLiveTrade";
 import { motion, useAnimationControls } from "framer-motion";
 import * as THREE from "three";
 
@@ -2411,6 +2412,72 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[isLive,walletAddress,feePercent,log]);
 
+  // Live OPEN path — mirrors performLiveClose.
+  // Returns {actualQty, avgPrice} on success, false on demo/error.
+  // actualQty comes from Jupiter's quote.outAmount (real slippage), not a theoretical calc.
+  const performLiveOpen=useCallback(async(
+    sym:string,
+    usdcToSpend:number,
+    conf:number,
+  ):Promise<{actualQty:number,avgPrice:number}|false>=>{
+    if(!isLive||!walletAddress)return false;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const ph=(window as any).phantom?.solana;
+    if(!ph)return false;
+    const mint=(SYMS as Record<string,{mint:string}>)[sym]?.mint;
+    if(!mint){log("KYMIA","⚠ No mint for "+sym+" — skipping live open",K.r);return false;}
+    const decimals=TOKEN_DECIMALS[sym]??6;
+    try{
+      const {PublicKey:PK}=await import("@solana/web3.js");
+      const result=await openLiveTrade({
+        wallet:new PK(walletAddress),
+        outputMint:mint,
+        usdcToSpend,
+        slippageBps:50,
+        log:(msg:string)=>log("KYMIA",msg,K.gold),
+        signTransaction:async(tx)=>{
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          return ph.signTransaction(tx) as Promise<typeof tx>;
+        },
+        sendAndConfirm:async(signedTx)=>{
+          const raw=signedTx.serialize();
+          const b64=Buffer.from(raw).toString("base64");
+          const sendRes=await fetch("https://api.mainnet-beta.solana.com",{
+            method:"POST",headers:{"Content-Type":"application/json"},
+            body:JSON.stringify({jsonrpc:"2.0",id:1,method:"sendTransaction",
+              params:[b64,{encoding:"base64",skipPreflight:false,preflightCommitment:"confirmed"}]}),
+          });
+          const sendData=await sendRes.json() as {result?:string,error?:{message:string}};
+          if(sendData.error)throw new Error(sendData.error.message);
+          const sig=sendData.result!;
+          for(let i=0;i<30;i++){
+            await new Promise(r=>setTimeout(r,2000));
+            const pollRes=await fetch("https://api.mainnet-beta.solana.com",{
+              method:"POST",headers:{"Content-Type":"application/json"},
+              body:JSON.stringify({jsonrpc:"2.0",id:1,method:"getSignatureStatuses",
+                params:[[sig],{searchTransactionHistory:true}]}),
+            });
+            const pollData=await pollRes.json() as {result?:{value?:Array<{confirmationStatus?:string,err?:unknown}>}};
+            const st=pollData?.result?.value?.[0];
+            if(st&&(st.confirmationStatus==="confirmed"||st.confirmationStatus==="finalized"))return sig;
+            if(st?.err)throw new Error("tx failed: "+JSON.stringify(st.err));
+          }
+          throw new Error("confirmation timeout (60s)");
+        },
+      });
+      const actualQty=result.rawOutAmount/Math.pow(10,decimals);
+      const avgPrice=usdcToSpend/actualQty;
+      log("KYMIA","◈ "+sym+" opened on-chain · "+f2(actualQty,6)+" units @ "+fPrice(avgPrice)+" · tx: "+result.txSignature.slice(0,8)+"...",K.g);
+      void conf; // conf used in trade log by caller
+      return{actualQty,avgPrice};
+    }catch(e:unknown){
+      const msg=e instanceof Error?e.message:String(e);
+      log("KYMIA","⚠ Live open failed ("+sym+"): "+msg+" — applying demo fallback",K.r);
+      return false;
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[isLive,walletAddress,log]);
+
   // Unified LONG close: live (Jupiter) or demo (direct setPort)
   // Guards against double-fire during async tx confirmation window.
   const closeLongPosition=useCallback((
@@ -2534,12 +2601,15 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
         if(manip.risk==="MEDIUM"){leveragedSize*=0.5;baseAlloc*=0.5;log("WATCH","⚠ "+sym+" size halved — MEDIUM manip risk",K.gold);}
         // Tranche 1: 60% of size
         const t1Size=leveragedSize*0.60,t1Alloc=baseAlloc*0.60;
-        const qty1=t1Size/cur;
         const prt=portRef.current;
         if(prt.pos[sym]||prt.cash<t1Alloc)continue;
-        setPort(prev=>{if(prev.pos[sym])return prev;return{...prev,cash:prev.cash-t1Alloc,pos:{...prev.pos,[sym]:{qty:qty1,avg:cur,peak:cur,entryMs:Date.now(),trailActive:false,side:"LONG" as const,scaledIn:false,leverage:lev,leveragedSize:t1Size}}};});
-        setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym,side:"BUY",qty:qty1,price:cur,pnl:0,conf,t:ts(),ms:Date.now(),reason:"Pullback T1 (60%)"},...t.slice(0,99)]);
-        log("AEGIS","◈ T1 pullback "+sym+": $"+f2(t1Alloc,0)+" margin (x"+lev+" → $"+f2(t1Size,0)+", 60%)",K.co);
+        // Try live open — use actual qty/price from Jupiter, fall back to theoretical on demo/error
+        const liveOpen1=await performLiveOpen(sym,t1Alloc,conf);
+        const qty1=liveOpen1?liveOpen1.actualQty:t1Size/cur;
+        const avgP1=liveOpen1?liveOpen1.avgPrice:cur;
+        setPort(prev=>{if(prev.pos[sym])return prev;return{...prev,cash:prev.cash-t1Alloc,pos:{...prev.pos,[sym]:{qty:qty1,avg:avgP1,peak:avgP1,entryMs:Date.now(),trailActive:false,side:"LONG" as const,scaledIn:false,leverage:lev,leveragedSize:t1Size}}};});
+        setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym,side:"BUY",qty:qty1,price:avgP1,pnl:0,conf,t:ts(),ms:Date.now(),reason:"Pullback T1 (60%)"+(liveOpen1?" [live]":"")},...t.slice(0,99)]);
+        log("AEGIS","◈ T1 pullback "+sym+": $"+f2(t1Alloc,0)+" margin (x"+lev+" → $"+f2(t1Size,0)+", 60%)"+(liveOpen1?" [on-chain]":""),K.co);
         setSignalCount(n=>n+1);
         // Tranche 2: 40% after +1% confirmation
         const entryP=cur;
@@ -2553,11 +2623,15 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
             const t2Size=leveragedSize*0.40,t2Alloc=baseAlloc*0.40;
             const prt2=portRef.current;
             if(prt2.cash<t2Alloc)return;
-            const qty2=t2Size/c2;
-            const newQty=pos2.qty+qty2;
-            const newAvg=(pos2.avg*pos2.qty+c2*qty2)/newQty;
-            setPort(prev=>{const pp=prev.pos[sym];if(!pp||pp.scaledIn)return prev;return{...prev,cash:prev.cash-t2Alloc,pos:{...prev.pos,[sym]:{...pp,qty:newQty,avg:newAvg,scaledIn:true,leveragedSize:(pp.leveragedSize||0)+t2Size}}};});
-            log("AEGIS","◈ T2 scale-in "+sym+": +$"+f2(t2Alloc,0)+" (40%) — position complete",K.g);
+            void(async()=>{
+              const liveOpen2=await performLiveOpen(sym,t2Alloc,conf);
+              const qty2=liveOpen2?liveOpen2.actualQty:t2Size/c2;
+              const c2actual=liveOpen2?liveOpen2.avgPrice:c2;
+              const newQty=pos2.qty+qty2;
+              const newAvg=(pos2.avg*pos2.qty+c2actual*qty2)/newQty;
+              setPort(prev=>{const pp=prev.pos[sym];if(!pp||pp.scaledIn)return prev;return{...prev,cash:prev.cash-t2Alloc,pos:{...prev.pos,[sym]:{...pp,qty:newQty,avg:newAvg,scaledIn:true,leveragedSize:(pp.leveragedSize||0)+t2Size}}};});
+              log("AEGIS","◈ T2 scale-in "+sym+": +$"+f2(t2Alloc,0)+" (40%) — position complete"+(liveOpen2?" [on-chain]":""),K.g);
+            })();
           }
         },10000);
         scaleInTimersRef.current.push(sivId);
