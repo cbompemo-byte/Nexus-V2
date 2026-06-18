@@ -1,5 +1,6 @@
 "use client";
 import { useState, useEffect, useRef, useCallback, useLayoutEffect } from "react";
+import { closeLiveTrade } from "../../lib/closeLiveTrade";
 import { motion, useAnimationControls } from "framer-motion";
 import * as THREE from "three";
 
@@ -59,6 +60,12 @@ const MISSIONS=[
   {id:4,name:"MARKET DOMINATOR",target:0.50,reward:"$5,000",message:"Extraordinary. KYMIA has doubled your risk-adjusted returns.",color:"#BD00FF",icon:"👑"},
   {id:5,name:"NEXUS ELITE",target:1.00,reward:"$10,000",message:"LEGENDARY. Portfolio doubled. You have transcended normal trading.",color:"#FF3366",icon:"◈"},
 ];
+
+// ── Live trading: token decimals + USDC output mint ─────────────────────────
+// Most Solana SPL tokens use 6 decimals; SOL (wSOL) uses 9; wrapped BTC/ETH use 8.
+// Jupiter amount param = qty * 10^decimals (integer, smallest unit).
+const TOKEN_DECIMALS:Record<string,number>={SOL:9,BTC:8,ETH:8};
+const USDC_MINT="EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
 // ── Experienced Trader Rules ──────────────────────────────────────────────────
 const TRADER_RULES={
@@ -1833,6 +1840,8 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   const swarmRef=useRef<HTMLDivElement>(null);
   // Symbol-level loss tracker — blacklists symbols after 2 losses
   const symLossRef=useRef<Record<string,number>>({});
+  // Prevents duplicate close attempts while a live tx is in-flight (async gap)
+  const pendingCloseRef=useRef<Set<string>>(new Set());
   // Pullback entry system — pending entries waiting for price pullback
   const pendingEntriesRef=useRef<Record<string,{signal:string,target:number,expiry:number,agent:string,reason:string,originalPrice:number,conf:number,leveragedSize:number,baseAlloc:number,lev:number}>>({});
   const [pendingEntries,setPendingEntries]=useState<Record<string,{signal:string,target:number,expiry:number}>>({});
@@ -2288,11 +2297,8 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
       // LONG path
       // ── Take Profit: exit at +8% (profile: balanced) ─────────────────────
       const tpPctL=SWARM_TP_PCT[SWARM_CONFIG.profile];
-      if(pct>=tpPctL*100){
-        setPort(prev=>{const p2={...prev.pos};delete p2[sym];return{...prev,cash:prev.cash+cur*pos.qty,pos:p2};});
-        addWinCard(sym,pnl,pct,cur,"AEGIS","TP +"+f2(tpPctL*100,0)+"%");
-        const effPnl=pos.leverage&&pos.leverage>1?pnl*pos.leverage:pnl;
-        log("AEGIS","💰 TP HIT "+sym+" +"+f2(pct,1)+"% | "+fU(pnl)+(pos.leverage&&pos.leverage>1?" (x"+pos.leverage+" eff: "+fU(effPnl)+")":""),K.g);
+      if(pct>=tpPctL*100&&!pendingCloseRef.current.has(sym)){
+        closeLongPosition(sym,pos,cur,"AEGIS","TP +"+f2(tpPctL*100,0)+"%");
         continue;
       }
       // ── Scale-in: add 4% when position confirms +1% gain ────────────────
@@ -2314,24 +2320,144 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
         if(trailJustActivated)log("TRAIL","🎯 TRAILING STOP activated: "+sym+" +"+f2(pct,1)+"%",K.gold);
         continue;
       }
-      if(pos.entryMs&&now-pos.entryMs>4*60*60*1000){
-        setPort(prev=>{const p2={...prev.pos};delete p2[sym];return{...prev,cash:prev.cash+cur*pos.qty,pos:p2};});
-        addWinCard(sym,pnl,pct,cur,"TIMER","4H Expiry");
-        log("TIMER","⏱ 4H EXPIRY: "+sym+" | "+fU(pnl),pnl>=0?K.g:K.gold);
+      if(pos.entryMs&&now-pos.entryMs>4*60*60*1000&&!pendingCloseRef.current.has(sym)){
+        closeLongPosition(sym,pos,cur,"TIMER","4H Expiry");
         continue;
       }
       const stop=getStop(pos,cur);
-      if(cur<=stop){
-        setPort(prev=>{const p2={...prev.pos};delete p2[sym];return{...prev,cash:prev.cash+cur*pos.qty,pos:p2};});
+      if(cur<=stop&&!pendingCloseRef.current.has(sym)){
         const slLabel="SL -"+f2(SWARM_SL_PCT[SWARM_CONFIG.profile]*100,1)+"%";
         const reason=pct>=5?"Lock +5%":pct>=3?"Trail -1.5%":pct>=1.5?"Breakeven":slLabel;
-        addWinCard(sym,pnl,pct,cur,pct>=1.5?"TRAIL":"AEGIS",reason);
-        const label=pct>=5?"🔒 LOCK +5%":pct>=3?"🔒 TRAIL -1.5%":pct>=1.5?"✓ BREAKEVEN":"⛔ "+slLabel;
-        log(pct>=1.5?"TRAIL":"AEGIS",label+" "+sym+" | "+fU(pnl),pnl>=0?K.g:K.r);
+        closeLongPosition(sym,pos,cur,pct>=1.5?"TRAIL":"AEGIS",reason);
       }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[prices,running]);
+
+  // ── Live close via Jupiter + performance fee ─────────────────────────────────
+  // Returns true if the on-chain tx succeeded; false → caller should apply demo fallback.
+  // SHORT positions are SPOT-only — no live shorts, so this only handles LONGs.
+  // Requires @solana/web3.js to be installed for VersionedTransaction deserialization.
+  // Without it, closeLiveTrade falls back to passing the raw Buffer to signTransaction;
+  // Phantom v2+ accepts Uint8Array but behaviour may vary — install the package for prod.
+  const performLiveClose=useCallback(async(
+    sym:string,pos:{avg:number,qty:number,leverage?:number},
+    exitPrice:number,
+  ):Promise<boolean>=>{
+    if(!isLive||!walletAddress)return false;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const ph=(window as any).phantom?.solana;
+    if(!ph)return false;
+    const mint=(SYMS as Record<string,{mint:string}>)[sym]?.mint;
+    if(!mint){log("KYMIA","⚠ No mint for "+sym+" — skipping live close",K.r);return false;}
+    const decimals=TOKEN_DECIMALS[sym]??6;
+    const rawAmt=Math.round(pos.qty*Math.pow(10,decimals));
+    // Cost basis = entry price × qty (leverage doesn't change USD entry value for fee calc)
+    const entryUsd=pos.avg*pos.qty;
+    const exitUsd=exitPrice*pos.qty;
+    try{
+      const result=await closeLiveTrade({
+        // wallet.toString() is used for HWM key — pass as minimal object
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        wallet:{toString:()=>walletAddress} as any,
+        connection:{
+          sendRawTransaction:async(raw:unknown)=>{
+            // Send via Solana mainnet JSON-RPC (no @solana/web3.js needed)
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const bytes=raw instanceof Uint8Array?raw:Uint8Array.from(raw as any);
+            const b64=btoa(String.fromCharCode(...bytes));
+            const res=await fetch("https://api.mainnet-beta.solana.com",{
+              method:"POST",headers:{"Content-Type":"application/json"},
+              body:JSON.stringify({jsonrpc:"2.0",id:1,method:"sendTransaction",
+                params:[b64,{encoding:"base64",skipPreflight:false,preflightCommitment:"confirmed"}]}),
+            });
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const d=await res.json() as any;
+            if(d.error)throw new Error(d.error.message);
+            return d.result as string;
+          },
+          confirmTransaction:async(sig:string)=>{
+            // Poll getSignatureStatuses until confirmed/finalized or timeout (60s)
+            for(let i=0;i<30;i++){
+              await new Promise(r=>setTimeout(r,2000));
+              const res=await fetch("https://api.mainnet-beta.solana.com",{
+                method:"POST",headers:{"Content-Type":"application/json"},
+                body:JSON.stringify({jsonrpc:"2.0",id:1,method:"getSignatureStatuses",
+                  params:[[sig],{searchTransactionHistory:true}]}),
+              });
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const d=await res.json() as any;
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const st=d?.result?.value?.[0] as any;
+              if(st&&(st.confirmationStatus==="confirmed"||st.confirmationStatus==="finalized"))return;
+              if(st?.err)throw new Error("tx failed: "+JSON.stringify(st.err));
+            }
+            throw new Error("confirmation timeout (60s)");
+          },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        } as any,
+        signTransaction:async(tx:unknown)=>{
+          // closeLiveTrade passes raw Buffer when @solana/web3.js VersionedTransaction is absent.
+          // Attempt to use @solana/web3.js if available (dynamic — no build-time dep).
+          let txObj=tx;
+          try{
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const w3=(globalThis as any).__solanaWeb3;
+            if(w3?.VersionedTransaction){
+              txObj=w3.VersionedTransaction.deserialize(tx instanceof Buffer?tx:Buffer.from(tx as ArrayBuffer));
+            }
+          }catch{/* no @solana/web3.js loaded — pass raw buffer, Phantom v2+ handles it */}
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          return ph.signTransaction(txObj) as any;
+        },
+        inputMint:mint,
+        outputMint:USDC_MINT,
+        amount:rawAmt,
+        entryValueUsd:entryUsd,
+        exitValueUsd:exitUsd,
+        feePercent,
+        log:(msg:string)=>log("KYMIA",msg,K.gold),
+      });
+      setTotalFeesPaid(p=>p+result.feeAmountUsd);
+      if(result.feeAmountUsd>0)setHighWaterMark(hm=>Math.max(hm,exitUsd));
+      // Remove position from portfolio after confirmed on-chain close
+      setPort(prev=>{const p2={...prev.pos};delete p2[sym];return{...prev,cash:prev.cash+exitUsd,pos:p2};});
+      log("KYMIA","◈ "+sym+" closed on-chain · tx: "+result.txSignature.slice(0,8)+"...",K.g);
+      return true;
+    }catch(e:unknown){
+      const msg=e instanceof Error?e.message:String(e);
+      log("KYMIA","⚠ Live close failed ("+sym+"): "+msg+" — applying demo fallback",K.r);
+      return false;
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[isLive,walletAddress,feePercent,log]);
+
+  // Unified LONG close: live (Jupiter) or demo (direct setPort)
+  // Guards against double-fire during async tx confirmation window.
+  const closeLongPosition=useCallback((
+    sym:string,pos:{avg:number,qty:number,leverage?:number},
+    exitPrice:number,agent:string,reason:string,
+  )=>{
+    if(pendingCloseRef.current.has(sym))return;
+    pendingCloseRef.current.add(sym);
+    const pnl=(exitPrice-pos.avg)*pos.qty;
+    const pct=((exitPrice-pos.avg)/pos.avg)*100;
+    void(async()=>{
+      try{
+        const liveOk=await performLiveClose(sym,pos,exitPrice);
+        if(!liveOk){
+          // Demo or live-failed fallback: update portfolio state directly
+          setPort(prev=>{const p2={...prev.pos};delete p2[sym];return{...prev,cash:prev.cash+exitPrice*pos.qty,pos:p2};});
+        }
+        addWinCard(sym,pnl,pct,exitPrice,agent,reason);
+        const effPnl=pos.leverage&&pos.leverage>1?pnl*pos.leverage:pnl;
+        log(agent,(pnl>=0?"💰 ":"⛔ ")+"CLOSE "+sym+" @ "+fPrice(exitPrice)+" "+fU(pnl)+(pos.leverage&&pos.leverage>1?" (x"+pos.leverage+" eff: "+fU(effPnl)+")":""),pnl>=0?K.g:K.r);
+      }finally{
+        pendingCloseRef.current.delete(sym);
+      }
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[performLiveClose]);
 
   const addWinCard=(sym:string,pnl:number,pct:number,price:number,agent:string,reason?:string)=>{
     // Track per-symbol losses for cooldown filter
@@ -2581,11 +2707,7 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
         tradeCount++;
       }else if((cs.sig==="SELL"||sig.isSell)&&prt.pos[sym]&&prt.pos[sym].side!=="SHORT"){
         // Close existing LONG position
-        const pos=prt.pos[sym];
-        const pnl=(p.price-pos.avg)*pos.qty;
-        setPort(prev=>{const p2={...prev.pos};delete p2[sym];return{...prev,cash:prev.cash+pos.qty*p.price,pos:p2};});
-        addWinCard(sym,pnl,((p.price-pos.avg)/pos.avg)*100,p.price,"CONSENSUS","Signal Exit");
-        log("EXEC","◀ CLOSE "+sym+" @ "+fPrice(p.price)+" PnL:"+fU(pnl),pnl>=0?K.g:K.r);
+        closeLongPosition(sym,prt.pos[sym],p.price,"CONSENSUS","Signal Exit");
         tradeCount++;
       }
       // SHORT: separate path — triggers on SELL consensus (≥55%) OR multi-TF SELL signal
@@ -2664,10 +2786,7 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
       log("EXEC","▶ ["+agent+"] LONG "+sym+" @ $"+f2(p.price)+" conf:"+conf+"%",K.g);
     }else{
       const pos=prt.pos[sym];if(!pos)return;
-      const pnl=(p.price-pos.avg)*pos.qty;
-      setPort(prev=>{const p2={...prev.pos};delete p2[sym];return{...prev,cash:prev.cash+pos.qty*p.price,pos:p2};});
-      addWinCard(sym,pnl,((p.price-pos.avg)/pos.avg)*100,p.price,agent,"Signal Exit");
-      log("EXEC","◀ ["+agent+"] CLOSE "+sym+" PnL:"+fU(pnl),pnl>=0?K.g:K.r);
+      closeLongPosition(sym,pos,p.price,agent,"Signal Exit");
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[]);
@@ -3580,11 +3699,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
         const pos=portRef.current.pos[sym];
         const cur=pricesRef.current[sym]?.price||pos?.avg||0;
         if(!pos||!cur)return;
-        const pnl=(cur-pos.avg)*pos.qty;
-        const pct=((cur-pos.avg)/pos.avg)*100;
-        setPort(prev=>{const p2={...prev.pos};delete p2[sym];return{...prev,cash:prev.cash+pos.qty*cur,pos:p2};});
-        addWinCard(sym,pnl,pct,cur,"MANUAL","Manually closed by user");
-        log("EXEC","◀ MANUAL CLOSE "+sym+" @ "+fPrice(cur)+" PnL:"+fU(pnl),pnl>=0?K.g:K.r);
+        closeLongPosition(sym,pos,cur,"MANUAL","Manually closed");
       }}/>}
 
       {/* Win Cards */}
