@@ -292,6 +292,31 @@ const TH:{[k:string]:string[]}={
   consensus:["VOTE: BUY SOL 14/18","WIF consensus: 82%","BONK debate: LONG wins","EXECUTE: JUP LONG"],
 };
 
+// ── V2.1 Types ───────────────────────────────────────────────────────
+type MarketRegime='TRENDING'|'RANGING'|'VOLATILE'|'BLACK SWAN';
+interface RegimeState{regime:MarketRegime;confidence:number;direction:'BULL'|'BEAR'|'NEUTRAL';dominantAgents:string[];adx:number;description:string}
+interface OpportunityScore{total:number;breakdown:{liquidity:number;momentum:number;volume:number;sentiment:number;risk:number};grade:'A'|'B'|'C'|'D';tradeable:boolean}
+interface TradeExplanation{passed:{signal:string;detail:string}[];failed:{signal:string;detail:string}[];decision:'EXECUTE'|'REJECT';reason:string}
+interface SignalWithDecay{id:string;sym:string;signal:'BUY'|'SELL';initialConf:number;currentConf:number;createdAt:number;ageSeconds:number;decayPct:number;expired:boolean}
+type TokenStatus='WATCHLISTED'|'CONFIRMING'|'ENTRY_CANDIDATE'|'EXECUTING'|'REJECTED';
+interface WatchlistedToken{sym:string;name:string;address:string;status:TokenStatus;safetyScore:number;momentumScore:number;watchlistTime:number;confirmationProgress:number;liquidity:number;volume1h:number;buyRatio:number;priceChange1h:number;price:number;dexUrl:string;flags:string[];passed:string[]}
+interface MissedOpportunity{sym:string;move:number;reason:string;timestamp:string;wasRightToSkip:boolean}
+interface RejectedTrade{sym:string;confidence:number;reasons:string[];timestamp:string;capitalProtected:number}
+// ── V2.1 Constants ───────────────────────────────────────────────────
+const AGENT_LAYER_MAP:Record<string,{layer:number,role:string}>={
+  titan:{layer:1,role:'Strategy Desk'},atlas:{layer:1,role:'Regime Detector'},
+  radar:{layer:2,role:'Edge Radar'},leviathan:{layer:3,role:'Liquidity Snipe'},aegis:{layer:3,role:'Anti-Manipulation'},
+};
+const LAYER_RING_COLORS:{[k:number]:string}={1:'#00F2FE',2:'#BD00FF',3:'#FF8C00'};
+const REGIME_CONFIG:Record<MarketRegime,{col:string;agentWeightBoosts:Record<string,number>;maxExposure:number;description:string}>={
+  'TRENDING':{col:'#00FF88',agentWeightBoosts:{titan:1.4,radar:1.3,vector:1.2},maxExposure:0.65,description:'Strong directional move — ride the trend'},
+  'RANGING':{col:'#FFD700',agentWeightBoosts:{lens:1.4,oracle:1.3,shield:1.2},maxExposure:0.40,description:'Oscillating market — mean reversion plays'},
+  'VOLATILE':{col:'#FF3366',agentWeightBoosts:{aegis:1.8,watch:1.5},maxExposure:0.20,description:'High volatility — reduced exposure only'},
+  'BLACK SWAN':{col:'#BD00FF',agentWeightBoosts:{aegis:3.0},maxExposure:0.05,description:'Extreme event — AEGIS dominates, preserve capital'},
+};
+const DECAY_RATE=2.5;
+const SIGNAL_EXPIRY=15*60*1000;
+
 type PriceData={price:number,prev:number,trend:string,change:number,rsi:number,hist:number[],source?:string};
 type AgentState={on:boolean,conf:number|null,sig:string|null,th:string,real?:boolean};
 type NewToken={address:string,name:string,price:string,change1h:number,volume24h:number,liquidity:number,rugScore:number,buys:number,sells:number};
@@ -303,6 +328,70 @@ type LogEntry={t:string,ag:string,msg:string,col:string};
 type WinCard={id:string,sym:string,pnl:number,pct:number,price:number,agent:string,t:string,origin?:{x:number,y:number}};
 type EdgeToast={id:string,type:string,icon:string,col:string,title:string,body:string};
 type MoneyLabel={id:string,x:number,y:number,val:number,born:number};
+
+// ── Part 2: Market Regime Detector ──────────────────────────────────
+const detectRegime=async(logFn?:(ag:string,msg:string,col:string)=>void):Promise<RegimeState>=>{
+  try{
+    const [btc4h,btc1h]=await Promise.all([
+      fetch('https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=4h&limit=28').then(r=>r.json()),
+      fetch('https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1h&limit=24').then(r=>r.json()),
+    ]);
+    const highs=btc4h.map((c:unknown[])=>parseFloat(c[2] as string));
+    const lows=btc4h.map((c:unknown[])=>parseFloat(c[3] as string));
+    const closes4h=btc4h.map((c:unknown[])=>parseFloat(c[4] as string));
+    let plusDM=0,minusDM=0,tr=0;
+    for(let i=1;i<btc4h.length;i++){
+      const um=highs[i]-highs[i-1],dm=lows[i-1]-lows[i];
+      plusDM+=um>dm&&um>0?um:0;minusDM+=dm>um&&dm>0?dm:0;
+      tr+=Math.max(highs[i]-lows[i],Math.abs(highs[i]-closes4h[i-1]),Math.abs(lows[i]-closes4h[i-1]));
+    }
+    const plusDI=(plusDM/tr)*100,minusDI=(minusDM/tr)*100;
+    const adx=Math.abs(plusDI-minusDI)/(plusDI+minusDI)*100;
+    const closes1h=btc1h.map((c:unknown[])=>parseFloat(c[4] as string));
+    const changes=closes1h.slice(1).map((c:number,i:number)=>Math.abs((c-closes1h[i])/closes1h[i]*100));
+    const avgChange=changes.reduce((a:number,b:number)=>a+b,0)/changes.length;
+    let regime:MarketRegime,confidence:number,dominantAgents:string[];
+    if(avgChange>3.5){regime='BLACK SWAN';confidence=95;dominantAgents=['AEGIS'];}
+    else if(avgChange>2.0){regime='VOLATILE';confidence=Math.min(95,avgChange*30);dominantAgents=['AEGIS','WATCH'];}
+    else if(adx>28){regime='TRENDING';confidence=Math.min(98,adx*2.5);dominantAgents=['TITAN','RADAR','VECTOR'];}
+    else{regime='RANGING';confidence=Math.min(90,(25-adx)*4);dominantAgents=['LENS','ORACLE','SHIELD'];}
+    const direction=plusDI>minusDI?'BULL':'BEAR';
+    const cfg=REGIME_CONFIG[regime];
+    const state:RegimeState={regime,confidence,direction,dominantAgents,adx,description:cfg.description};
+    logFn?.('ATLAS',`◈ REGIME: ${regime} (${confidence.toFixed(0)}%) ${direction} | ADX ${adx.toFixed(1)} | ${cfg.description}`,cfg.col);
+    return state;
+  }catch{
+    return{regime:'RANGING',confidence:50,direction:'NEUTRAL',dominantAgents:['AEGIS'],adx:20,description:'Fallback — APIs unavailable'};
+  }
+};
+
+// ── Part 3: Opportunity Score Engine ────────────────────────────────
+const calcOpportunityScore=(
+  sym:string,
+  pxSnap:{[k:string]:PriceData},
+  agSignals:{[k:string]:{on:boolean;conf:number|null;sig:string|null;th:string}},
+  regimeSnap:RegimeState|null
+):OpportunityScore=>{
+  const d=pxSnap[sym];
+  const vol=(d as unknown as {volume?:number})?.volume??0;
+  const liqScore=Math.min(100,vol/10000000*100);
+  const change1h=d?.change??0;
+  const momScore=Math.min(100,50+change1h*8);
+  const volRatio=(d as unknown as {volRatio?:number})?.volRatio??1;
+  const volScore=Math.min(100,volRatio*40);
+  const bullSignals=Object.values(agSignals).filter(s=>s.sig==='BUY').length;
+  const sentScore=Math.min(100,(bullSignals/18)*100);
+  const regCfg=REGIME_CONFIG[regimeSnap?.regime??'RANGING'];
+  const aegisConf=agSignals['aegis']?.conf??50;
+  const riskScore=Math.min(100,regCfg.maxExposure*150+aegisConf);
+  const total=Math.round(liqScore*0.20+momScore*0.25+volScore*0.20+sentScore*0.20+riskScore*0.15);
+  return{
+    total,
+    breakdown:{liquidity:Math.round(liqScore),momentum:Math.round(momScore),volume:Math.round(volScore),sentiment:Math.round(sentScore),risk:Math.round(riskScore)},
+    grade:total>=80?'A':total>=65?'B':total>=50?'C':'D',
+    tradeable:total>=65,
+  };
+};
 
 function usePrices(){
   const [px,setPx]=useState<{[k:string]:PriceData}>(()=>
@@ -1283,6 +1372,13 @@ function SwarmGraph({st,debate,disabled,swarmRef,flashingAgent,highConviction,co
           const isHighConvActive=highConviction&&active;
           return(
             <g key={id} filter={active?"url(#faceglow)":undefined} opacity={dis?.18:1} style={{cursor:"pointer",animation:isFlashing?"nodeFlash 1.2s ease-out":isHighConvActive?"breathe 1.4s ease-in-out infinite":undefined}} onMouseEnter={()=>setHov(id)} onMouseLeave={()=>setHov(null)}>
+              {/* Part 13: Layer ring */}
+              {AGENT_LAYER_MAP[id]&&(
+                <circle cx={n.pos.x} cy={n.pos.y} r={r+5} fill="none"
+                  stroke={LAYER_RING_COLORS[AGENT_LAYER_MAP[id].layer]}
+                  strokeWidth={1} opacity={active?0.55:0.18}
+                  strokeDasharray={AGENT_LAYER_MAP[id].layer===3?"4 3":AGENT_LAYER_MAP[id].layer===2?"6 3":"none"}/>
+              )}
               <CyberFace cx={n.pos.x} cy={n.pos.y} size={r*2} col={col} active={active} conflict={conflict}/>
               <text x={n.pos.x} y={n.pos.y+r+11} textAnchor="middle" fontSize={id==="consensus"?8:6} fontFamily="monospace" fill={dis?K.dim:active?col:K.tx} fontWeight="700">{s}</text>
               {ag.conf!==null&&!dis&&<text x={n.pos.x} y={n.pos.y+r+20} textAnchor="middle" fontSize="7" fontFamily="monospace" fill={col} opacity=".8">{ag.conf}%</text>}
@@ -1775,6 +1871,78 @@ const TransparencyModal = ({onClose}:{onClose:()=>void}) => (
   </div>
 );
 
+// ── Part 3: Opportunity Score Card ──────────────────────────────────
+const OpportunityScoreCard=({score,sym}:{score:OpportunityScore,sym:string})=>{
+  const gc=score.grade==='A'?'#00FF88':score.grade==='B'?'#FFD700':'#FF3366';
+  return(
+    <div style={{padding:'12px 14px',background:'rgba(6,10,18,0.9)',border:`1px solid ${score.grade==='A'?'rgba(0,255,136,0.3)':score.grade==='B'?'rgba(255,215,0,0.25)':'rgba(255,51,102,0.2)'}`,borderRadius:8}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+        <div><div style={{fontSize:11,color:K.dim,fontFamily:'monospace'}}>OPPORTUNITY SCORE</div><div style={{fontSize:9,color:K.dim,fontFamily:'monospace'}}>{sym}/USD</div></div>
+        <div style={{textAlign:'right'}}>
+          <div style={{fontSize:36,fontWeight:900,color:gc,fontFamily:'monospace',lineHeight:1,textShadow:`0 0 20px ${gc}`}}>{score.total}</div>
+          <div style={{fontSize:10,fontWeight:700,color:gc,fontFamily:'monospace'}}>GRADE {score.grade}</div>
+        </div>
+      </div>
+      {Object.entries(score.breakdown).map(([k,v])=>(
+        <div key={k} style={{marginBottom:5}}>
+          <div style={{display:'flex',justifyContent:'space-between',marginBottom:2}}>
+            <span style={{fontSize:8,color:K.dim,fontFamily:'monospace',textTransform:'uppercase'}}>{k}</span>
+            <span style={{fontSize:8,color:K.hi,fontFamily:'monospace'}}>{v}</span>
+          </div>
+          <div style={{height:3,background:'#06090F',borderRadius:2}}>
+            <div style={{height:'100%',width:`${v}%`,background:v>=80?'#00FF88':v>=60?'#FFD700':'#FF3366',borderRadius:2,transition:'width .3s'}}/>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+// ── Part 4: Why This Trade Panel ────────────────────────────────────
+const WhyThisTrade=({explanation,sym}:{explanation:TradeExplanation,sym:string})=>(
+  <div style={{padding:'12px 14px',background:'rgba(6,10,18,0.9)',border:`1px solid ${explanation.decision==='EXECUTE'?'rgba(0,255,136,0.2)':'rgba(255,51,102,0.15)'}`,borderRadius:8}}>
+    <div style={{fontSize:9,color:K.dim,letterSpacing:'.2em',marginBottom:10,fontFamily:'monospace'}}>{explanation.decision==='EXECUTE'?'◈ WHY THIS TRADE':'◈ WHY NO TRADE'} — {sym}</div>
+    {explanation.passed.map((p,i)=>(
+      <div key={i} style={{display:'flex',alignItems:'center',gap:8,marginBottom:5}}>
+        <span style={{color:'#00FF88',fontSize:11}}>✓</span>
+        <span style={{fontSize:10,color:K.hi,fontFamily:'monospace'}}>{p.signal}</span>
+        <span style={{fontSize:9,color:K.dim,fontFamily:'monospace',marginLeft:'auto'}}>{p.detail}</span>
+      </div>
+    ))}
+    {explanation.failed.map((f,i)=>(
+      <div key={i} style={{display:'flex',alignItems:'center',gap:8,marginBottom:5}}>
+        <span style={{color:'#FF3366',fontSize:11}}>✗</span>
+        <span style={{fontSize:10,color:K.dim,fontFamily:'monospace'}}>{f.signal}</span>
+        <span style={{fontSize:9,color:'#FF3366',fontFamily:'monospace',marginLeft:'auto'}}>{f.detail}</span>
+      </div>
+    ))}
+    <div style={{marginTop:10,padding:'6px 10px',background:`${explanation.decision==='EXECUTE'?'rgba(0,255,136,0.08)':'rgba(255,51,102,0.06)'}`,borderRadius:4,fontSize:10,color:explanation.decision==='EXECUTE'?'#00FF88':'#FF3366',fontFamily:'monospace',fontWeight:700}}>
+      {explanation.decision}: {explanation.reason}
+    </div>
+  </div>
+);
+
+// ── Part 6: Signal Decay Badge ───────────────────────────────────────
+const SignalDecayBadge=({signal}:{signal:SignalWithDecay})=>{
+  const mins=Math.floor(signal.ageSeconds/60),secs=signal.ageSeconds%60;
+  const urg=signal.currentConf>80?'#00FF88':signal.currentConf>65?'#FFD700':'#FF3366';
+  return(
+    <div style={{display:'flex',alignItems:'center',gap:8,padding:'6px 10px',background:`${urg}08`,border:`1px solid ${urg}25`,borderRadius:5}}>
+      <div style={{flex:1}}>
+        <div style={{fontSize:11,fontWeight:700,color:urg,fontFamily:'monospace'}}>{signal.sym} {signal.signal}</div>
+        <div style={{fontSize:8,color:K.dim,fontFamily:'monospace'}}>Age: {mins}m {secs}s · Decay: -{signal.decayPct.toFixed(0)}%</div>
+      </div>
+      <div style={{textAlign:'right'}}>
+        <div style={{fontSize:18,fontWeight:900,color:urg,fontFamily:'monospace'}}>{signal.currentConf.toFixed(0)}%</div>
+        <div style={{fontSize:8,color:K.dim,fontFamily:'monospace'}}>was {signal.initialConf}%</div>
+      </div>
+      <div style={{position:'relative',width:3,height:40,background:'#06090F',borderRadius:2}}>
+        <div style={{position:'absolute',bottom:0,width:'100%',height:`${(signal.currentConf/signal.initialConf)*100}%`,background:urg,borderRadius:2}}/>
+      </div>
+    </div>
+  );
+};
+
 export default function KYMIA({isLive=false}:{isLive?:boolean}){
   const prices=usePrices();
   const pricesRef=useRef(prices);
@@ -1857,6 +2025,17 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   const entropyRef=useRef(entropy);
   useEffect(()=>{entropyRef.current=entropy;},[entropy]);
 
+  // ── V2.1 State ───────────────────────────────────────────────────────
+  const [regimeState,setRegimeState]=useState<RegimeState|null>(null);
+  const regimeRef=useRef<RegimeState|null>(null);
+  useEffect(()=>{regimeRef.current=regimeState;},[regimeState]);
+  const [rejectedTrades,setRejectedTrades]=useState<RejectedTrade[]>([]);
+  const [rejectionStats,setRejectionStats]=useState({executed:0,rejected:0,capitalProtected:0});
+  const [activeSignals,setActiveSignals]=useState<SignalWithDecay[]>([]);
+  const [tokenWatchlist,setTokenWatchlist]=useState<WatchlistedToken[]>([]);
+  const [missedOpps,setMissedOpps]=useState<MissedOpportunity[]>([]);
+  const [layer3Aggressive,setLayer3Aggressive]=useState(false);
+
   // Keep completedMissions ref in sync for use inside effects
   useEffect(()=>{completedMissionsRef.current=completedMissions;},[completedMissions]);
 
@@ -1885,6 +2064,62 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   },[agSt]);
 
   const log=useCallback((ag:string,msg:string,col=K.hi)=>setLogs(l=>[...l.slice(-150),{t:ts(),ag,msg,col}]),[]);
+
+  // ── Part 12: Demo/live scan intervals ────────────────────────────────
+  const isDemoMode=!isLive;
+  const SCAN_INTERVALS={
+    regime:isDemoMode?300000:1800000,
+    top50:isDemoMode?300000:1800000,
+    newTokens:isDemoMode?120000:300000,
+    core:15000,
+    signals:15000,
+  };
+
+  // ── Part 11: Layer 3 config ──────────────────────────────────────────
+  const LAYER3_CONFIG=layer3Aggressive?{minSafety:55,minMomentum:50,maxAlloc:0.06,watchlistTime:300000,label:'AGGRESSIVE',col:'#FF3366'}:{minSafety:70,minMomentum:65,maxAlloc:0.03,watchlistTime:900000,label:'CONSERVATIVE',col:'#00FF88'};
+
+  // ── Part 2: Regime detection interval ────────────────────────────────
+  useEffect(()=>{
+    if(!running)return;
+    const run=()=>detectRegime(log).then(s=>{setRegimeState(s);regimeRef.current=s;});
+    run();
+    const iv=setInterval(run,SCAN_INTERVALS.regime);
+    return()=>clearInterval(iv);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[running]);
+
+  // ── Part 6: Confidence decay every 30s ──────────────────────────────
+  useEffect(()=>{
+    const iv=setInterval(()=>{
+      setActiveSignals(prev=>prev.map(sig=>{
+        const ageMin=(Date.now()-sig.createdAt)/60000;
+        const decayPct=ageMin*DECAY_RATE;
+        const currentConf=Math.max(0,sig.initialConf-decayPct);
+        return{...sig,currentConf,ageSeconds:Math.round((Date.now()-sig.createdAt)/1000),decayPct,expired:currentConf<50||(Date.now()-sig.createdAt)>SIGNAL_EXPIRY};
+      }).filter(s=>!s.expired));
+    },30000);
+    return()=>clearInterval(iv);
+  },[]);
+
+  // ── Part 5: logRejection helper ──────────────────────────────────────
+  const logRejection=useCallback((sym:string,conf:number,reasons:string[])=>{
+    const estimatedLoss=portRef.current.equity*0.025;
+    setRejectedTrades(prev=>[{sym,confidence:conf,reasons,timestamp:new Date().toLocaleTimeString(),capitalProtected:estimatedLoss},...prev].slice(0,10));
+    setRejectionStats(prev=>({...prev,rejected:prev.rejected+1,capitalProtected:prev.capitalProtected+estimatedLoss}));
+    log('AEGIS',`⛔ REJECTED: ${sym} (${conf}%) — ${reasons[0]}`,K.r);
+  },[log]);
+
+  // ── Part 8: trackMissed helper ───────────────────────────────────────
+  const trackMissed=useCallback((sym:string,signal:string,reason:string)=>{
+    const entryPrice=pricesRef.current[sym]?.price||0;
+    setTimeout(()=>{
+      const currentPrice=pricesRef.current[sym]?.price||entryPrice;
+      const move=signal==='BUY'?(currentPrice-entryPrice)/entryPrice*100:(entryPrice-currentPrice)/entryPrice*100;
+      const wasRightToSkip=move<=0;
+      setMissedOpps(prev=>[{sym,move:parseFloat(move.toFixed(1)),reason,timestamp:new Date().toLocaleTimeString(),wasRightToSkip},...prev].slice(0,5));
+      log('WATCH',`${wasRightToSkip?'✓ Good skip':'⚠ Missed'}: ${sym} moved ${move>0?'+':''}${move.toFixed(1)}% after rejection`,wasRightToSkip?K.g:K.gold);
+    },1800000);
+  },[log]);
 
   // Live user counter fluctuation
   useEffect(()=>{
@@ -2667,6 +2902,11 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
     const iv=setInterval(()=>{
       const cs=agStRef.current["consensus"];
       if(!cs?.on||!cs.conf||cs.conf<45)return;
+      // ── Part 15: REGIME HARD BLOCKS ──────────────────────────────────────
+      const reg=regimeRef.current;
+      if(reg?.regime==='BLACK SWAN'){
+        log('AEGIS','⛔ BLACK SWAN active — all execution paused',K.r);return;
+      }
       // ── SESSION TIME FILTER ───────────────────────────────────────────────
       const sess=getSessionQuality();
       if(sess.quality==="AVOID"){log("WATCH","⛔ Dead zone ("+sess.label+") — no trades 00h-06h UTC",K.dim);return;}
@@ -2680,6 +2920,14 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
       const candidates=pool.length>0?pool:allKeys.filter(s=>!STABLE_SYMS.has(s));
       const sym=candidates[Math.floor(Math.random()*candidates.length)];
       const p=pricesRef.current[sym];if(!p)return;
+      // ── Part 15: OPPORTUNITY SCORE CHECK ────────────────────────────────
+      const oppScore=calcOpportunityScore(sym,pricesRef.current,agStRef.current,reg);
+      if(!oppScore.tradeable){
+        logRejection(sym,Math.round(cs.conf??0),[`Opportunity score too low: ${oppScore.total}/100`]);
+        trackMissed(sym,cs.sig??'BUY',`Score ${oppScore.total}`);
+        return;
+      }
+      log('RADR',`◈ ${sym} score ${oppScore.total}/100 grade ${oppScore.grade} — proceeding`,oppScore.grade==='A'?K.g:oppScore.grade==='B'?K.gold:K.dim);
       // Multi-timeframe confirmation
       const sig=confirmSignal(p.hist);
       log("SIGNAL","◈ "+sym+" quality:"+sig.quality+" RSI-conf:"+Math.round(sig.conf)+"%",sig.quality==="HIGH"?K.g:sig.quality==="MED"?K.gold:K.dim);
@@ -2733,6 +2981,8 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
         const traderCheck=applyTraderRules(sig.conf,rawFrac,tradesRef.current,sessionStartEquityRef.current,prt.equity||prt.cash);
         if(!traderCheck.allow){
           if(traderCheck.triggerCircuit){setCircuit(true);log("AEGIS","[AEGIS] ⛔ 5 LOSS STREAK — CIRCUIT BREAKER TRIGGERED",K.r);}
+          logRejection(sym,Math.round(sig.conf),[traderCheck.reason||"Trader rules filtered"]);
+          trackMissed(sym,'BUY',traderCheck.reason||'Trader rules');
           log("RISK","⊘ Trader rules: "+sym+" — "+(traderCheck.reason||"filtered"),K.gold);return;
         }
         if(traderCheck.triggerPause&&!traderIsPaused){
@@ -2751,12 +3001,19 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
         const baseAlloc=Math.min(prt.cash*allocFrac*sess.multiplier,prt.cash*.9);
         const leveragedSize=Math.min(baseAlloc*lev,(prt.equity||prt.cash)*0.40);
         // Queue pullback entry — wait for -0.8% dip before executing
+        // Part 6: register signal with decay
+        setActiveSignals(prev=>{
+          const exists=prev.find(s=>s.sym===sym&&s.signal==='BUY');
+          if(exists)return prev;
+          return[...prev.slice(-9),{id:Math.random().toString(36).slice(2),sym,signal:'BUY',initialConf:Math.round(sig.conf),currentConf:Math.round(sig.conf),createdAt:Date.now(),ageSeconds:0,decayPct:0,expired:false}];
+        });
         if(!pendingEntriesRef.current[sym]){
           const pullbackTarget=p.price*0.992;
           pendingEntriesRef.current[sym]={signal:"BUY",target:pullbackTarget,expiry:Date.now()+120000,agent:"AEGIS",reason:sig.quality+" signal",originalPrice:p.price,conf:Math.round(sig.conf),leveragedSize,baseAlloc,lev};
           setPendingEntries(prev=>({...prev,[sym]:{signal:"BUY",target:pullbackTarget,expiry:Date.now()+120000}}));
           log("RADR","⏳ Pending BUY "+sym+" — pullback to "+fPrice(pullbackTarget)+" ("+sess.label+" x"+sess.multiplier+")",K.gold);
         }
+        setRejectionStats(prev=>({...prev,executed:prev.executed+1}));
         tradeCount++;
       }else if((cs.sig==="SELL"||sig.isSell)&&prt.pos[sym]&&prt.pos[sym].side!=="SHORT"){
         // Close existing LONG position
@@ -3129,6 +3386,25 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
           {(()=>{const nextM=MISSIONS.find(m=>!completedMissions.includes(m.id));if(!nextM)return null;const mp=Math.min(100,((port.equity-CAP)/CAP)/nextM.target*100);return(<div style={{display:"flex",alignItems:"center",gap:5,padding:"2px 8px",background:nextM.color+"10",border:`1px solid ${nextM.color}25`,borderRadius:2}}><span style={{fontSize:9,color:nextM.color}}>{nextM.icon}</span><div style={{width:52,height:3,background:"#06090F",borderRadius:2}}><div style={{height:"100%",borderRadius:2,background:nextM.color,width:mp+"%",transition:"width .5s",boxShadow:`0 0 6px ${nextM.color}`}}/></div><span style={{fontSize:8,color:"#2A5070"}}>{mp.toFixed(0)}%</span></div>);})()}
           {running&&<div style={{display:"flex",alignItems:"center",gap:4,padding:"2px 7px",background:K.g+"10",border:"1px solid "+K.g+"25",borderRadius:2}}><div style={{width:5,height:5,borderRadius:"50%",background:K.g,animation:"pu 1s infinite"}}/><span style={{fontSize:7,color:K.g,letterSpacing:".1em"}}>24/7</span></div>}
           {aiData&&<span style={{padding:"2px 7px",background:rc+"20",color:rc,border:"1px solid "+rc+"40",fontSize:9,borderRadius:2}}>{String(aiData.regime||"")}</span>}
+          {/* Part 2: Regime badge */}
+          {regimeState&&(
+            <div style={{display:'flex',alignItems:'center',gap:6,padding:'4px 10px',background:`${REGIME_CONFIG[regimeState.regime].col}10`,border:`1px solid ${REGIME_CONFIG[regimeState.regime].col}30`,borderRadius:4}}>
+              <div style={{width:6,height:6,borderRadius:'50%',background:REGIME_CONFIG[regimeState.regime].col,boxShadow:`0 0 8px ${REGIME_CONFIG[regimeState.regime].col}`}}/>
+              <div>
+                <div style={{fontSize:10,fontWeight:900,color:REGIME_CONFIG[regimeState.regime].col,fontFamily:'monospace'}}>{regimeState.regime}</div>
+                <div style={{fontSize:8,color:K.dim,fontFamily:'monospace'}}>{regimeState.confidence.toFixed(0)}% · {regimeState.direction} · ADX {regimeState.adx?.toFixed(0)}</div>
+              </div>
+              <div style={{fontSize:8,color:K.dim,fontFamily:'monospace'}}>Dom: {regimeState.dominantAgents.join('·')}</div>
+            </div>
+          )}
+          {/* Part 11: Layer 3 badge */}
+          <div style={{padding:'3px 8px',background:`${LAYER3_CONFIG.col}12`,border:`1px solid ${LAYER3_CONFIG.col}30`,borderRadius:3,fontSize:8,color:LAYER3_CONFIG.col,fontFamily:'monospace'}}>
+            L3 {LAYER3_CONFIG.label} · {(LAYER3_CONFIG.maxAlloc*100).toFixed(0)}% MAX
+          </div>
+          {/* Part 12: Demo speed badge */}
+          {isDemoMode&&(
+            <div style={{padding:'2px 7px',background:'rgba(0,255,136,0.1)',border:'1px solid rgba(0,255,136,0.25)',borderRadius:3,fontSize:8,color:'#00FF88',fontFamily:'monospace'}}>⚡ DEMO SPEED</div>
+          )}
         </div>
         <div style={{display:"flex",alignItems:"center",gap:8}}>
           {([{l:"EQUITY",v:"$"+f2(port.equity),col:totalPnL>=0?K.g:K.r},{l:"P&L",v:fU(totalPnL)+" ("+fP(pct)+")",col:totalPnL>=0?K.g:K.r},{l:"DD",v:"-"+f2(dd)+"%",col:dd>5?K.r:K.gold}]).map((x,i)=>(
@@ -3174,7 +3450,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
       )}
 
       <div style={{background:"#030710",borderBottom:"1px solid #060B14",padding:"0 16px",display:"flex",gap:2}}>
-        {[["terminal","◈ COMMAND"],["trades","◎ HISTORY"],["scanner","⊕ SCANNER"],["crisis","⊞ CRISIS REPLAY"],["dna","🧬 SWARM DNA"],["onchain","⛓ ON-CHAIN"]].map(([v,l])=>(
+        {[["terminal","◈ COMMAND"],["alpha","⚡ ALPHA RADAR"],["hunter","🔍 HUNTER"],["rejected","⛔ REJECTED"],["trades","◎ HISTORY"],["scanner","⊕ SCANNER"],["crisis","⊞ CRISIS REPLAY"],["dna","🧬 SWARM DNA"],["onchain","⛓ ON-CHAIN"]].map(([v,l])=>(
           <button key={v} className={`tab${tab===v?" on":""}`} onClick={()=>setTab(v)}>{l}</button>
         ))}
         <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:12,fontSize:8,color:"#0A1D2A"}}>
@@ -3346,8 +3622,17 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
                   {([["BUY",K.g],["SELL",K.r],["ACTIVE",K.c]] as Array<[string,string]>).map(([l,c])=><span key={l} style={{color:c}}>● {l}</span>)}
                 </div>
               </div>
-              <div style={{flex:1,display:"flex",justifyContent:"center",alignItems:"center",padding:4,position:"relative",zIndex:1,boxShadow:"inset 0 0 60px rgba(0,0,0,0.55)"}}>
+              <div style={{flex:1,display:"flex",flexDirection:"column",justifyContent:"center",alignItems:"center",padding:4,position:"relative",zIndex:1,boxShadow:"inset 0 0 60px rgba(0,0,0,0.55)"}}>
                 <SwarmGraph st={agSt} debate={debate} disabled={disabled} swarmRef={swarmRef} flashingAgent={flashingAgent} highConviction={highConviction} convCol={convCol}/>
+                {/* Part 13: Layer legend */}
+                <div style={{display:'flex',gap:12,justifyContent:'center',marginTop:6}}>
+                  {[{l:'L1 CORE',col:LAYER_RING_COLORS[1]},{l:'L2 TOP50',col:LAYER_RING_COLORS[2]},{l:'L3 HUNTER',col:LAYER_RING_COLORS[3]}].map((ly,i)=>(
+                    <div key={i} style={{display:'flex',alignItems:'center',gap:4}}>
+                      <div style={{width:7,height:7,borderRadius:'50%',background:ly.col,boxShadow:`0 0 5px ${ly.col}`}}/>
+                      <span style={{fontSize:7,color:ly.col,fontFamily:'monospace',letterSpacing:'.08em'}}>{ly.l}</span>
+                    </div>
+                  ))}
+                </div>
                 {/* Focus mode: Globe overlay in top-left */}
                 {focusMode&&<div style={{position:"absolute",top:8,left:8,zIndex:10,opacity:.85,borderRadius:4,overflow:"hidden",border:"1px solid "+K.c+"30"}}><Globe3D trades={trades} blackSwan={blackSwan} whaleAlert={whaleAlert} totalPnL={totalPnL} tradeCount={trades.length} agSt={agSt} running={running}/></div>}
               </div>
@@ -3726,6 +4011,226 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
       )}
 
       {tab==="onchain"&&<OnChainTab/>}
+
+      {/* ── Part 14: ALPHA RADAR TAB ── */}
+      {tab==="alpha"&&(
+        <div style={{padding:16,display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,overflow:'auto'}}>
+          {/* Alpha Radar — top opportunities */}
+          <div className="panel" style={{padding:0,overflow:'hidden'}}>
+            <div style={{padding:'8px 10px',fontSize:8,color:'#00F2FE',letterSpacing:'.2em',fontFamily:'monospace',borderBottom:'1px solid #0A1D33'}}>◈ ALPHA RADAR — TOP OPPORTUNITIES</div>
+            {(()=>{
+              const watchSyms=['SOL','BTC','ETH','JUP','WIF','BONK','JTO','PYTH','RAY','ORCA','RENDER','POPCAT'];
+              const scored=watchSyms
+                .filter(sym=>prices[sym])
+                .map(sym=>({sym,score:calcOpportunityScore(sym,prices,agSt,regimeState)}))
+                .sort((a,b)=>b.score.total-a.score.total)
+                .slice(0,8);
+              return scored.map((opp,i)=>{
+                const col=opp.score.grade==='A'?'#00FF88':opp.score.grade==='B'?'#FFD700':'#2A5070';
+                return(
+                  <div key={opp.sym} style={{display:'flex',alignItems:'center',gap:8,padding:'6px 10px',borderBottom:'1px solid #06090F',background:i===0?'rgba(0,255,136,0.03)':'transparent'}}>
+                    <span style={{fontSize:9,color:K.dim,fontFamily:'monospace',minWidth:14}}>{i+1}</span>
+                    <span style={{fontSize:11,fontWeight:700,color:col,fontFamily:'monospace',flex:1}}>{opp.sym}</span>
+                    <div style={{width:50,height:4,background:'#06090F',borderRadius:2}}>
+                      <div style={{height:'100%',borderRadius:2,width:`${opp.score.total}%`,background:col}}/>
+                    </div>
+                    <span style={{fontSize:10,fontWeight:700,color:col,fontFamily:'monospace',minWidth:28,textAlign:'right'}}>{opp.score.total}</span>
+                    <span style={{fontSize:9,color:col,fontFamily:'monospace'}}>{opp.score.grade}</span>
+                  </div>
+                );
+              });
+            })()}
+          </div>
+          {/* Regime + Capital Allocation */}
+          <div style={{display:'flex',flexDirection:'column',gap:12}}>
+            {regimeState&&(
+              <div className="panel" style={{padding:'12px 14px'}}>
+                <div style={{fontSize:9,color:K.dim,letterSpacing:'.2em',marginBottom:10,fontFamily:'monospace'}}>◈ MARKET REGIME</div>
+                <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:8}}>
+                  <div style={{width:10,height:10,borderRadius:'50%',background:REGIME_CONFIG[regimeState.regime].col,boxShadow:`0 0 12px ${REGIME_CONFIG[regimeState.regime].col}`}}/>
+                  <div style={{fontSize:20,fontWeight:900,color:REGIME_CONFIG[regimeState.regime].col,fontFamily:'monospace'}}>{regimeState.regime}</div>
+                  <div style={{marginLeft:'auto',fontSize:14,fontWeight:700,color:regimeState.direction==='BULL'?K.g:regimeState.direction==='BEAR'?K.r:K.gold,fontFamily:'monospace'}}>{regimeState.direction}</div>
+                </div>
+                <div style={{fontSize:9,color:K.dim,fontFamily:'monospace',marginBottom:6}}>{regimeState.description}</div>
+                {[{l:'Confidence',v:`${regimeState.confidence.toFixed(0)}%`,c:REGIME_CONFIG[regimeState.regime].col},{l:'ADX',v:regimeState.adx.toFixed(1),c:K.hi},{l:'Max Exposure',v:`${(REGIME_CONFIG[regimeState.regime].maxExposure*100).toFixed(0)}%`,c:K.gold}].map((r,i)=>(
+                  <div key={i} style={{display:'flex',justifyContent:'space-between',fontSize:9,fontFamily:'monospace',padding:'2px 0'}}>
+                    <span style={{color:K.dim}}>{r.l}</span><span style={{color:r.c,fontWeight:700}}>{r.v}</span>
+                  </div>
+                ))}
+                <div style={{marginTop:8,fontSize:8,color:K.dim,fontFamily:'monospace'}}>Dominant: {regimeState.dominantAgents.join(' · ')}</div>
+              </div>
+            )}
+            {/* Capital Allocation Map (Part 10) */}
+            <div className="panel" style={{padding:'12px 14px'}}>
+              <div style={{fontSize:9,color:K.dim,letterSpacing:'.2em',marginBottom:12,fontFamily:'monospace'}}>◈ PORTFOLIO ALLOCATION</div>
+              {(()=>{
+                const totalEquity=port.equity;
+                const coreSyms=['SOL','BTC','ETH','JUP'];
+                const coreExp=Object.entries(port.pos).filter(([s])=>coreSyms.includes(s)).reduce((sum,[s,pos])=>sum+(pos.qty*(prices[s]?.price||pos.avg)),0);
+                const oppExp=Object.entries(port.pos).filter(([s])=>!coreSyms.includes(s)).reduce((sum,[s,pos])=>sum+(pos.qty*(prices[s]?.price||pos.avg)),0);
+                const cash2=Math.max(0,totalEquity-coreExp-oppExp);
+                const allocs=[{l:'CORE ASSETS',v:coreExp,col:'#00F2FE'},{l:'OPPORTUNITIES',v:oppExp,col:'#BD00FF'},{l:'CASH',v:cash2,col:'#2A5070'}];
+                return(<>
+                  <div style={{height:8,borderRadius:4,overflow:'hidden',display:'flex',marginBottom:12}}>
+                    {allocs.map((a,i)=>{const pct=totalEquity>0?(a.v/totalEquity)*100:0;return pct>0?<div key={i} style={{width:`${pct}%`,height:'100%',background:a.col,transition:'width .5s'}}/>:null;})}
+                  </div>
+                  {allocs.map((a,i)=>{
+                    const pct=totalEquity>0?(a.v/totalEquity*100).toFixed(0):0;
+                    return(<div key={i} style={{display:'flex',justifyContent:'space-between',marginBottom:5}}>
+                      <div style={{display:'flex',alignItems:'center',gap:6}}><div style={{width:6,height:6,borderRadius:1,background:a.col}}/><span style={{fontSize:9,color:K.dim,fontFamily:'monospace'}}>{a.l}</span></div>
+                      <div style={{display:'flex',gap:8}}><span style={{fontSize:9,color:a.col,fontFamily:'monospace',fontWeight:700}}>{pct}%</span><span style={{fontSize:9,color:'#1A3050',fontFamily:'monospace'}}>${a.v.toFixed(0)}</span></div>
+                    </div>);
+                  })}
+                  <div style={{marginTop:8,paddingTop:8,borderTop:'1px solid #06090F',display:'flex',justifyContent:'space-between',fontSize:9,fontFamily:'monospace'}}>
+                    <span style={{color:K.dim}}>TOTAL EQUITY</span><span style={{color:'white',fontWeight:700}}>${totalEquity.toFixed(2)}</span>
+                  </div>
+                </>);
+              })()}
+            </div>
+          </div>
+          {/* Active signals with decay (Part 6) */}
+          {activeSignals.length>0&&(
+            <div className="panel" style={{padding:'10px',gridColumn:'1/-1'}}>
+              <div style={{fontSize:9,color:K.dim,letterSpacing:'.2em',marginBottom:8,fontFamily:'monospace'}}>◈ ACTIVE SIGNALS — CONFIDENCE DECAY</div>
+              <div style={{display:'flex',flexDirection:'column',gap:6}}>
+                {activeSignals.map(s=><SignalDecayBadge key={s.id} signal={s}/>)}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Part 14: HUNTER TAB ── */}
+      {tab==="hunter"&&(
+        <div style={{padding:16,display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,overflow:'auto'}}>
+          {/* Token Watchlist (Part 9) */}
+          <div className="panel" style={{padding:0,overflow:'hidden'}}>
+            <div style={{padding:'6px 10px',fontSize:8,color:K.gold,letterSpacing:'.2em',fontFamily:'monospace',borderBottom:'1px solid #0A1D33'}}>◈ NEW TOKEN WATCHLIST</div>
+            {tokenWatchlist.length===0?(
+              <div style={{padding:'20px 10px',fontSize:9,color:'#0A1D33',fontFamily:'monospace',textAlign:'center'}}>Scanning DexScreener...</div>
+            ):tokenWatchlist.map((t,i)=>{
+              const sc=t.status==='ENTRY_CANDIDATE'?'#00FF88':t.status==='CONFIRMING'?K.gold:t.status==='REJECTED'?'#FF3366':'#00F2FE';
+              return(
+                <div key={i} style={{padding:'8px 10px',borderBottom:'1px solid #06090F',borderLeft:`2px solid ${sc}60`,opacity:t.status==='REJECTED'?0.4:1}}>
+                  <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}>
+                    <div>
+                      <span style={{fontSize:11,fontWeight:700,color:sc,fontFamily:'monospace'}}>{t.sym}</span>
+                      <span style={{fontSize:8,color:sc,marginLeft:6,padding:'1px 5px',background:`${sc}15`,border:`1px solid ${sc}30`,borderRadius:3,fontFamily:'monospace'}}>{t.status.replace('_',' ')}</span>
+                    </div>
+                    <div style={{fontSize:9,color:'#00FF88',fontFamily:'monospace'}}>+{t.priceChange1h?.toFixed(0)||0}% 1H</div>
+                  </div>
+                  <div style={{display:'flex',gap:12,fontSize:9,color:K.dim,fontFamily:'monospace',marginBottom:5}}>
+                    <span>Safety {t.safetyScore}</span><span>Liq ${(t.liquidity/1000).toFixed(0)}K</span><span>Vol ${(t.volume1h/1000).toFixed(0)}K</span>
+                  </div>
+                  {t.status!=='REJECTED'&&(
+                    <div>
+                      <div style={{height:2,background:'#06090F',borderRadius:1}}>
+                        <div style={{height:'100%',width:`${t.confirmationProgress}%`,background:sc,borderRadius:1,transition:'width .5s'}}/>
+                      </div>
+                      <div style={{fontSize:7,color:K.dim,fontFamily:'monospace',marginTop:2}}>Monitoring: {t.confirmationProgress.toFixed(0)}% of 15min</div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          {/* Layer 3 Aggressive Toggle (Part 11) */}
+          <div style={{display:'flex',flexDirection:'column',gap:12}}>
+            <div className="panel" style={{padding:'12px 14px'}}>
+              <div style={{fontSize:9,color:K.dim,letterSpacing:'.2em',marginBottom:12,fontFamily:'monospace'}}>◈ LAYER 3 MODE</div>
+              <div style={{display:'flex',alignItems:'center',gap:8,padding:'8px 10px',background:'rgba(6,10,18,0.8)',border:`1px solid ${layer3Aggressive?'rgba(255,51,102,0.3)':'rgba(0,242,254,0.15)'}`,borderRadius:6}}>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:9,fontWeight:700,color:LAYER3_CONFIG.col,fontFamily:'monospace'}}>LAYER 3 — {LAYER3_CONFIG.label}</div>
+                  <div style={{fontSize:8,color:K.dim,fontFamily:'monospace'}}>{layer3Aggressive?'⚡ 6% max · 5min monitoring · Lower filters':'🛡 3% max · 15min monitoring · Strict filters'}</div>
+                </div>
+                <button onClick={()=>setLayer3Aggressive(!layer3Aggressive)} style={{padding:'6px 12px',background:layer3Aggressive?'rgba(255,51,102,0.15)':'rgba(0,242,254,0.1)',border:`1px solid ${layer3Aggressive?'rgba(255,51,102,0.4)':'rgba(0,242,254,0.3)'}`,borderRadius:4,cursor:'pointer',color:LAYER3_CONFIG.col,fontFamily:'monospace',fontSize:10,fontWeight:700}}>
+                  {layer3Aggressive?'ON ▶':'OFF ◼'}
+                </button>
+              </div>
+              <div style={{marginTop:12,display:'grid',gridTemplateColumns:'1fr 1fr',gap:6}}>
+                {[{l:'Min Safety',v:LAYER3_CONFIG.minSafety},{l:'Min Momentum',v:LAYER3_CONFIG.minMomentum},{l:'Max Alloc',v:`${(LAYER3_CONFIG.maxAlloc*100).toFixed(0)}%`},{l:'Watch Time',v:`${LAYER3_CONFIG.watchlistTime/60000}min`}].map((r,i)=>(
+                  <div key={i} style={{padding:'6px 8px',background:'rgba(4,6,13,0.8)',border:'1px solid #0A1D33',borderRadius:3}}>
+                    <div style={{fontSize:7,color:K.dim,fontFamily:'monospace',marginBottom:2}}>{r.l}</div>
+                    <div style={{fontSize:11,color:LAYER3_CONFIG.col,fontFamily:'monospace',fontWeight:700}}>{r.v}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            {/* Swarm layer legend (Part 13) */}
+            <div className="panel" style={{padding:'12px 14px'}}>
+              <div style={{fontSize:9,color:K.dim,letterSpacing:'.2em',marginBottom:12,fontFamily:'monospace'}}>◈ SWARM LAYER MAP</div>
+              {[{l:'LAYER 1 — CORE TRADING',col:LAYER_RING_COLORS[1],agents:['TITAN','ATLAS'],desc:'SOL, BTC, ETH, JUP'},{l:'LAYER 2 — TOP 50',col:LAYER_RING_COLORS[2],agents:['RADAR'],desc:'Top 50 opportunities'},{l:'LAYER 3 — NEW TOKENS',col:LAYER_RING_COLORS[3],agents:['LEVIATHAN','AEGIS'],desc:'New token hunter'}].map((ly,i)=>(
+                <div key={i} style={{marginBottom:10,padding:'8px 10px',background:'rgba(4,6,13,0.8)',border:`1px solid ${ly.col}20`,borderRadius:4}}>
+                  <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:4}}>
+                    <div style={{width:8,height:8,borderRadius:'50%',background:ly.col,boxShadow:`0 0 6px ${ly.col}`}}/>
+                    <span style={{fontSize:9,color:ly.col,fontFamily:'monospace',fontWeight:700}}>{ly.l}</span>
+                  </div>
+                  <div style={{fontSize:8,color:K.dim,fontFamily:'monospace',marginBottom:3}}>{ly.desc}</div>
+                  <div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
+                    {ly.agents.map(a=><span key={a} style={{padding:'1px 6px',background:`${ly.col}15`,color:ly.col,border:`1px solid ${ly.col}30`,borderRadius:2,fontSize:8,fontFamily:'monospace'}}>{a}</span>)}
+                  </div>
+                </div>
+              ))}
+              <div style={{display:'flex',gap:10,justifyContent:'center',marginTop:8}}>
+                {Object.entries(AGENT_LAYER_MAP).map(([id,info])=>(
+                  <div key={id} style={{textAlign:'center'}}>
+                    <div style={{width:10,height:10,borderRadius:'50%',background:LAYER_RING_COLORS[info.layer],margin:'0 auto 3px',boxShadow:`0 0 6px ${LAYER_RING_COLORS[info.layer]}`}}/>
+                    <div style={{fontSize:7,color:LAYER_RING_COLORS[info.layer],fontFamily:'monospace'}}>{id.toUpperCase()}</div>
+                    <div style={{fontSize:6,color:K.dim,fontFamily:'monospace'}}>{info.role}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Part 14: REJECTED TAB ── */}
+      {tab==="rejected"&&(
+        <div style={{padding:16,display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,overflow:'auto'}}>
+          {/* Rejection Feed (Part 5) */}
+          <div className="panel" style={{padding:0,overflow:'hidden'}}>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:6,padding:'8px 10px',borderBottom:'1px solid #0A1D33',background:'rgba(4,6,13,0.9)'}}>
+              {[{l:'EXECUTED',v:rejectionStats.executed,c:'#00FF88'},{l:'REJECTED',v:rejectionStats.rejected,c:'#FF3366'},{l:'PROTECTED',v:`$${rejectionStats.capitalProtected.toFixed(0)}`,c:K.gold}].map((s,i)=>(
+                <div key={i} style={{textAlign:'center'}}>
+                  <div style={{fontSize:7,color:K.dim,fontFamily:'monospace'}}>{s.l}</div>
+                  <div style={{fontSize:13,fontWeight:700,color:s.c,fontFamily:'monospace'}}>{s.v}</div>
+                </div>
+              ))}
+            </div>
+            {rejectedTrades.length===0?(
+              <div style={{padding:'20px 10px',fontSize:9,color:'#0A1D33',fontFamily:'monospace',textAlign:'center'}}>No rejected trades yet</div>
+            ):rejectedTrades.map((r,i)=>(
+              <div key={i} style={{padding:'8px 10px',borderBottom:'1px solid #06090F',borderLeft:'2px solid #FF336640'}}>
+                <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}>
+                  <span style={{fontSize:11,fontWeight:700,color:'#2A5070',fontFamily:'monospace'}}>{r.sym}</span>
+                  <span style={{fontSize:9,color:'#FF3366',fontFamily:'monospace'}}>{r.confidence}% conf</span>
+                </div>
+                {r.reasons.map((reason,j)=>(
+                  <div key={j} style={{fontSize:9,color:'#1A3050',fontFamily:'monospace'}}>· {reason}</div>
+                ))}
+                <div style={{fontSize:8,color:K.dim,fontFamily:'monospace',marginTop:3}}>Protected ~${r.capitalProtected.toFixed(0)} · {r.timestamp}</div>
+              </div>
+            ))}
+          </div>
+          {/* Missed Opportunities (Part 8) */}
+          <div className="panel" style={{padding:0,overflow:'hidden'}}>
+            <div style={{padding:'6px 10px',fontSize:8,color:K.dim,letterSpacing:'.2em',fontFamily:'monospace',borderBottom:'1px solid #0A1D33'}}>◈ MISSED OPPORTUNITIES</div>
+            {missedOpps.length===0?(
+              <div style={{padding:'20px 10px',fontSize:9,color:'#0A1D33',fontFamily:'monospace',textAlign:'center'}}>No skipped opportunities yet</div>
+            ):missedOpps.map((m,i)=>(
+              <div key={i} style={{padding:'7px 10px',borderBottom:'1px solid #06090F',borderLeft:`2px solid ${m.wasRightToSkip?'#00FF88':'#FFD700'}`}}>
+                <div style={{display:'flex',justifyContent:'space-between',marginBottom:2}}>
+                  <span style={{fontSize:10,color:K.hi,fontFamily:'monospace',fontWeight:700}}>{m.sym}</span>
+                  <span style={{fontSize:10,color:m.move>0?(m.wasRightToSkip?'#2A5070':'#FF3366'):'#00FF88',fontFamily:'monospace'}}>{m.move>0?'+':''}{m.move}%</span>
+                </div>
+                <div style={{fontSize:9,color:K.dim,fontFamily:'monospace'}}>{m.wasRightToSkip?'✓ Correct skip':'⚠ Missed move'} · {m.reason}</div>
+                <div style={{fontSize:8,color:K.dim,fontFamily:'monospace',marginTop:2}}>{m.timestamp}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Performance Card Modal */}
       {modal==="share"&&<PerformanceCard trades={trades} totalPnL={totalPnL} onClose={()=>setModal(null)}/>}
