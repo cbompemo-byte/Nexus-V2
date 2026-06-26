@@ -72,7 +72,7 @@ const USDC_MINT="EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const TRADER_RULES={
   peakHoursUTC:[[7,9],[13,17]] as [number,number][],
   offPeakMinConf:80,          // raised from 72 — only high-conviction off-peak
-  peakMinConf:70,             // raised from 55
+  peakMinConf:78,             // raised from 70
   peakConfBoost:10,
   loss2SizeMultiplier:0.60,
   loss3SizeMultiplier:0.40,
@@ -391,6 +391,27 @@ const calcOpportunityScore=(
     grade:total>=80?'A':total>=65?'B':total>=50?'C':'D',
     tradeable:total>=65,
   };
+};
+
+const get1H4HTrend=async(sym:string):Promise<{trend1h:'BULL'|'BEAR'|'NEUTRAL',trend4h:'BULL'|'BEAR'|'NEUTRAL',aligned:boolean}>=>{
+  try{
+    const pair=sym+'USDT';
+    const [r1h,r4h]=await Promise.all([
+      fetch(`https://api.binance.com/api/v3/klines?symbol=${pair}&interval=1h&limit=22`).then(r=>r.json()),
+      fetch(`https://api.binance.com/api/v3/klines?symbol=${pair}&interval=4h&limit=22`).then(r=>r.json()),
+    ]);
+    const calcEMALocal=(data:unknown[],period:number)=>{
+      const closes=data.map((c)=>parseFloat((c as string[])[4]));
+      const k=2/(period+1);let ema=closes[0];
+      for(let i=1;i<closes.length;i++)ema=closes[i]*k+ema*(1-k);
+      return{ema,last:closes[closes.length-1]};
+    };
+    const ema9_1h=calcEMALocal(r1h,9),ema21_1h=calcEMALocal(r1h,21);
+    const ema9_4h=calcEMALocal(r4h,9),ema21_4h=calcEMALocal(r4h,21);
+    const trend1h=ema9_1h.ema>ema21_1h.ema?'BULL':'BEAR';
+    const trend4h=ema9_4h.ema>ema21_4h.ema?'BULL':'BEAR';
+    return{trend1h,trend4h,aligned:trend1h===trend4h};
+  }catch{return{trend1h:'NEUTRAL',trend4h:'NEUTRAL',aligned:true};}
 };
 
 function usePrices(){
@@ -1970,6 +1991,8 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   const [dnaLoading,setDnaLoading]=useState(false);
   const [showTransparency,setShowTransparency]=useState(false);
   const [running,setRunning]=useState(false);
+  const [swarmConfig,setSwarmConfig]=useState<{profile:string,leverage:number}|null>(null);
+  const [showOnboarding,setShowOnboarding]=useState(false);
   const [liveUsers,setLiveUsers]=useState(()=>847+Math.floor(Math.random()*200));
   const [circuit,setCircuit]=useState(false);
   const [blackSwan,setBlackSwan]=useState(false);
@@ -2898,12 +2921,13 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
       setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym,side:"BUY",qty,price:p.price,pnl:0,conf:65,t:ts(),ms:Date.now(),reason:"Force Entry"},...t.slice(0,99)]);
       log("EXEC","▶ FORCE ENTRY "+sym+" @ "+fPrice(p.price)+" [DEMO]",K.g);
       tradeCount++;
-    },8000);
-    const iv=setInterval(()=>{
+    },20000);
+    const iv=setInterval(async()=>{
       const cs=agStRef.current["consensus"];
-      if(!cs?.on||!cs.conf||cs.conf<45)return;
+      if(!cs?.on||!cs.conf||cs.conf<78)return;
       // ── Part 15: REGIME HARD BLOCKS ──────────────────────────────────────
       const reg=regimeRef.current;
+      if(tradeCount>0)return; // 1 trade per 45s cycle
       if(reg?.regime==='BLACK SWAN'){
         log('AEGIS','⛔ BLACK SWAN active — all execution paused',K.r);return;
       }
@@ -2928,6 +2952,12 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
         return;
       }
       log('RADR',`◈ ${sym} score ${oppScore.total}/100 grade ${oppScore.grade} — proceeding`,oppScore.grade==='A'?K.g:oppScore.grade==='B'?K.gold:K.dim);
+      // ── 4H/1H trend alignment ────────────────────────────────────────────
+      const trendCheck=await get1H4HTrend(sym);
+      if(!trendCheck.aligned){
+        if(Math.random()<0.1)log('RADR',`⛔ ${sym}: 1H ${trendCheck.trend1h} vs 4H ${trendCheck.trend4h} — not aligned`,K.dim);
+        return;
+      }
       // Multi-timeframe confirmation
       const sig=confirmSignal(p.hist);
       log("SIGNAL","◈ "+sym+" quality:"+sig.quality+" RSI-conf:"+Math.round(sig.conf)+"%",sig.quality==="HIGH"?K.g:sig.quality==="MED"?K.gold:K.dim);
@@ -3022,7 +3052,7 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
       }
       // SHORT: separate path — triggers on SELL consensus (≥55%) OR multi-TF SELL signal
       // Macro SHORT block: BTC up >4% blocks shorts
-      if((cs.sig==="SELL"&&(cs.conf||0)>=55)||sig.isSell){
+      if((cs.sig==="SELL"&&(cs.conf||0)>=78)||sig.isSell){
         if(btcBullish){log("ATLAS","[ATLAS] ⚠ BTC macro bullish ("+fP(btcChange)+") — SHORT blocked",K.gold);}
         else{
           const shortSym=selectBestShort();
@@ -3033,7 +3063,7 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
           }
         }
       }
-    },2000);
+    },45000);
     return()=>{clearInterval(iv);clearTimeout(forceT);};
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[running,circuit,traderIsPaused,log]);
@@ -3219,6 +3249,10 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
   const entropyCol=entropy<30?K.r:entropy>70?K.g:K.gold;
 
   const handleStart=()=>{
+    if(!swarmConfig&&!running){
+      setShowOnboarding(true);
+      return;
+    }
     setRunning(r=>{
       const next=!r;
       log("SYS",next?"▶ KYMIA ACTIVATED — 18 agents online":"⏹ SYSTEM HALTED",next?K.g:K.r);
@@ -3333,6 +3367,22 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
         </div>
       )}
 
+      {showOnboarding&&(
+        <div style={{position:'fixed',inset:0,background:'rgba(2,4,10,0.97)',zIndex:800,display:'flex',alignItems:'center',justifyContent:'center',flexDirection:'column',gap:20,fontFamily:"'JetBrains Mono','Courier New',monospace"}}>
+          <div style={{fontSize:11,color:K.c,letterSpacing:'.3em',marginBottom:4}}>◈ CONFIGURE YOUR SWARM</div>
+          <div style={{fontSize:24,fontWeight:900,color:'white',marginBottom:8}}>Choose your risk profile</div>
+          <div style={{display:'flex',gap:12}}>
+            {([{id:'safe',label:'SAFE',lev:2,desc:'4% max · Tight SL',col:'#00FF88'},{id:'balanced',label:'BALANCED',lev:3,desc:'7% max · Standard',col:'#00F2FE'},{id:'aggressive',label:'AGGRESSIVE',lev:4,desc:'12% max · Wide TP',col:'#FF3366'}] as const).map(p=>(
+              <button key={p.id} onClick={()=>{setSwarmConfig({profile:p.id,leverage:p.lev});setShowOnboarding(false);setRunning(true);log('KYMIA',`◈ Swarm configured: ${p.id.toUpperCase()} | ${p.lev}x leverage`,K.c);}} style={{padding:'20px 28px',background:`${p.col}12`,border:`2px solid ${p.col}50`,borderRadius:8,cursor:'pointer',fontFamily:'inherit',minWidth:160}}>
+                <div style={{fontSize:13,fontWeight:900,color:p.col,marginBottom:6,letterSpacing:'.1em'}}>{p.label}</div>
+                <div style={{fontSize:11,color:K.c,marginBottom:4}}>{p.lev}x leverage</div>
+                <div style={{fontSize:9,color:K.dim}}>{p.desc}</div>
+              </button>
+            ))}
+          </div>
+          <button onClick={()=>setShowOnboarding(false)} style={{marginTop:8,background:'none',border:'none',color:K.dim,cursor:'pointer',fontSize:10,fontFamily:'inherit'}}>Skip — use defaults</button>
+        </div>
+      )}
       {booting&&<BootSequence onDone={()=>{setBooting(false);setTimeout(()=>{setRunning(true);log("SYS","▶ AUTO-START — 18 agents online",K.g);},800);}}/>}
 
       {blackSwan&&(
@@ -3382,6 +3432,13 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
           <div style={{display:"flex",alignItems:"center",gap:5,padding:"2px 7px",background:entropyCol+"15",border:"1px solid "+entropyCol+"40",borderRadius:2}}>
             <span style={{fontSize:8,color:K.dim}}>ENTROPY</span>
             <span style={{fontSize:10,color:entropyCol,fontWeight:700}}>{Math.round(entropy)}</span>
+          </div>
+          <div style={{display:'flex',gap:6,alignItems:'center',padding:'3px 8px',background:'rgba(0,242,254,0.06)',border:'1px solid rgba(0,242,254,0.12)',borderRadius:4,fontSize:8,fontFamily:'monospace',color:K.dim}}>
+            <span>CONF</span><span style={{color:'#00FF88',fontWeight:700}}>78%+</span>
+            <span>·</span>
+            <span>4H</span><span style={{color:'#00FF88',fontWeight:700}}>ON</span>
+            <span>·</span>
+            <span>CYCLE</span><span style={{color:K.c,fontWeight:700}}>45s</span>
           </div>
           {(()=>{const nextM=MISSIONS.find(m=>!completedMissions.includes(m.id));if(!nextM)return null;const mp=Math.min(100,((port.equity-CAP)/CAP)/nextM.target*100);return(<div style={{display:"flex",alignItems:"center",gap:5,padding:"2px 8px",background:nextM.color+"10",border:`1px solid ${nextM.color}25`,borderRadius:2}}><span style={{fontSize:9,color:nextM.color}}>{nextM.icon}</span><div style={{width:52,height:3,background:"#06090F",borderRadius:2}}><div style={{height:"100%",borderRadius:2,background:nextM.color,width:mp+"%",transition:"width .5s",boxShadow:`0 0 6px ${nextM.color}`}}/></div><span style={{fontSize:8,color:"#2A5070"}}>{mp.toFixed(0)}%</span></div>);})()}
           {running&&<div style={{display:"flex",alignItems:"center",gap:4,padding:"2px 7px",background:K.g+"10",border:"1px solid "+K.g+"25",borderRadius:2}}><div style={{width:5,height:5,borderRadius:"50%",background:K.g,animation:"pu 1s infinite"}}/><span style={{fontSize:7,color:K.g,letterSpacing:".1em"}}>24/7</span></div>}
