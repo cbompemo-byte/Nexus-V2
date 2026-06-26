@@ -3164,7 +3164,7 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   // Cinematic first-60s auto-play sequence
   useEffect(()=>{
     const timers:ReturnType<typeof setTimeout>[]=[];
-    timers.push(setTimeout(()=>{setRunning(true);log("SYS","▶ KYMIA systems online",K.c);},3000));
+    // auto-start removed — user must click ACTIVATE
     // debate only on manual click
     timers.push(setTimeout(()=>{forceTrade("SOL","BUY","SURGE",76);},15000));
     // Demo SHORT burst — proves SHORT execution works within 20s of activation
@@ -3249,15 +3249,17 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
   const entropyCol=entropy<30?K.r:entropy>70?K.g:K.gold;
 
   const handleStart=()=>{
-    if(!swarmConfig&&!running){
+    if(running){
+      setRunning(false);
+      log("SYS","⏹ SYSTEM HALTED",K.r);
+      return;
+    }
+    if(!swarmConfig){
       setShowOnboarding(true);
       return;
     }
-    setRunning(r=>{
-      const next=!r;
-      log("SYS",next?"▶ KYMIA ACTIVATED — 18 agents online":"⏹ SYSTEM HALTED",next?K.g:K.r);
-      return next;
-    });
+    setRunning(true);
+    log("SYS","▶ KYMIA ACTIVATED — 18 agents online",K.g);
   };
 
   const beatStart=(sym:string,side:string)=>{
@@ -3383,7 +3385,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
           <button onClick={()=>setShowOnboarding(false)} style={{marginTop:8,background:'none',border:'none',color:K.dim,cursor:'pointer',fontSize:10,fontFamily:'inherit'}}>Skip — use defaults</button>
         </div>
       )}
-      {booting&&<BootSequence onDone={()=>{setBooting(false);setTimeout(()=>{setRunning(true);log("SYS","▶ AUTO-START — 18 agents online",K.g);},800);}}/>}
+      {booting&&<BootSequence onDone={()=>{setBooting(false);}}/>}
 
       {blackSwan&&(
         <div style={{background:K.r+"18",borderBottom:"1px solid "+K.r,padding:"4px 16px",display:"flex",justifyContent:"space-between",alignItems:"center",animation:"swan 2s infinite"}}>
