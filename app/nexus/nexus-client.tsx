@@ -3249,6 +3249,8 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
   const entropyCol=entropy<30?K.r:entropy>70?K.g:K.gold;
 
   const handleStart=()=>{
+    console.log('ACTIVATE clicked, swarmConfig:',swarmConfig);
+    console.log('showOnboarding state:',showOnboarding);
     if(running){
       setRunning(false);
       log("SYS","⏹ SYSTEM HALTED",K.r);
@@ -3369,6 +3371,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
         </div>
       )}
 
+      {(()=>{console.log('Rendering check — showOnboarding:',showOnboarding);return null;})()}
       {showOnboarding&&(
         <div style={{position:'fixed',inset:0,background:'rgba(2,4,10,0.97)',zIndex:800,display:'flex',alignItems:'center',justifyContent:'center',flexDirection:'column',gap:20,fontFamily:"'JetBrains Mono','Courier New',monospace"}}>
           <div style={{fontSize:11,color:K.c,letterSpacing:'.3em',marginBottom:4}}>◈ CONFIGURE YOUR SWARM</div>
