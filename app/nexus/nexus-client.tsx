@@ -2,6 +2,7 @@
 import { useState, useEffect, useRef, useCallback, useLayoutEffect } from "react";
 import { closeLiveTrade } from "../../lib/closeLiveTrade";
 import { openLiveTrade } from "../../lib/openLiveTrade";
+import { supabase } from "../../lib/supabase";
 import { motion, useAnimationControls } from "framer-motion";
 import * as THREE from "three";
 
@@ -1964,6 +1965,23 @@ const SignalDecayBadge=({signal}:{signal:SignalWithDecay})=>{
   );
 };
 
+const AuthModal=({onClose}:{onClose:()=>void})=>(
+  <div style={{position:'fixed',inset:0,zIndex:9998,background:'rgba(2,4,10,0.97)',backdropFilter:'blur(20px)',display:'flex',alignItems:'center',justifyContent:'center'}}>
+    <div style={{background:'#060A12',border:'1px solid rgba(0,242,254,0.15)',borderRadius:16,padding:36,width:380,textAlign:'center'}}>
+      <div style={{fontSize:32,marginBottom:8}}>◈</div>
+      <h2 style={{fontSize:22,fontWeight:900,color:'white',marginBottom:8,fontFamily:"'JetBrains Mono','Courier New',monospace"}}>Save your progress</h2>
+      <p style={{fontSize:13,color:'#2A5070',lineHeight:1.7,marginBottom:28,fontFamily:"'JetBrains Mono','Courier New',monospace"}}>Sign in to keep your trading performance, DNA card, and session history across devices.</p>
+      <button onClick={async()=>{await supabase.auth.signInWithOAuth({provider:'google',options:{redirectTo:window.location.origin+'/nexus'}});}} style={{width:'100%',padding:'13px',background:'rgba(255,255,255,0.08)',border:'1px solid rgba(255,255,255,0.15)',borderRadius:8,color:'white',fontSize:13,fontWeight:700,cursor:'pointer',marginBottom:10,display:'flex',alignItems:'center',justifyContent:'center',gap:10,fontFamily:'monospace'}}>
+        <span style={{fontSize:18}}>G</span>Continue with Google
+      </button>
+      <button onClick={async()=>{await supabase.auth.signInWithOAuth({provider:'github',options:{redirectTo:window.location.origin+'/nexus'}});}} style={{width:'100%',padding:'13px',background:'rgba(255,255,255,0.06)',border:'1px solid rgba(255,255,255,0.1)',borderRadius:8,color:'white',fontSize:13,fontWeight:700,cursor:'pointer',marginBottom:20,display:'flex',alignItems:'center',justifyContent:'center',gap:10,fontFamily:'monospace'}}>
+        <span style={{fontSize:18}}>⌥</span>Continue with GitHub
+      </button>
+      <button onClick={onClose} style={{background:'none',border:'none',color:'#2A5070',cursor:'pointer',fontSize:12,fontFamily:'monospace'}}>Skip — continue without saving</button>
+    </div>
+  </div>
+);
+
 export default function KYMIA({isLive=false}:{isLive?:boolean}){
   const prices=usePrices();
   const pricesRef=useRef(prices);
@@ -1993,6 +2011,8 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   const [running,setRunning]=useState(false);
   const [swarmConfig,setSwarmConfig]=useState<{profile:string,leverage:number}|null>(null);
   const [showOnboarding,setShowOnboarding]=useState(false);
+  const [user,setUser]=useState<any>(null);
+  const [showAuthModal,setShowAuthModal]=useState(false);
   const [liveUsers,setLiveUsers]=useState(()=>847+Math.floor(Math.random()*200));
   const [circuit,setCircuit]=useState(false);
   const [blackSwan,setBlackSwan]=useState(false);
@@ -2087,6 +2107,47 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   },[agSt]);
 
   const log=useCallback((ag:string,msg:string,col=K.hi)=>setLogs(l=>[...l.slice(-150),{t:ts(),ag,msg,col}]),[]);
+
+  // ── Supabase auth ─────────────────────────────────────────────────────
+  const loadUserSession=async(userId:string)=>{
+    const {data}=await supabase.from('kymia_sessions').select('*').eq('user_id',userId).single();
+    if(data){
+      setSwarmConfig(data.swarm_config);
+      log('KYMIA',`◈ Welcome back! Session restored — ${data.total_trades} trades · P&L ${data.total_pnl>=0?'+':''}$${data.total_pnl.toFixed(2)}`,K.c);
+    }
+  };
+
+  const saveSession=useCallback(async()=>{
+    if(!user)return;
+    const closed=tradesRef.current.filter((t:Trade)=>t.pnl!==0);
+    const wins=closed.filter((t:Trade)=>t.pnl>0);
+    const totalPnl=closed.reduce((s:number,t:Trade)=>s+t.pnl,0);
+    const bestTrade=closed.reduce((best:number,t:Trade)=>Math.max(best,t.pnl),0);
+    await supabase.from('kymia_sessions').upsert({
+      user_id:user.id,
+      profile:swarmConfig?.profile||'balanced',
+      leverage:swarmConfig?.leverage||3,
+      total_trades:closed.length,
+      winning_trades:wins.length,
+      total_pnl:totalPnl,
+      best_trade:bestTrade,
+      equity:portRef.current.equity,
+      swarm_config:swarmConfig,
+      last_session:new Date().toISOString()
+    },{onConflict:'user_id'});
+  },[user,swarmConfig]);
+
+  useEffect(()=>{
+    supabase.auth.getSession().then(({data:{session}})=>{
+      setUser(session?.user||null);
+      if(session?.user)loadUserSession(session.user.id);
+    });
+    const {data:{subscription}}=supabase.auth.onAuthStateChange((_event,session)=>{
+      setUser(session?.user||null);
+    });
+    return()=>subscription.unsubscribe();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[]);
 
   // ── Part 12: Demo/live scan intervals ────────────────────────────────
   const isDemoMode=!isLive;
@@ -2783,6 +2844,7 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
     const card:WinCard={id:Math.random().toString(36).slice(2),sym,pnl,pct,price,agent,t:ts(),origin};
     setWinCards(prev=>[...prev.slice(-1),card]);
     setTrades(t=>[{id:card.id,sym,side:"SELL",qty:0,price,pnl,conf:80,t:card.t,ms:Date.now(),agent,reason:reason||agent},...t.slice(0,99)]);
+    saveSession();
   };
 
   // Real-data agents — NEVER overwritten by simulation (only AEGIS remains sim)
@@ -3371,6 +3433,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
         </div>
       )}
 
+      {showAuthModal&&<AuthModal onClose={()=>setShowAuthModal(false)}/>}
       {(()=>{console.log('Rendering check — showOnboarding:',showOnboarding);return null;})()}
       {showOnboarding&&(
         <div style={{position:'fixed',inset:0,background:'rgba(2,4,10,0.97)',zIndex:800,display:'flex',alignItems:'center',justifyContent:'center',flexDirection:'column',gap:20,fontFamily:"'JetBrains Mono','Courier New',monospace"}}>
@@ -3481,6 +3544,14 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
             <span style={{fontSize:9,fontWeight:700,color:K.gold}}>{trades.filter(t=>t.pnl!==0).length}</span>
             <span style={{fontSize:7,color:K.dim,letterSpacing:".06em"}}>TRADES</span>
           </div>
+          {!user?(
+            <button onClick={()=>setShowAuthModal(true)} style={{padding:'5px 12px',background:'rgba(0,242,254,0.08)',border:'1px solid rgba(0,242,254,0.2)',borderRadius:4,color:'#00F2FE',fontFamily:'monospace',fontSize:10,cursor:'pointer',fontWeight:700}}>◈ SAVE PROGRESS</button>
+          ):(
+            <div style={{display:'flex',alignItems:'center',gap:6}}>
+              <div style={{width:6,height:6,borderRadius:'50%',background:'#00FF88'}}/>
+              <span style={{fontSize:10,color:'#00FF88',fontFamily:'monospace'}}>{user.email?.split('@')[0]||'Connected'}</span>
+            </div>
+          )}
           <div style={{display:"flex",gap:5}}>
             <button className="btn" onClick={()=>setShowTransparency(true)} style={{background:"rgba(0,242,254,0.06)",color:"#00F2FE",border:"1px solid rgba(0,242,254,0.2)"}}>ℹ HOW IT WORKS</button>
             <button className="btn" onClick={()=>setModal("share")} style={{background:"#0A1428",color:K.gold,border:"1px solid "+K.gold+"50"}}>◈ SHARE</button>
