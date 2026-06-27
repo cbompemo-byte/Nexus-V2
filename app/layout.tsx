@@ -26,7 +26,7 @@ export const metadata: Metadata = {
   openGraph: {
     title: "KYMIA — Autonomous Quant Intelligence",
     description: "18 AI agents analyzing Solana markets in real time. Free sandbox. No signup.",
-    url: "https://nexus-v2-seven.vercel.app",
+    url: "https://kymia.ai",
     siteName: "KYMIA",
     type: "website",
   },
