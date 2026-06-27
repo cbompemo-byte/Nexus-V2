@@ -2111,9 +2111,11 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   // ── Supabase auth ─────────────────────────────────────────────────────
   const loadUserSession=async(userId:string)=>{
     const {data}=await supabase.from('kymia_sessions').select('*').eq('user_id',userId).single();
-    if(data){
+    if(data&&data.swarm_config){
       setSwarmConfig(data.swarm_config);
-      log('KYMIA',`◈ Welcome back! Session restored — ${data.total_trades} trades · P&L ${data.total_pnl>=0?'+':''}$${data.total_pnl.toFixed(2)}`,K.c);
+      log('KYMIA',`◈ Welcome back ${data.swarm_config.profile?.toUpperCase()||''}! Profile restored · ${data.total_trades||0} trades on record`,K.c);
+    }else{
+      setSwarmConfig(null);
     }
   };
 
@@ -3550,8 +3552,10 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
             <div style={{display:'flex',alignItems:'center',gap:6}}>
               <div style={{width:6,height:6,borderRadius:'50%',background:'#00FF88'}}/>
               <span style={{fontSize:10,color:'#00FF88',fontFamily:'monospace'}}>{user.email?.split('@')[0]||'Connected'}</span>
+              <button onClick={()=>{setSwarmConfig(null);setRunning(false);setShowOnboarding(true);}} style={{background:'none',border:'none',color:'#2A5070',cursor:'pointer',fontSize:9,fontFamily:'monospace',textDecoration:'underline'}}>⚙ Reconfigure</button>
             </div>
           )}
+          <button onClick={async()=>{if(user){await supabase.from('kymia_sessions').update({swarm_config:null}).eq('user_id',user.id);}setSwarmConfig(null);setRunning(false);setShowOnboarding(true);}} style={{padding:'3px 8px',background:'rgba(255,215,0,0.15)',border:'1px solid rgba(255,215,0,0.4)',borderRadius:3,color:'#FFD700',fontSize:9,cursor:'pointer',fontFamily:'monospace'}}>⚙ RESET ONBOARDING (TEST)</button>
           <div style={{display:"flex",gap:5}}>
             <button className="btn" onClick={()=>setShowTransparency(true)} style={{background:"rgba(0,242,254,0.06)",color:"#00F2FE",border:"1px solid rgba(0,242,254,0.2)"}}>ℹ HOW IT WORKS</button>
             <button className="btn" onClick={()=>setModal("share")} style={{background:"#0A1428",color:K.gold,border:"1px solid "+K.gold+"50"}}>◈ SHARE</button>
