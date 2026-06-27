@@ -2140,12 +2140,29 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   },[user,swarmConfig]);
 
   useEffect(()=>{
-    supabase.auth.getSession().then(({data:{session}})=>{
+    // FIX 1: handle OAuth redirect — Supabase puts access_token in URL hash
+    const hash=window.location.hash;
+    if(hash&&hash.includes('access_token')){
+      supabase.auth.getSession().then(({data:{session}})=>{
+        if(session?.user){
+          setUser(session.user);
+          loadUserSession(session.user.id);
+          window.history.replaceState({},'','/nexus?mode=demo');
+        }
+      });
+    }else{
+      supabase.auth.getSession().then(({data:{session}})=>{
+        setUser(session?.user||null);
+        if(session?.user)loadUserSession(session.user.id);
+      });
+    }
+    // FIX 4: handle SIGNED_IN event from OAuth callback
+    const {data:{subscription}}=supabase.auth.onAuthStateChange((event,session)=>{
       setUser(session?.user||null);
-      if(session?.user)loadUserSession(session.user.id);
-    });
-    const {data:{subscription}}=supabase.auth.onAuthStateChange((_event,session)=>{
-      setUser(session?.user||null);
+      if(event==='SIGNED_IN'&&session?.user){
+        loadUserSession(session.user.id);
+        log('KYMIA',`◈ Welcome ${session.user.email?.split('@')[0]}! Session restored.`,K.c);
+      }
     });
     return()=>subscription.unsubscribe();
   // eslint-disable-next-line react-hooks/exhaustive-deps
