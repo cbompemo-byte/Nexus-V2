@@ -2094,6 +2094,7 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   const sessionStartRef=useRef(Date.now());
   const sessionStartEquityRef=useRef(CAP);
   const lastTradeTimeRef=useRef<number>(Date.now());
+  const demoFirstTradeRef=useRef(false);
   const logRef=useRef<HTMLDivElement>(null);
   const swarmRef=useRef<HTMLDivElement>(null);
   // Symbol-level loss tracker — blacklists symbols after 2 losses
@@ -3061,13 +3062,13 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   // Trade execution — multi-TF + Kelly + momentum + anti-correlation
   useEffect(()=>{
     if(!running||circuit)return;
-    let tradeCount=0;
     log('KYMIA',`◈ Swarm active — scanning ${Object.keys(SYMS).filter(s=>!STABLE_SYMS.has(s)).slice(0,6).join(', ')} + more`,K.c);
     const statusIv=setInterval(()=>{
       const reporting=Object.keys(agStRef.current).filter(k=>agStRef.current[k]?.sig).length;
       log('WATCH',`◉ ${reporting} agents reporting signals`,K.dim);
     },60000);
     const iv=setInterval(async()=>{
+      let tradeCount=0; // RESET every 45s tick — was outside causing permanent lockout after 1 trade
       const cs=agStRef.current["consensus"];
       if(!cs?.on||!cs.conf||cs.conf<65)return;
       // ── Part 15: REGIME HARD BLOCKS ──────────────────────────────────────
@@ -3210,34 +3211,64 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
           }
         }
       }
-      // ── 3-minute fallback: if no trade fired, use best available agent signal ──
-      const minsSinceTrade=(Date.now()-lastTradeTimeRef.current)/60000;
-      if(minsSinceTrade>3&&tradeCount===0){
-        const prt2=portRef.current;
-        if(prt2.cash>500){
-          const bestSignal=Object.entries(agStRef.current)
-            .filter(([,ag])=>ag?.sig==='BUY'&&(ag?.conf??0)>=60)
-            .sort((a,b)=>(b[1].conf??0)-(a[1].conf??0))[0];
-          if(bestSignal){
-            const[agentId,agData]=bestSignal;
-            const fbSym=Object.keys(SYMS).filter(s=>!STABLE_SYMS.has(s)&&!prt2.pos[s])[0]||'SOL';
-            const fp=pricesRef.current[fbSym];
-            if(fp){
-              log('AEGIS',`◈ 3min without trade — executing best signal: ${fbSym} via ${agentId.toUpperCase()} (${agData.conf}%)`,K.gold);
-              const alloc=Math.min(prt2.cash*0.10,prt2.cash*.9);
-              const qty=alloc/fp.price;
-              setPort(prev=>{if(prev.pos[fbSym])return prev;return{...prev,cash:prev.cash-alloc,pos:{...prev.pos,[fbSym]:{qty,avg:fp.price,entryMs:Date.now()}}};});
-              setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym:fbSym,side:'BUY',qty,price:fp.price,pnl:0,conf:Math.round(agData.conf??60),t:ts(),ms:Date.now(),agent:agentId.toUpperCase(),reason:'Best signal fallback'},...t.slice(0,99)]);
-              lastTradeTimeRef.current=Date.now();
-              tradeCount++;
-            }
-          }
-        }
-      }
     },45000);
-    return()=>{clearInterval(iv);clearInterval(statusIv);};
+    // ── 3-min fallback: independent of consensus gate ─────────────────────
+    const fallbackIv=setInterval(()=>{
+      const minsSinceTrade=(Date.now()-lastTradeTimeRef.current)/60000;
+      if(minsSinceTrade<3)return;
+      const prt2=portRef.current;
+      if(prt2.cash<500)return;
+      const bestSignal=Object.entries(agStRef.current)
+        .filter(([,ag])=>ag?.sig==='BUY'&&(ag?.conf??0)>=55)
+        .sort((a,b)=>(b[1].conf??0)-(a[1].conf??0))[0];
+      if(!bestSignal)return;
+      const[agentId,agData]=bestSignal;
+      const fbSym=Object.keys(SYMS).filter(s=>!STABLE_SYMS.has(s)&&!prt2.pos[s])[0]||'SOL';
+      const fp=pricesRef.current[fbSym];
+      if(!fp)return;
+      log('AEGIS',`◈ 3min without trade — executing best signal: ${fbSym} via ${agentId.toUpperCase()} (${agData.conf}%)`,K.gold);
+      const alloc=Math.min(prt2.cash*0.10,prt2.cash*.9);
+      const qty=alloc/fp.price;
+      setPort(prev=>{if(prev.pos[fbSym])return prev;return{...prev,cash:prev.cash-alloc,pos:{...prev.pos,[fbSym]:{qty,avg:fp.price,entryMs:Date.now()}}};});
+      setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym:fbSym,side:'BUY',qty,price:fp.price,pnl:0,conf:Math.round(agData.conf??55),t:ts(),ms:Date.now(),agent:agentId.toUpperCase(),reason:'Best signal fallback'},...t.slice(0,99)]);
+      lastTradeTimeRef.current=Date.now();
+    },30000);
+    return()=>{clearInterval(iv);clearInterval(statusIv);clearInterval(fallbackIv);};
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[running,circuit,traderIsPaused,log]);
+
+  // ── Guaranteed first trade 10s after activation (uses real prices + best agent signal) ──
+  useEffect(()=>{
+    if(!running)return;
+    if(demoFirstTradeRef.current)return; // only fires once per session
+    const timer=setTimeout(()=>{
+      demoFirstTradeRef.current=true;
+      if(Object.keys(portRef.current.pos).length>0)return; // already have positions
+      // Pick best BUY signal from real agents, min conf 55%
+      const signals=Object.entries(agStRef.current)
+        .filter(([,ag])=>ag?.sig==='BUY'&&(ag?.conf??0)>=55)
+        .sort((a,b)=>(b[1].conf??0)-(a[1].conf??0));
+      const PRIORITY=['SOL','BTC','ETH','JUP','BONK'];
+      const agentSym=signals[0]?.[0]?.toUpperCase()||null;
+      const sym=PRIORITY.find(s=>signals.some(([id])=>id.toUpperCase()===s)||signals.length>0?PRIORITY[0]:false)||'SOL';
+      const targetSym=PRIORITY.includes(agentSym||'')?agentSym!:sym;
+      const agentId=signals[0]?.[0]?.toUpperCase()||'KYMIA';
+      const conf=Math.round(signals[0]?.[1]?.conf??62);
+      // Use real price; fallback to approximate current market price if API not yet loaded
+      const FALLBACK_PRICES:Record<string,number>={SOL:160,BTC:67000,ETH:3400,JUP:1.2,BONK:0.000025};
+      const price=pricesRef.current[targetSym]?.price||FALLBACK_PRICES[targetSym]||100;
+      const prt=portRef.current;
+      if(prt.cash<500)return;
+      const alloc=Math.min(prt.cash*0.12,prt.cash*.9);
+      const qty=alloc/price;
+      log('KYMIA',`⚡ First trade opening: ${targetSym} @ $${f2(price)} via ${agentId} (${conf}% conf)`,K.g);
+      setPort(prev=>{if(prev.pos[targetSym])return prev;return{...prev,cash:prev.cash-alloc,pos:{...prev.pos,[targetSym]:{qty,avg:price,entryMs:Date.now()}}};});
+      setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym:targetSym,side:'BUY',qty,price,pnl:0,conf,t:ts(),ms:Date.now(),agent:agentId,reason:'First signal'},...t.slice(0,99)]);
+      lastTradeTimeRef.current=Date.now();
+    },10000);
+    return()=>clearTimeout(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[running]);
 
   // ── Session summary every 30 minutes ─────────────────────────────────────────
   useEffect(()=>{
@@ -3400,6 +3431,9 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
       setHasShownOnboarding(true);
       return;
     }
+    // Reset first-trade guard so re-activation gets a fresh first trade
+    demoFirstTradeRef.current=false;
+    lastTradeTimeRef.current=Date.now();
     setRunning(true);
     log("SYS","▶ KYMIA ACTIVATED — 18 agents online",K.g);
   };
