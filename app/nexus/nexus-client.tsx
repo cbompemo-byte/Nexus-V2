@@ -101,7 +101,7 @@ function getSessionQuality():{quality:"PRIME"|"GOOD"|"LOW"|"AVOID",multiplier:nu
   if(h>=13&&h<=16)return{quality:"PRIME",multiplier:1.0,label:"NY OPEN",col:K.g};
   if(h>=10&&h<=13)return{quality:"GOOD",multiplier:0.7,label:"EU SESSION",col:K.gold};
   if(h>=16&&h<=20)return{quality:"GOOD",multiplier:0.7,label:"NY SESSION",col:K.gold};
-  if(h>=0&&h<=6)return{quality:"AVOID",multiplier:0,label:"DEAD ZONE",col:K.r};
+  if(h>=0&&h<=6)return{quality:"AVOID",multiplier:0.5,label:"DEAD ZONE",col:K.r};
   return{quality:"LOW",multiplier:0.4,label:"ASIAN",col:K.dim};
 }
 async function detectManipulation(sym:string):Promise<{risk:"LOW"|"MEDIUM"|"HIGH",score:number,flags:string[]}>{
@@ -2093,6 +2093,7 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   const prevAgStRef=useRef<{[k:string]:AgentState}>({});
   const sessionStartRef=useRef(Date.now());
   const sessionStartEquityRef=useRef(CAP);
+  const lastTradeTimeRef=useRef<number>(Date.now());
   const logRef=useRef<HTMLDivElement>(null);
   const swarmRef=useRef<HTMLDivElement>(null);
   // Symbol-level loss tracker — blacklists symbols after 2 losses
@@ -2157,8 +2158,9 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   const loadUserSession=async(userId:string)=>{
     const {data}=await supabase.from('kymia_sessions').select('*').eq('user_id',userId).single();
     if(data){
-      // Never restore swarmConfig — onboarding must always show on first ACTIVATE
-      // Restore portfolio state only: cash, equity, open positions
+      // Restore swarmConfig so returning users skip onboarding
+      if(data.swarm_config)setSwarmConfig(data.swarm_config);
+      // Restore portfolio state: cash, equity, open positions
       if(data.cash!=null||data.equity!=null||data.open_positions!=null){
         setPort(prev=>({
           ...prev,
@@ -2170,23 +2172,25 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
       }
       log('KYMIA',`◈ Welcome back! Session restored · ${data.total_trades||0} trades on record`,K.c);
     }
+    setRunning(false);          // Never auto-start
+    setHasShownOnboarding(!!data?.swarm_config); // Skip onboarding only if already configured
   };
 
   const saveSession=useCallback(async()=>{
     if(!user)return;
     const closed=tradesRef.current.filter((t:Trade)=>t.pnl!==0);
     const wins=closed.filter((t:Trade)=>t.pnl>0);
-    const totalPnl=closed.reduce((s:number,t:Trade)=>s+t.pnl,0);
-    const bestTrade=closed.reduce((best:number,t:Trade)=>Math.max(best,t.pnl),0);
     await supabase.from('kymia_sessions').upsert({
       user_id:user.id,
       profile:swarmConfig?.profile||'balanced',
       leverage:swarmConfig?.leverage||3,
       total_trades:closed.length,
       winning_trades:wins.length,
-      total_pnl:totalPnl,
-      best_trade:bestTrade,
+      total_pnl:closed.reduce((s:number,t:Trade)=>s+t.pnl,0),
+      best_trade:Math.max(0,...closed.map((t:Trade)=>t.pnl)),
       equity:portRef.current.equity,
+      cash:portRef.current.cash,
+      open_positions:portRef.current.pos,
       swarm_config:swarmConfig,
       last_session:new Date().toISOString()
     },{onConflict:'user_id'});
@@ -2248,12 +2252,12 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[]);
 
-  // ── Save open positions every 30s while running ───────────────────────
+  // ── Save session every 60s while running (positions + equity + trades) ──
   useEffect(()=>{
     if(!user||!running)return;
-    const iv=setInterval(saveOpenPositions,30000);
+    const iv=setInterval(()=>{saveSession();saveOpenPositions();},60000);
     return()=>clearInterval(iv);
-  },[user,running,saveOpenPositions]);
+  },[user,running,saveSession,saveOpenPositions]);
 
   // ── Part 12: Demo/live scan intervals ────────────────────────────────
   const isDemoMode=!isLive;
@@ -3065,7 +3069,7 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
     },60000);
     const iv=setInterval(async()=>{
       const cs=agStRef.current["consensus"];
-      if(!cs?.on||!cs.conf||cs.conf<68)return;
+      if(!cs?.on||!cs.conf||cs.conf<65)return;
       // ── Part 15: REGIME HARD BLOCKS ──────────────────────────────────────
       const reg=regimeRef.current;
       if(tradeCount>0)return; // 1 trade per 45s cycle
@@ -3074,7 +3078,7 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
       }
       // ── SESSION TIME FILTER ───────────────────────────────────────────────
       const sess=getSessionQuality();
-      if(sess.quality==="AVOID"){log("WATCH","⛔ Dead zone ("+sess.label+") — no trades 00h-06h UTC",K.dim);return;}
+      if(sess.quality==="AVOID"){log("WATCH","◉ Off-peak hours ("+sess.label+") — reduced size 50%",K.dim);}
       // Pick volatile non-stable token
       const allKeys=Object.keys(SYMS);
       const pool=allKeys.filter(sym=>{
@@ -3133,7 +3137,7 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
         }
         if(btcBearish&&p.rsi<25)log("ATLAS","[ATLAS] RSI<25 exception — LONG despite BTC bearish",K.gold);
         if(isPeakHour())log("WATCH","[WATCH] NY/EU session open — elevated confidence window",K.c);
-        else log("WATCH","[WATCH] Off-peak hours — applying strict 72% conf threshold",K.dim);
+        else log("WATCH","[WATCH] Off-peak hours — reduced size ("+sess.label+")",K.dim);
         // Momentum filter
         if(!hasMomentum(p.hist)){log("SIGNAL","⊘ No momentum: "+sym+" — skip",K.dim);return;}
         // Anti-correlation check
@@ -3184,22 +3188,49 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
           log("RADR","⏳ Pending BUY "+sym+" — pullback to "+fPrice(pullbackTarget)+" ("+sess.label+" x"+sess.multiplier+")",K.gold);
         }
         setRejectionStats(prev=>({...prev,executed:prev.executed+1}));
+        lastTradeTimeRef.current=Date.now();
         tradeCount++;
       }else if((cs.sig==="SELL"||sig.isSell)&&prt.pos[sym]&&prt.pos[sym].side!=="SHORT"){
         // Close existing LONG position
         closeLongPosition(sym,prt.pos[sym],p.price,"CONSENSUS","Signal Exit");
+        lastTradeTimeRef.current=Date.now();
         tradeCount++;
       }
-      // SHORT: separate path — triggers on SELL consensus (≥55%) OR multi-TF SELL signal
+      // SHORT: separate path — triggers on SELL consensus (≥65%) OR multi-TF SELL signal
       // Macro SHORT block: BTC up >4% blocks shorts
-      if((cs.sig==="SELL"&&(cs.conf||0)>=68)||sig.isSell){
+      if((cs.sig==="SELL"&&(cs.conf||0)>=65)||sig.isSell){
         if(btcBullish){log("ATLAS","[ATLAS] ⚠ BTC macro bullish ("+fP(btcChange)+") — SHORT blocked",K.gold);}
         else{
           const shortSym=selectBestShort();
           if(shortSym&&prt.cash>500&&canOpen&&!traderIsPaused){
             const reason=cs.sig==="SELL"?cs.th||"CONSENSUS SELL":"Multi-TF SELL signal";
             openShort(shortSym,reason,"CONSENSUS",cs.sig==="SELL"?Math.round(cs.conf||70):Math.round(sig.conf));
+            lastTradeTimeRef.current=Date.now();
             tradeCount++;
+          }
+        }
+      }
+      // ── 3-minute fallback: if no trade fired, use best available agent signal ──
+      const minsSinceTrade=(Date.now()-lastTradeTimeRef.current)/60000;
+      if(minsSinceTrade>3&&tradeCount===0){
+        const prt2=portRef.current;
+        if(prt2.cash>500){
+          const bestSignal=Object.entries(agStRef.current)
+            .filter(([,ag])=>ag?.sig==='BUY'&&(ag?.conf??0)>=60)
+            .sort((a,b)=>(b[1].conf??0)-(a[1].conf??0))[0];
+          if(bestSignal){
+            const[agentId,agData]=bestSignal;
+            const fbSym=Object.keys(SYMS).filter(s=>!STABLE_SYMS.has(s)&&!prt2.pos[s])[0]||'SOL';
+            const fp=pricesRef.current[fbSym];
+            if(fp){
+              log('AEGIS',`◈ 3min without trade — executing best signal: ${fbSym} via ${agentId.toUpperCase()} (${agData.conf}%)`,K.gold);
+              const alloc=Math.min(prt2.cash*0.10,prt2.cash*.9);
+              const qty=alloc/fp.price;
+              setPort(prev=>{if(prev.pos[fbSym])return prev;return{...prev,cash:prev.cash-alloc,pos:{...prev.pos,[fbSym]:{qty,avg:fp.price,entryMs:Date.now()}}};});
+              setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym:fbSym,side:'BUY',qty,price:fp.price,pnl:0,conf:Math.round(agData.conf??60),t:ts(),ms:Date.now(),agent:agentId.toUpperCase(),reason:'Best signal fallback'},...t.slice(0,99)]);
+              lastTradeTimeRef.current=Date.now();
+              tradeCount++;
+            }
           }
         }
       }
