@@ -1982,6 +1982,49 @@ const AuthModal=({onClose}:{onClose:()=>void})=>(
   </div>
 );
 
+function ActivateScreen({onActivate,swarmConfig,user}:{onActivate:()=>void,swarmConfig:{profile:string,leverage:number}|null,user:any}){
+  const [pulse,setPulse]=useState(false);
+  useEffect(()=>{const iv=setInterval(()=>setPulse(p=>!p),1200);return()=>clearInterval(iv);},[]);
+  return(
+    <div style={{position:'absolute',inset:0,background:'rgba(4,6,13,0.92)',backdropFilter:'blur(4px)',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',zIndex:20,gap:0}}>
+      {user&&(
+        <div style={{marginBottom:24,padding:'8px 20px',background:'rgba(0,242,254,0.08)',border:'1px solid rgba(0,242,254,0.2)',borderRadius:20,fontSize:12,color:'#00F2FE',fontFamily:'monospace'}}>
+          ◈ Welcome back {user.email?.split('@')[0]} — session restored
+        </div>
+      )}
+      <div style={{textAlign:'center',marginBottom:40}}>
+        <div style={{fontSize:52,color:'#00F2FE',marginBottom:12,textShadow:'0 0 40px rgba(0,242,254,0.5)',fontFamily:'monospace',fontWeight:900,letterSpacing:'0.2em'}}>◈ KYMIA</div>
+        <div style={{fontSize:13,color:'#2A5070',fontFamily:'monospace',letterSpacing:'0.4em'}}>AUTONOMOUS QUANT INTELLIGENCE</div>
+      </div>
+      <div style={{display:'flex',gap:10,marginBottom:40,flexWrap:'wrap',justifyContent:'center',padding:'0 20px'}}>
+        {([{icon:'◈',text:'18 AI Agents',col:'#00F2FE'},{icon:'▲',text:'Real Solana Prices',col:'#00FF88'},{icon:'⚡',text:'$10K Virtual Capital',col:'#FFD700'}] as const).map((f,i)=>(
+          <div key={i} style={{padding:'8px 16px',background:`${f.col}10`,border:`1px solid ${f.col}30`,borderRadius:20,display:'flex',alignItems:'center',gap:7,fontSize:12,color:f.col,fontFamily:'monospace',fontWeight:700}}>
+            <span>{f.icon}</span><span>{f.text}</span>
+          </div>
+        ))}
+      </div>
+      <div style={{display:'flex',gap:20,marginBottom:48,padding:'0 40px',flexWrap:'wrap',justifyContent:'center'}}>
+        {[{n:'01',title:'Agents Analyze',desc:'18 specialized AI agents scan RSI, EMA, Volume, Whale flows and Fear & Greed in real time'},{n:'02',title:'Swarm Debates',desc:'Agents vote. When 68%+ agree on a signal with high confidence, consensus is reached'},{n:'03',title:'Trade Executes',desc:'AEGIS validates risk. Position opens on real Solana market prices. You watch it unfold'}].map((step,i)=>(
+          <div key={i} style={{width:200,padding:'18px 20px',background:'rgba(6,10,18,0.8)',border:'1px solid rgba(0,242,254,0.08)',borderRadius:10}}>
+            <div style={{fontSize:11,color:'#00F2FE',fontFamily:'monospace',fontWeight:700,marginBottom:8,opacity:0.5}}>{step.n}</div>
+            <div style={{fontSize:13,color:'white',fontWeight:700,marginBottom:8}}>{step.title}</div>
+            <div style={{fontSize:11,color:'#2A5070',lineHeight:1.7}}>{step.desc}</div>
+          </div>
+        ))}
+      </div>
+      <button onClick={onActivate} style={{padding:'18px 60px',background:'rgba(0,242,254,0.12)',border:`2px solid ${pulse?'rgba(0,242,254,0.8)':'rgba(0,242,254,0.4)'}`,borderRadius:10,color:'#00F2FE',fontFamily:'monospace',fontSize:18,fontWeight:900,cursor:'pointer',letterSpacing:'0.15em',boxShadow:pulse?'0 0 40px rgba(0,242,254,0.25),0 0 80px rgba(0,242,254,0.1)':'0 0 20px rgba(0,242,254,0.1)',transition:'all 0.3s ease',marginBottom:16}}>
+        ▶ ACTIVATE SWARM
+      </button>
+      <div style={{fontSize:11,color:'#2A5070',fontFamily:'monospace',textAlign:'center'}}>Real market data · Virtual $10,000 · No risk</div>
+      {swarmConfig&&(
+        <div style={{marginTop:16,fontSize:10,color:'#2A5070',fontFamily:'monospace'}}>
+          Profile: {swarmConfig.profile?.toUpperCase()} · {swarmConfig.leverage}x leverage
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function KYMIA({isLive=false}:{isLive?:boolean}){
   const prices=usePrices();
   const pricesRef=useRef(prices);
@@ -3015,9 +3058,14 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   useEffect(()=>{
     if(!running||circuit)return;
     let tradeCount=0;
+    log('KYMIA',`◈ Swarm active — scanning ${Object.keys(SYMS).filter(s=>!STABLE_SYMS.has(s)).slice(0,6).join(', ')} + more`,K.c);
+    const statusIv=setInterval(()=>{
+      const reporting=Object.keys(agStRef.current).filter(k=>agStRef.current[k]?.sig).length;
+      log('WATCH',`◉ ${reporting} agents reporting signals`,K.dim);
+    },60000);
     const iv=setInterval(async()=>{
       const cs=agStRef.current["consensus"];
-      if(!cs?.on||!cs.conf||cs.conf<78)return;
+      if(!cs?.on||!cs.conf||cs.conf<68)return;
       // ── Part 15: REGIME HARD BLOCKS ──────────────────────────────────────
       const reg=regimeRef.current;
       if(tradeCount>0)return; // 1 trade per 45s cycle
@@ -3045,11 +3093,10 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
         return;
       }
       log('RADR',`◈ ${sym} score ${oppScore.total}/100 grade ${oppScore.grade} — proceeding`,oppScore.grade==='A'?K.g:oppScore.grade==='B'?K.gold:K.dim);
-      // ── 4H/1H trend alignment ────────────────────────────────────────────
+      // ── 4H trend check (1H removed — too restrictive in ranging markets) ──
       const trendCheck=await get1H4HTrend(sym);
-      if(!trendCheck.aligned){
-        if(Math.random()<0.1)log('RADR',`⛔ ${sym}: 1H ${trendCheck.trend1h} vs 4H ${trendCheck.trend4h} — not aligned`,K.dim);
-        return;
+      if(trendCheck.trend4h==='BEAR'&&cs.sig!=='SELL'){
+        if(Math.random()<0.15)log('RADR',`⚠ ${sym}: 4H ${trendCheck.trend4h} — proceeding with caution`,K.dim);
       }
       // Multi-timeframe confirmation
       const sig=confirmSignal(p.hist);
@@ -3145,7 +3192,7 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
       }
       // SHORT: separate path — triggers on SELL consensus (≥55%) OR multi-TF SELL signal
       // Macro SHORT block: BTC up >4% blocks shorts
-      if((cs.sig==="SELL"&&(cs.conf||0)>=78)||sig.isSell){
+      if((cs.sig==="SELL"&&(cs.conf||0)>=68)||sig.isSell){
         if(btcBullish){log("ATLAS","[ATLAS] ⚠ BTC macro bullish ("+fP(btcChange)+") — SHORT blocked",K.gold);}
         else{
           const shortSym=selectBestShort();
@@ -3157,7 +3204,7 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
         }
       }
     },45000);
-    return()=>{clearInterval(iv);};
+    return()=>{clearInterval(iv);clearInterval(statusIv);};
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[running,circuit,traderIsPaused,log]);
 
@@ -3758,6 +3805,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
                 </div>
               </div>
               <div style={{flex:1,display:"flex",flexDirection:"column",justifyContent:"center",alignItems:"center",padding:4,position:"relative",zIndex:1,boxShadow:"inset 0 0 60px rgba(0,0,0,0.55)"}}>
+                {!running&&<ActivateScreen onActivate={handleStart} swarmConfig={swarmConfig} user={user}/>}
                 <SwarmGraph st={agSt} debate={debate} disabled={disabled} swarmRef={swarmRef} flashingAgent={flashingAgent} highConviction={highConviction} convCol={convCol}/>
                 {/* Part 13: Layer legend */}
                 <div style={{display:'flex',gap:12,justifyContent:'center',marginTop:6}}>
