@@ -2600,30 +2600,6 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
     return()=>clearInterval(iv);
   },[scanNewTokens]);
 
-  // Demo burst: fire 3 trades quickly after start (SOL/JUP/WIF with named agents)
-  useEffect(()=>{
-    if(!running)return;
-    const burst=(delay:number,sym:string,agent:string,conf:number)=>setTimeout(()=>{
-      const p=pricesRef.current[sym];if(!p)return;
-      const prt=portRef.current;if(prt.cash<500||prt.pos[sym])return;
-      const alloc=Math.min(prt.cash*.13,prt.cash*.9);
-      const qty=alloc/p.price;
-      setPort(prev=>{if(prev.pos[sym])return prev;return{...prev,cash:prev.cash-alloc,pos:{...prev.pos,[sym]:{qty,avg:p.price,entryMs:Date.now()}}};});
-      const ags=agStRef.current;
-      const agSig:AgentSignals={};
-      if(agent==="SURGE"&&ags["surge"]?.conf)agSig.surge={volumeChange:ags["surge"].conf/10,signal:"BUY"};
-      if(agent==="RADAR"&&ags["radar"]?.conf)agSig.radar={ema9:p.price,ema21:p.price*0.998,signal:"BUY"};
-      if(agent==="LENS"&&ags["lens"]?.conf)agSig.lens={rsi:38,signal:"BUY"};
-      if(ags["leviathan"]?.sig==="BUY"&&ags["leviathan"]?.conf)agSig.leviathan={buyPressure:0.62,signal:"BUY"};
-      setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym,side:"BUY",qty,price:p.price,pnl:0,conf,t:ts(),ms:Date.now(),agent,reason:"Demo Burst",agentSignals:agSig},...t.slice(0,99)]);
-      log("EXEC","▶ BURST ["+agent+"] "+sym+" @ $"+f2(p.price)+" conf:"+conf+"%",K.g);
-    },delay);
-    const t1=burst(5000,"SOL","SURGE",74);
-    const t2=burst(11000,"JUP","RADAR",68);
-    const t3=burst(17000,"WIF","LENS",71);
-    return()=>{clearTimeout(t1);clearTimeout(t2);clearTimeout(t3);};
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[running]);
 
   useEffect(()=>{
     setPort(p=>{
@@ -3041,19 +3017,6 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   useEffect(()=>{
     if(!running||circuit)return;
     let tradeCount=0;
-    // Force one trade within 8s if none
-    const forceT=setTimeout(()=>{
-      if(tradeCount>0)return;
-      const pool=Object.keys(SYMS).filter(s=>!STABLE_SYMS.has(s));
-      const sym=pool[Math.floor(Math.random()*pool.length)];
-      const p=pricesRef.current[sym];if(!p)return;
-      const prt=portRef.current;if(prt.cash<500||prt.pos[sym])return;
-      const alloc=prt.cash*0.10;const qty=alloc/p.price;
-      setPort(prev=>{if(prev.pos[sym])return prev;return{...prev,cash:prev.cash-alloc,pos:{...prev.pos,[sym]:{qty,avg:p.price,entryMs:Date.now()}}};});
-      setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym,side:"BUY",qty,price:p.price,pnl:0,conf:65,t:ts(),ms:Date.now(),reason:"Force Entry"},...t.slice(0,99)]);
-      log("EXEC","▶ FORCE ENTRY "+sym+" @ "+fPrice(p.price)+" [DEMO]",K.g);
-      tradeCount++;
-    },20000);
     const iv=setInterval(async()=>{
       const cs=agStRef.current["consensus"];
       if(!cs?.on||!cs.conf||cs.conf<78)return;
@@ -3196,7 +3159,7 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
         }
       }
     },45000);
-    return()=>{clearInterval(iv);clearTimeout(forceT);};
+    return()=>{clearInterval(iv);};
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[running,circuit,traderIsPaused,log]);
 
@@ -3293,33 +3256,6 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[]);
 
-  // Cinematic first-60s auto-play sequence
-  useEffect(()=>{
-    const timers:ReturnType<typeof setTimeout>[]=[];
-    // auto-start removed — user must click ACTIVATE
-    // debate only on manual click
-    timers.push(setTimeout(()=>{forceTrade("SOL","BUY","SURGE",76);},15000));
-    // Demo SHORT burst — proves SHORT execution works within 20s of activation
-    timers.push(setTimeout(()=>{
-      const sym=selectBestShort()||"BONK";
-      openShort(sym,"Demo SHORT — momentum reversal detected","RADAR",73);
-      log("RADR","▼ Demo SHORT "+sym+" — bearish divergence confirmed",K.r);
-    },18000));
-    timers.push(setTimeout(()=>{
-      const ev=EDGE_EVENTS.find(e=>e.type==="WHALE")||EDGE_EVENTS[0];
-      setEdgeToasts(p=>[...p.slice(-1),{id:Math.random().toString(36).slice(2),...ev}]);
-      setWhaleAlert(true);setTimeout(()=>setWhaleAlert(false),4000);
-      log("LVTH","🐋 "+ev.title+": "+ev.body.replace("\n"," "),K.pu);
-    },25000));
-    timers.push(setTimeout(()=>{forceTrade("JUP","BUY","RADAR",69);},32000));
-    timers.push(setTimeout(()=>{
-      const ev:EdgeToast={id:Math.random().toString(36).slice(2),type:"MILESTONE",icon:"🏆",col:K.gold,title:"60s MILESTONE",body:"KYMIA AI: first minute complete\nPortfolio live — agents tracking"};
-      setEdgeToasts(p=>[...p.slice(-1),ev]);
-      log("SYS","🏆 60s milestone — all systems nominal",K.gold);
-    },60000));
-    return()=>timers.forEach(clearTimeout);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[]);
 
   const runAI=useCallback(async()=>{
     if(analyzing)return;
@@ -3345,9 +3281,7 @@ MARKET: ${snap} | POSITIONS: ${posStr} | CASH: $${f2(prt.cash)} | ENTROPY: ${ent
       if(parsed.groupthinkWarning)log("SABOT","⚡ GROUPTHINK — Saboteur activated",K.pu);
       setModal("debate");
     }catch(e){
-      log("ERROR","Debate failed: "+String(e),K.r);
-      setAiData({regime:"TRENDING_BULL",regimeConf:78,entropy:entropyRef.current,groupthinkWarning:false,debate:[{agent:"LEVIATHAN",thesis:"Whale accumulation +12,400 SOL",signal:"BUY",conf:88},{agent:"SURGE",thesis:"Bull flag 4H confirmed",signal:"BUY",conf:84},{agent:"AEGIS",thesis:"Exposure 14.2% Kelly approved",signal:"BUY",conf:76},{agent:"ECHO",thesis:"Social sentiment +2.1σ",signal:"BUY",conf:71}],consensus:{signal:"BUY",symbol:"SOL",confidence:82,rationale:"Multi-signal alignment confirmed. Institutional flow + technicals aligned.",tp:183.5,sl:173.2},riskWarning:null,marketSummary:"Trending bull regime confirmed. SOL momentum building on whale accumulation."});
-      setModal("debate");
+      log("ERROR","Debate API unavailable — "+String(e),K.r);
     }
     setAnalyzing(false);
   },[analyzing,log]);
@@ -3365,11 +3299,10 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
       const data=await res.json();
       const raw=data.content?.map((b:{text?:string})=>b.text||"").join("").replace(/```json|```/g,"").trim();
       setDnaData(JSON.parse(raw));
-    }catch{
-      setDnaData({traderTitle:"Momentum Predator",tradingDNA:["Aggressive","Systematic","Trend-Following"],strengths:["Breakout timing","Capital efficiency"],weakness:"Holding positions too long",aiVerdict:"The swarm sees momentum instinct — activate autonomous mode to unlock full alpha.",score:74,tier:"GOLD"});
+    }catch(e){
+      log("ERROR","DNA API unavailable — "+String(e),K.r);
     }
     setDnaLoading(false);
-    setModal("dna");
   },[dnaLoading,trades,port]);
 
 
@@ -3637,7 +3570,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
         </div>
       </header>
 
-      <ProfitTicker trades={trades}/>
+      <ProfitTicker trades={trades.filter(t=>t.pnl!==0)}/>
 
       {showKill&&(
         <div style={{background:"#030710",borderBottom:"1px solid "+K.brd,padding:"7px 16px"}}>
