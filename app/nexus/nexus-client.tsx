@@ -1997,6 +1997,7 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   const [trades,setTrades]=useState<Trade[]>([]);
   const tradesRef=useRef<Trade[]>([]);
   useEffect(()=>{tradesRef.current=trades;},[trades]);
+  const sessionId=useRef(Date.now().toString()).current;
   const [agSt,setAgSt]=useState<{[k:string]:AgentState}>(()=>Object.fromEntries(AGENTS.map(a=>[a.id,{on:false,conf:null,sig:null,th:""}])));
   const agStRef=useRef(agSt);
   useEffect(()=>{agStRef.current=agSt;},[agSt]);
@@ -2114,6 +2115,16 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
     const {data}=await supabase.from('kymia_sessions').select('*').eq('user_id',userId).single();
     if(data&&data.swarm_config){
       setSwarmConfig(data.swarm_config);
+      // Restore portfolio state — cash, equity, open positions
+      if(data.cash!=null||data.equity!=null||data.open_positions!=null){
+        setPort(prev=>({
+          ...prev,
+          cash:data.cash??prev.cash,
+          equity:data.equity??prev.equity,
+          peak:Math.max(data.equity??prev.equity,prev.peak),
+          pos:data.open_positions??prev.pos,
+        }));
+      }
       log('KYMIA',`◈ Welcome back ${data.swarm_config.profile?.toUpperCase()||''}! Profile restored · ${data.total_trades||0} trades on record`,K.c);
     }else{
       setSwarmConfig(null);
@@ -2139,6 +2150,33 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
       last_session:new Date().toISOString()
     },{onConflict:'user_id'});
   },[user,swarmConfig]);
+
+  const saveTrade=useCallback(async(sym:string,side:string,entry:number,exit:number,pnl:number,pct:number,agent:string,openedAt:number)=>{
+    if(!user)return;
+    await supabase.from('kymia_trades').insert({
+      user_id:user.id,
+      sym,
+      side,
+      entry,
+      exit,
+      pnl,
+      pct,
+      agent,
+      opened_at:new Date(openedAt).toISOString(),
+      closed_at:new Date().toISOString(),
+      session_id:sessionId,
+    });
+  },[user,sessionId]);
+
+  const saveOpenPositions=useCallback(async()=>{
+    if(!user)return;
+    await supabase.from('kymia_sessions').update({
+      open_positions:portRef.current.pos,
+      equity:portRef.current.equity,
+      cash:portRef.current.cash,
+      last_session:new Date().toISOString(),
+    }).eq('user_id',user.id);
+  },[user]);
 
   useEffect(()=>{
     // FIX 1: handle OAuth redirect — Supabase puts access_token in URL hash
@@ -2168,6 +2206,13 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
     return()=>subscription.unsubscribe();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[]);
+
+  // ── Save open positions every 30s while running ───────────────────────
+  useEffect(()=>{
+    if(!user||!running)return;
+    const iv=setInterval(saveOpenPositions,30000);
+    return()=>clearInterval(iv);
+  },[user,running,saveOpenPositions]);
 
   // ── Part 12: Demo/live scan intervals ────────────────────────────────
   const isDemoMode=!isLive;
@@ -2864,6 +2909,11 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
     const card:WinCard={id:Math.random().toString(36).slice(2),sym,pnl,pct,price,agent,t:ts(),origin};
     setWinCards(prev=>[...prev.slice(-1),card]);
     setTrades(t=>[{id:card.id,sym,side:"SELL",qty:0,price,pnl,conf:80,t:card.t,ms:Date.now(),agent,reason:reason||agent},...t.slice(0,99)]);
+    // Look up entry price + open time from the open position
+    const openPos=portRef.current.pos[sym];
+    const entryPrice=openPos?.avg??price;
+    const openedAt=openPos?.entryMs??Date.now();
+    saveTrade(sym,openPos?.side||'LONG',entryPrice,price,pnl,pct,agent,openedAt);
     saveSession();
   };
 
@@ -3568,6 +3618,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
             <div style={{display:'flex',alignItems:'center',gap:6}}>
               <div style={{width:6,height:6,borderRadius:'50%',background:'#00FF88'}}/>
               <span style={{fontSize:10,color:'#00FF88',fontFamily:'monospace'}}>{user.email?.split('@')[0]||'Connected'}</span>
+              <span style={{fontSize:8,color:'#00FF88',fontFamily:'monospace',padding:'2px 5px',border:'1px solid #00FF8840',borderRadius:3,animation:'pulse 2s ease-in-out infinite',opacity:.8}}>SESSION SAVED</span>
               <button onClick={()=>{setSwarmConfig(null);setRunning(false);setShowOnboarding(true);}} style={{background:'none',border:'none',color:'#2A5070',cursor:'pointer',fontSize:9,fontFamily:'monospace',textDecoration:'underline'}}>⚙ Reconfigure</button>
             </div>
           )}
