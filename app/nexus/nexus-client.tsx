@@ -2011,6 +2011,7 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   const [running,setRunning]=useState(false);
   const [swarmConfig,setSwarmConfig]=useState<{profile:string,leverage:number}|null>(null);
   const [showOnboarding,setShowOnboarding]=useState(false);
+  const [hasShownOnboarding,setHasShownOnboarding]=useState(false);
   const [user,setUser]=useState<any>(null);
   const [showAuthModal,setShowAuthModal]=useState(false);
   const [liveUsers,setLiveUsers]=useState(()=>847+Math.floor(Math.random()*200));
@@ -3330,15 +3331,14 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
   const entropyCol=entropy<30?K.r:entropy>70?K.g:K.gold;
 
   const handleStart=()=>{
-    console.log('ACTIVATE clicked, swarmConfig:',swarmConfig);
-    console.log('showOnboarding state:',showOnboarding);
     if(running){
       setRunning(false);
       log("SYS","⏹ SYSTEM HALTED",K.r);
       return;
     }
-    if(!swarmConfig){
+    if(!hasShownOnboarding){
       setShowOnboarding(true);
+      setHasShownOnboarding(true);
       return;
     }
     setRunning(true);
@@ -3453,21 +3453,20 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
       )}
 
       {showAuthModal&&<AuthModal onClose={()=>setShowAuthModal(false)}/>}
-      {(()=>{console.log('Rendering check — showOnboarding:',showOnboarding);return null;})()}
       {showOnboarding&&(
         <div style={{position:'fixed',inset:0,background:'rgba(2,4,10,0.97)',zIndex:800,display:'flex',alignItems:'center',justifyContent:'center',flexDirection:'column',gap:20,fontFamily:"'JetBrains Mono','Courier New',monospace"}}>
           <div style={{fontSize:11,color:K.c,letterSpacing:'.3em',marginBottom:4}}>◈ CONFIGURE YOUR SWARM</div>
           <div style={{fontSize:24,fontWeight:900,color:'white',marginBottom:8}}>Choose your risk profile</div>
           <div style={{display:'flex',gap:12}}>
             {([{id:'safe',label:'SAFE',lev:2,desc:'4% max · Tight SL',col:'#00FF88'},{id:'balanced',label:'BALANCED',lev:3,desc:'7% max · Standard',col:'#00F2FE'},{id:'aggressive',label:'AGGRESSIVE',lev:4,desc:'12% max · Wide TP',col:'#FF3366'}] as const).map(p=>(
-              <button key={p.id} onClick={()=>{setSwarmConfig({profile:p.id,leverage:p.lev});setShowOnboarding(false);setRunning(true);log('KYMIA',`◈ Swarm configured: ${p.id.toUpperCase()} | ${p.lev}x leverage`,K.c);}} style={{padding:'20px 28px',background:`${p.col}12`,border:`2px solid ${p.col}50`,borderRadius:8,cursor:'pointer',fontFamily:'inherit',minWidth:160}}>
+              <button key={p.id} onClick={()=>{setSwarmConfig({profile:p.id,leverage:p.lev});setShowOnboarding(false);setHasShownOnboarding(true);setRunning(true);log('KYMIA',`◈ Swarm configured: ${p.id.toUpperCase()} | ${p.lev}x leverage`,K.c);saveSession();}} style={{padding:'20px 28px',background:`${p.col}12`,border:`2px solid ${p.col}50`,borderRadius:8,cursor:'pointer',fontFamily:'inherit',minWidth:160}}>
                 <div style={{fontSize:13,fontWeight:900,color:p.col,marginBottom:6,letterSpacing:'.1em'}}>{p.label}</div>
                 <div style={{fontSize:11,color:K.c,marginBottom:4}}>{p.lev}x leverage</div>
                 <div style={{fontSize:9,color:K.dim}}>{p.desc}</div>
               </button>
             ))}
           </div>
-          <button onClick={()=>setShowOnboarding(false)} style={{marginTop:8,background:'none',border:'none',color:K.dim,cursor:'pointer',fontSize:10,fontFamily:'inherit'}}>Skip — use defaults</button>
+          <button onClick={()=>{setSwarmConfig({profile:'balanced',leverage:3});setShowOnboarding(false);setHasShownOnboarding(true);setRunning(true);log('KYMIA','◈ Using defaults: BALANCED | 3x leverage',K.dim);}} style={{marginTop:8,background:'none',border:'none',color:K.dim,cursor:'pointer',fontSize:10,fontFamily:'inherit'}}>Skip — use defaults</button>
         </div>
       )}
       {booting&&<BootSequence onDone={()=>{setBooting(false);}}/>}
