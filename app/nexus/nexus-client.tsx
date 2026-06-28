@@ -2113,9 +2113,9 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   // ── Supabase auth ─────────────────────────────────────────────────────
   const loadUserSession=async(userId:string)=>{
     const {data}=await supabase.from('kymia_sessions').select('*').eq('user_id',userId).single();
-    if(data&&data.swarm_config){
-      setSwarmConfig(data.swarm_config);
-      // Restore portfolio state — cash, equity, open positions
+    if(data){
+      // Never restore swarmConfig — onboarding must always show on first ACTIVATE
+      // Restore portfolio state only: cash, equity, open positions
       if(data.cash!=null||data.equity!=null||data.open_positions!=null){
         setPort(prev=>({
           ...prev,
@@ -2125,9 +2125,7 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
           pos:data.open_positions??prev.pos,
         }));
       }
-      log('KYMIA',`◈ Welcome back ${data.swarm_config.profile?.toUpperCase()||''}! Profile restored · ${data.total_trades||0} trades on record`,K.c);
-    }else{
-      setSwarmConfig(null);
+      log('KYMIA',`◈ Welcome back! Session restored · ${data.total_trades||0} trades on record`,K.c);
     }
   };
 
