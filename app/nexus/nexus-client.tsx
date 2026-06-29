@@ -2095,6 +2095,7 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   const sessionStartEquityRef=useRef(CAP);
   const lastTradeTimeRef=useRef<number>(Date.now());
   const demoFirstTradeRef=useRef(false);
+  const sessionLoadedRef=useRef(false);
   const logRef=useRef<HTMLDivElement>(null);
   const swarmRef=useRef<HTMLDivElement>(null);
   // Symbol-level loss tracker — blacklists symbols after 2 losses
@@ -2157,10 +2158,15 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
 
   // ── Supabase auth ─────────────────────────────────────────────────────
   const loadUserSession=async(userId:string)=>{
+    if(sessionLoadedRef.current)return; // only load once per page — prevents SIGNED_IN firing on every token refresh
+    sessionLoadedRef.current=true;
     const {data}=await supabase.from('kymia_sessions').select('*').eq('user_id',userId).single();
     if(data){
       // Restore swarmConfig so returning users skip onboarding
-      if(data.swarm_config)setSwarmConfig(data.swarm_config);
+      if(data.swarm_config){
+        setSwarmConfig(data.swarm_config);
+        setHasShownOnboarding(true); // has config → skip onboarding on next ACTIVATE
+      }
       // Restore portfolio state: cash, equity, open positions
       if(data.cash!=null||data.equity!=null||data.open_positions!=null){
         setPort(prev=>({
@@ -2173,8 +2179,8 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
       }
       log('KYMIA',`◈ Welcome back! Session restored · ${data.total_trades||0} trades on record`,K.c);
     }
-    setRunning(false);          // Never auto-start
-    setHasShownOnboarding(!!data?.swarm_config); // Skip onboarding only if already configured
+    // NEVER call setRunning(false) here — don't kill agents on token refresh
+    // NEVER set hasShownOnboarding to false here — once shown, stays shown until logout
   };
 
   const saveSession=useCallback(async()=>{
@@ -3068,12 +3074,10 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
       log('WATCH',`◉ ${reporting} agents reporting signals`,K.dim);
     },60000);
     const iv=setInterval(async()=>{
-      let tradeCount=0; // RESET every 45s tick — was outside causing permanent lockout after 1 trade
       const cs=agStRef.current["consensus"];
       if(!cs?.on||!cs.conf||cs.conf<65)return;
       // ── Part 15: REGIME HARD BLOCKS ──────────────────────────────────────
       const reg=regimeRef.current;
-      if(tradeCount>0)return; // 1 trade per 45s cycle
       if(reg?.regime==='BLACK SWAN'){
         log('AEGIS','⛔ BLACK SWAN active — all execution paused',K.r);return;
       }
@@ -3190,12 +3194,10 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
         }
         setRejectionStats(prev=>({...prev,executed:prev.executed+1}));
         lastTradeTimeRef.current=Date.now();
-        tradeCount++;
       }else if((cs.sig==="SELL"||sig.isSell)&&prt.pos[sym]&&prt.pos[sym].side!=="SHORT"){
         // Close existing LONG position
         closeLongPosition(sym,prt.pos[sym],p.price,"CONSENSUS","Signal Exit");
         lastTradeTimeRef.current=Date.now();
-        tradeCount++;
       }
       // SHORT: separate path — triggers on SELL consensus (≥65%) OR multi-TF SELL signal
       // Macro SHORT block: BTC up >4% blocks shorts
@@ -3207,7 +3209,6 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
             const reason=cs.sig==="SELL"?cs.th||"CONSENSUS SELL":"Multi-TF SELL signal";
             openShort(shortSym,reason,"CONSENSUS",cs.sig==="SELL"?Math.round(cs.conf||70):Math.round(sig.conf));
             lastTradeTimeRef.current=Date.now();
-            tradeCount++;
           }
         }
       }
