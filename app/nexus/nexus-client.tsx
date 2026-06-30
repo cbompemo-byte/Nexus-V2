@@ -322,7 +322,7 @@ type PriceData={price:number,prev:number,trend:string,change:number,rsi:number,h
 type AgentState={on:boolean,conf:number|null,sig:string|null,th:string,real?:boolean};
 type NewToken={address:string,name:string,price:string,change1h:number,volume24h:number,liquidity:number,rugScore:number,buys:number,sells:number};
 type DataStatus={jupiter:"ok"|"err"|"loading",binance:"ok"|"err"|"loading",coingecko:"ok"|"err"|"loading",lastUpdate:number};
-type Position={qty:number,avg:number,peak?:number,entryMs?:number,trailActive?:boolean,side?:"LONG"|"SHORT",scaledIn?:boolean,leverage?:number,leveragedSize?:number};
+type Position={qty:number,avg:number,peak?:number,entryMs?:number,trailActive?:boolean,side?:"LONG"|"SHORT",scaledIn?:boolean,leverage?:number,leveragedSize?:number,conviction?:string};
 type AgentSignals={lens?:{rsi:number,signal:string},radar?:{ema9:number,ema21:number,signal:string},razor?:{rsi:number,macd:number,signal:string},vector?:{adx:number,signal:string},surge?:{volumeChange:number,signal:string},leviathan?:{buyPressure:number,signal:string},echo?:{fg:number,signal:string}};
 type Trade={id:string,sym:string,side:string,qty:number,price:number,pnl:number,conf:number,t:string,ms:number,agent?:string,reason?:string,agentSignals?:AgentSignals};
 type LogEntry={t:string,ag:string,msg:string,col:string};
@@ -2096,6 +2096,7 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   const lastTradeTimeRef=useRef<number>(Date.now());
   const demoFirstTradeRef=useRef(false);
   const sessionLoadedRef=useRef(false);
+  const tradesThisCycleRef=useRef(0);
   const logRef=useRef<HTMLDivElement>(null);
   const swarmRef=useRef<HTMLDivElement>(null);
   // Symbol-level loss tracker — blacklists symbols after 2 losses
@@ -2182,6 +2183,23 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
     // NEVER call setRunning(false) here — don't kill agents on token refresh
     // NEVER set hasShownOnboarding to false here — once shown, stays shown until logout
   };
+
+  const getDynamicPositionSize=useCallback((conf:number,equity:number,profile:string,leverage:number):{leveragedSize:number,baseAlloc:number,conviction:string}=>{
+    const BASE:Record<string,number>={safe:0.04,balanced:0.06,aggressive:0.08};
+    const base=BASE[profile]??0.06;
+    let multiplier=1.0;
+    if(conf>=93)multiplier=4.0;
+    else if(conf>=86)multiplier=3.0;
+    else if(conf>=79)multiplier=2.0;
+    else if(conf>=71)multiplier=1.5;
+    const sized=equity*base*multiplier*leverage;
+    const maxSize=equity*0.25;
+    const leveragedSize=Math.min(sized,maxSize);
+    const baseAlloc=leveragedSize/Math.max(leverage,1);
+    const conviction=conf>=93?'🔥 MAXIMUM CONVICTION':conf>=86?'⚡ HIGH CONVICTION':conf>=79?'◈ STRONG SIGNAL':conf>=71?'◉ GOOD SIGNAL':'· STANDARD';
+    log('AEGIS',`◈ Position size: ${(leveragedSize/equity*100).toFixed(1)}% | Conf ${conf}% × ${multiplier}x mult × ${leverage}x lev`,K.gold);
+    return{leveragedSize,baseAlloc,conviction};
+  },[log]);
 
   const saveSession=useCallback(async()=>{
     if(!user)return;
@@ -3025,9 +3043,9 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
         const liveOpen1=await performLiveOpen(sym,t1Alloc,conf);
         const qty1=liveOpen1?liveOpen1.actualQty:t1Size/cur;
         const avgP1=liveOpen1?liveOpen1.avgPrice:cur;
-        setPort(prev=>{if(prev.pos[sym])return prev;return{...prev,cash:prev.cash-t1Alloc,pos:{...prev.pos,[sym]:{qty:qty1,avg:avgP1,peak:avgP1,entryMs:Date.now(),trailActive:false,side:"LONG" as const,scaledIn:false,leverage:lev,leveragedSize:t1Size}}};});
-        setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym,side:"BUY",qty:qty1,price:avgP1,pnl:0,conf,t:ts(),ms:Date.now(),reason:"Pullback T1 (60%)"+(liveOpen1?" [live]":"")},...t.slice(0,99)]);
-        log("AEGIS","◈ T1 pullback "+sym+": $"+f2(t1Alloc,0)+" margin (x"+lev+" → $"+f2(t1Size,0)+", 60%)"+(liveOpen1?" [on-chain]":""),K.co);
+        setPort(prev=>{if(prev.pos[sym])return prev;return{...prev,cash:prev.cash-t1Alloc,pos:{...prev.pos,[sym]:{qty:qty1,avg:avgP1,peak:avgP1,entryMs:Date.now(),trailActive:false,side:"LONG" as const,scaledIn:false,leverage:lev,leveragedSize:t1Size,conviction:entry.conviction}}};});
+        setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym,side:"BUY",qty:qty1,price:avgP1,pnl:0,conf,t:ts(),ms:Date.now(),reason:"Pullback T1 (60%)"+(liveOpen1?" [live]":"")+(entry.conviction?" "+entry.conviction:"")},...t.slice(0,99)]);
+        log("AEGIS","◈ T1 pullback "+sym+": $"+f2(t1Alloc,0)+" margin (x"+lev+" → $"+f2(t1Size,0)+", 60%)"+(entry.conviction?" "+entry.conviction:"")+(liveOpen1?" [on-chain]":""),K.co);
         setSignalCount(n=>n+1);
         // Tranche 2: 40% after +1% confirmation
         const entryP=cur;
@@ -3074,8 +3092,11 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
       log('WATCH',`◉ ${reporting} agents reporting signals`,K.dim);
     },60000);
     const iv=setInterval(async()=>{
+      tradesThisCycleRef.current=0; // reset at start of each 45s cycle
       const cs=agStRef.current["consensus"];
       if(!cs?.on||!cs.conf||cs.conf<65)return;
+      const maxTradesThisCycle=cs.conf>=86?2:1;
+      if(tradesThisCycleRef.current>=maxTradesThisCycle)return;
       // ── Part 15: REGIME HARD BLOCKS ──────────────────────────────────────
       const reg=regimeRef.current;
       if(reg?.regime==='BLACK SWAN'){
@@ -3174,26 +3195,32 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
         if(traderCheck.consecLosses>=2)log("AEGIS","[AEGIS] "+traderCheck.consecLosses+" recent losses — size reduced to "+f2(traderCheck.frac*100,0)+"%",K.gold);
         setTraderConsecLosses(traderCheck.consecLosses);
         setTraderScaleMode(true);
-        const allocFrac=traderCheck.frac;
         const lev=SWARM_CONFIG.leverage;
-        // Session multiplier reduces size in lower-quality sessions
-        const baseAlloc=Math.min(prt.cash*allocFrac*sess.multiplier,prt.cash*.9);
-        const leveragedSize=Math.min(baseAlloc*lev,(prt.equity||prt.cash)*0.40);
+        // Dynamic position sizing — confidence drives multiplier
+        const conf=Math.round(sig.conf);
+        const dynSize=getDynamicPositionSize(conf,prt.equity||prt.cash,swarmConfig?.profile||'balanced',lev);
+        // Apply session multiplier and trader-rule fraction on top of dynamic base
+        const baseAlloc=Math.min(dynSize.baseAlloc*sess.multiplier*traderCheck.frac/0.06,prt.cash*.9);
+        const leveragedSize=Math.min(dynSize.leveragedSize,(prt.equity||prt.cash)*0.40);
+        const convLabel=dynSize.conviction;
+        const convictionLabel=conf>=93?'🔥 MAXIMUM CONVICTION':conf>=86?'⚡ HIGH CONVICTION':conf>=79?'◈ STRONG SIGNAL':conf>=71?'◉ GOOD SIGNAL':'· STANDARD';
+        log('CNSNS',`${convictionLabel}: ${sym} BUY @ ${fPrice(p.price)} | Size $${f2(leveragedSize,0)} (${(leveragedSize/(prt.equity||prt.cash)*100).toFixed(1)}%) | Conf ${conf}%`,conf>=86?K.g:K.c);
         // Queue pullback entry — wait for -0.8% dip before executing
         // Part 6: register signal with decay
         setActiveSignals(prev=>{
           const exists=prev.find(s=>s.sym===sym&&s.signal==='BUY');
           if(exists)return prev;
-          return[...prev.slice(-9),{id:Math.random().toString(36).slice(2),sym,signal:'BUY',initialConf:Math.round(sig.conf),currentConf:Math.round(sig.conf),createdAt:Date.now(),ageSeconds:0,decayPct:0,expired:false}];
+          return[...prev.slice(-9),{id:Math.random().toString(36).slice(2),sym,signal:'BUY',initialConf:conf,currentConf:conf,createdAt:Date.now(),ageSeconds:0,decayPct:0,expired:false}];
         });
         if(!pendingEntriesRef.current[sym]){
           const pullbackTarget=p.price*0.992;
-          pendingEntriesRef.current[sym]={signal:"BUY",target:pullbackTarget,expiry:Date.now()+120000,agent:"AEGIS",reason:sig.quality+" signal",originalPrice:p.price,conf:Math.round(sig.conf),leveragedSize,baseAlloc,lev};
+          pendingEntriesRef.current[sym]={signal:"BUY",target:pullbackTarget,expiry:Date.now()+120000,agent:"AEGIS",reason:sig.quality+" signal",originalPrice:p.price,conf,leveragedSize,baseAlloc,lev,conviction:convLabel};
           setPendingEntries(prev=>({...prev,[sym]:{signal:"BUY",target:pullbackTarget,expiry:Date.now()+120000}}));
-          log("RADR","⏳ Pending BUY "+sym+" — pullback to "+fPrice(pullbackTarget)+" ("+sess.label+" x"+sess.multiplier+")",K.gold);
+          log("RADR","⏳ Pending BUY "+sym+" — pullback to "+fPrice(pullbackTarget)+" ("+sess.label+" x"+sess.multiplier+") "+convictionLabel,K.gold);
         }
         setRejectionStats(prev=>({...prev,executed:prev.executed+1}));
         lastTradeTimeRef.current=Date.now();
+        tradesThisCycleRef.current++;
       }else if((cs.sig==="SELL"||sig.isSell)&&prt.pos[sym]&&prt.pos[sym].side!=="SHORT"){
         // Close existing LONG position
         closeLongPosition(sym,prt.pos[sym],p.price,"CONSENSUS","Signal Exit");
@@ -3945,6 +3972,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
                         <span style={{color:posCol,fontWeight:700,fontSize:10}}>{sym} {isShort?"▼ SHORT":"LONG"} {pos.trailActive&&<span style={{color:K.gold,fontSize:8}}> ◈TRAIL</span>}{pos.leverage&&pos.leverage>1&&<span style={{fontSize:7,padding:"0 3px",background:"#BD00FF20",border:"1px solid #BD00FF55",borderRadius:2,color:"#BD00FF",marginLeft:3}}>x{pos.leverage}</span>}</span>
                         <span style={{color:pnl>=0?K.g:K.r,fontSize:10}}>{fU(pnl)}</span>
                       </div>
+                      {pos.conviction&&<div style={{fontSize:8,color:'#FFD700',fontFamily:'monospace',marginBottom:2}}>{pos.conviction}</div>}
                       <div style={{display:"flex",justifyContent:"space-between",fontSize:8,color:K.tx}}>
                         <span>@${f2(pos.avg)}</span><span>${f2(cur)}</span><span style={{color:pnl>=0?K.g:K.r}}>{fP(pp)}</span>
                       </div>
