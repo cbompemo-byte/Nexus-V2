@@ -2104,7 +2104,7 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   // Prevents duplicate close attempts while a live tx is in-flight (async gap)
   const pendingCloseRef=useRef<Set<string>>(new Set());
   // Pullback entry system — pending entries waiting for price pullback
-  const pendingEntriesRef=useRef<Record<string,{signal:string,target:number,expiry:number,agent:string,reason:string,originalPrice:number,conf:number,leveragedSize:number,baseAlloc:number,lev:number}>>({});
+  const pendingEntriesRef=useRef<Record<string,{signal:string,target:number,expiry:number,agent:string,reason:string,originalPrice:number,conf:number,leveragedSize:number,baseAlloc:number,lev:number,conviction?:string}>>({});
   const [pendingEntries,setPendingEntries]=useState<Record<string,{signal:string,target:number,expiry:number}>>({});
   // Scale-in timers — cleared on unmount
   const scaleInTimersRef=useRef<ReturnType<typeof setInterval>[]>([]);
