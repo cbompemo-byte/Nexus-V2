@@ -88,8 +88,9 @@ const TRADER_RULES={
 // ── Swarm leverage & profile config ───────────────────────────────────────────
 const SWARM_CONFIG={leverage:3,profile:"balanced" as "safe"|"balanced"|"aggressive"};
 const SWARM_BASE_ALLOC:{[k:string]:number}={safe:0.04,balanced:0.07,aggressive:0.12};
-const SWARM_SL_PCT:{[k:string]:number}={safe:0.012,balanced:0.018,aggressive:0.025};
-const SWARM_TP_PCT:{[k:string]:number}={safe:0.04,balanced:0.08,aggressive:0.15};
+// Minimum 1:3 ratio (SL 1.8%, TP 5.5%) enforced across all profiles
+const SWARM_SL_PCT:{[k:string]:number}={safe:0.018,balanced:0.018,aggressive:0.025};
+const SWARM_TP_PCT:{[k:string]:number}={safe:0.055,balanced:0.08,aggressive:0.15};
 
 function isPeakHour():boolean{
   const h=new Date().getUTCHours();
@@ -2097,6 +2098,8 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   const demoFirstTradeRef=useRef(false);
   const sessionLoadedRef=useRef(false);
   const tradesThisCycleRef=useRef(0);
+  const signalsEvaluatedRef=useRef(0);
+  const tradeOpenedSinceLastStatusRef=useRef(false);
   const logRef=useRef<HTMLDivElement>(null);
   const swarmRef=useRef<HTMLDivElement>(null);
   // Symbol-level loss tracker — blacklists symbols after 2 losses
@@ -3090,11 +3093,17 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
     const statusIv=setInterval(()=>{
       const reporting=Object.keys(agStRef.current).filter(k=>agStRef.current[k]?.sig).length;
       log('WATCH',`◉ ${reporting} agents reporting signals`,K.dim);
+      if(!tradeOpenedSinceLastStatusRef.current){
+        log('RADR',`◈ Scanning — ${signalsEvaluatedRef.current} signals evaluated, 0 met the 76% + multi-timeframe bar this cycle`,K.dim);
+      }
+      signalsEvaluatedRef.current=0;
+      tradeOpenedSinceLastStatusRef.current=false;
     },60000);
     const iv=setInterval(async()=>{
       tradesThisCycleRef.current=0; // reset at start of each 45s cycle
+      signalsEvaluatedRef.current++; // count each scan tick for status log
       const cs=agStRef.current["consensus"];
-      if(!cs?.on||!cs.conf||cs.conf<65)return;
+      if(!cs?.on||!cs.conf||cs.conf<76)return;
       const maxTradesThisCycle=cs.conf>=86?2:1;
       if(tradesThisCycleRef.current>=maxTradesThisCycle)return;
       // ── Part 15: REGIME HARD BLOCKS ──────────────────────────────────────
@@ -3123,14 +3132,17 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
         return;
       }
       log('RADR',`◈ ${sym} score ${oppScore.total}/100 grade ${oppScore.grade} — proceeding`,oppScore.grade==='A'?K.g:oppScore.grade==='B'?K.gold:K.dim);
-      // ── 4H trend check (1H removed — too restrictive in ranging markets) ──
+      // ── Multi-timeframe alignment — 5m + 1H + 4H must ALL agree ──────────
       const trendCheck=await get1H4HTrend(sym);
-      if(trendCheck.trend4h==='BEAR'&&cs.sig!=='SELL'){
-        if(Math.random()<0.15)log('RADR',`⚠ ${sym}: 4H ${trendCheck.trend4h} — proceeding with caution`,K.dim);
-      }
-      // Multi-timeframe confirmation
       const sig=confirmSignal(p.hist);
-      log("SIGNAL","◈ "+sym+" quality:"+sig.quality+" RSI-conf:"+Math.round(sig.conf)+"%",sig.quality==="HIGH"?K.g:sig.quality==="MED"?K.gold:K.dim);
+      log("SIGNAL",`◈ ${sym} quality:${sig.quality} RSI-conf:${Math.round(sig.conf)}% | 1H:${trendCheck.trend1h} 4H:${trendCheck.trend4h}`,sig.quality==="HIGH"?K.g:sig.quality==="MED"?K.gold:K.dim);
+      // Hard skip: consensus direction + 5m signal + 1H + 4H must all agree — no partial credit
+      if(cs.sig==="BUY"&&(!sig.isBuy||trendCheck.trend1h!=='BULL'||trendCheck.trend4h!=='BULL')){
+        log('RADR',`⊘ ${sym}: multi-TF miss (5m:${sig.isBuy?'✓':'✗'} 1H:${trendCheck.trend1h} 4H:${trendCheck.trend4h}) — LONG skip`,K.dim);return;
+      }
+      if(cs.sig==="SELL"&&(!sig.isSell||trendCheck.trend1h!=='BEAR'||trendCheck.trend4h!=='BEAR')){
+        log('RADR',`⊘ ${sym}: multi-TF miss (5m:${sig.isSell?'✓':'✗'} 1H:${trendCheck.trend1h} 4H:${trendCheck.trend4h}) — SHORT skip`,K.dim);return;
+      }
       const prt=portRef.current;
       // Portfolio-based position limits (Bug 4)
       const maxPos=getMaxPositions(prt.equity||prt.cash);
@@ -3157,11 +3169,10 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
       const btcBearish=btcChange<=-TRADER_RULES.macroBtcThreshold;
       const btcBullish=btcChange>=TRADER_RULES.macroBtcThreshold;
       if((cs.sig==="BUY"||sig.isBuy)&&!prt.pos[sym]&&prt.cash>500&&canOpen){
-        // Macro LONG block: BTC down >4%, unless RSI <25 (extreme oversold exception)
-        if(btcBearish&&p.rsi>=25){
-          log("ATLAS","[ATLAS] ⚠ BTC macro bearish ("+fP(btcChange)+") — LONG "+sym+" blocked",K.gold);return;
+        // Macro LONG hard block: BTC 1h change < -1.5% → no exceptions
+        if(btcBearish){
+          log("ATLAS","[ATLAS] ⛔ BTC 1h "+fP(btcChange)+" — LONG "+sym+" hard blocked",K.r);return;
         }
-        if(btcBearish&&p.rsi<25)log("ATLAS","[ATLAS] RSI<25 exception — LONG despite BTC bearish",K.gold);
         if(isPeakHour())log("WATCH","[WATCH] NY/EU session open — elevated confidence window",K.c);
         else log("WATCH","[WATCH] Off-peak hours — reduced size ("+sess.label+")",K.dim);
         // Momentum filter
@@ -3219,6 +3230,7 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
           log("RADR","⏳ Pending BUY "+sym+" — pullback to "+fPrice(pullbackTarget)+" ("+sess.label+" x"+sess.multiplier+") "+convictionLabel,K.gold);
         }
         setRejectionStats(prev=>({...prev,executed:prev.executed+1}));
+        tradeOpenedSinceLastStatusRef.current=true;
         lastTradeTimeRef.current=Date.now();
         tradesThisCycleRef.current++;
       }else if((cs.sig==="SELL"||sig.isSell)&&prt.pos[sym]&&prt.pos[sym].side!=="SHORT"){
@@ -3226,42 +3238,21 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
         closeLongPosition(sym,prt.pos[sym],p.price,"CONSENSUS","Signal Exit");
         lastTradeTimeRef.current=Date.now();
       }
-      // SHORT: separate path — triggers on SELL consensus (≥65%) OR multi-TF SELL signal
-      // Macro SHORT block: BTC up >4% blocks shorts
-      if((cs.sig==="SELL"&&(cs.conf||0)>=65)||sig.isSell){
-        if(btcBullish){log("ATLAS","[ATLAS] ⚠ BTC macro bullish ("+fP(btcChange)+") — SHORT blocked",K.gold);}
+      // SHORT: consensus SELL ≥76% + multi-TF already verified above (hard block) + BTC macro
+      // Macro SHORT block: BTC up >1.5% hard blocks shorts
+      if(cs.sig==="SELL"&&(cs.conf||0)>=76){
+        if(btcBullish){log("ATLAS","[ATLAS] ⛔ BTC 1h "+fP(btcChange)+" — SHORT hard blocked",K.r);}
         else{
           const shortSym=selectBestShort();
           if(shortSym&&prt.cash>500&&canOpen&&!traderIsPaused){
-            const reason=cs.sig==="SELL"?cs.th||"CONSENSUS SELL":"Multi-TF SELL signal";
-            openShort(shortSym,reason,"CONSENSUS",cs.sig==="SELL"?Math.round(cs.conf||70):Math.round(sig.conf));
+            openShort(shortSym,cs.th||"CONSENSUS SELL","CONSENSUS",Math.round(cs.conf||76));
+            tradeOpenedSinceLastStatusRef.current=true;
             lastTradeTimeRef.current=Date.now();
           }
         }
       }
     },45000);
-    // ── 3-min fallback: independent of consensus gate ─────────────────────
-    const fallbackIv=setInterval(()=>{
-      const minsSinceTrade=(Date.now()-lastTradeTimeRef.current)/60000;
-      if(minsSinceTrade<3)return;
-      const prt2=portRef.current;
-      if(prt2.cash<500)return;
-      const bestSignal=Object.entries(agStRef.current)
-        .filter(([,ag])=>ag?.sig==='BUY'&&(ag?.conf??0)>=55)
-        .sort((a,b)=>(b[1].conf??0)-(a[1].conf??0))[0];
-      if(!bestSignal)return;
-      const[agentId,agData]=bestSignal;
-      const fbSym=Object.keys(SYMS).filter(s=>!STABLE_SYMS.has(s)&&!prt2.pos[s])[0]||'SOL';
-      const fp=pricesRef.current[fbSym];
-      if(!fp)return;
-      log('AEGIS',`◈ 3min without trade — executing best signal: ${fbSym} via ${agentId.toUpperCase()} (${agData.conf}%)`,K.gold);
-      const alloc=Math.min(prt2.cash*0.10,prt2.cash*.9);
-      const qty=alloc/fp.price;
-      setPort(prev=>{if(prev.pos[fbSym])return prev;return{...prev,cash:prev.cash-alloc,pos:{...prev.pos,[fbSym]:{qty,avg:fp.price,entryMs:Date.now()}}};});
-      setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym:fbSym,side:'BUY',qty,price:fp.price,pnl:0,conf:Math.round(agData.conf??55),t:ts(),ms:Date.now(),agent:agentId.toUpperCase(),reason:'Best signal fallback'},...t.slice(0,99)]);
-      lastTradeTimeRef.current=Date.now();
-    },30000);
-    return()=>{clearInterval(iv);clearInterval(statusIv);clearInterval(fallbackIv);};
+    return()=>{clearInterval(iv);clearInterval(statusIv)};
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[running,circuit,traderIsPaused,log]);
 
