@@ -1,12 +1,16 @@
-import { createClient } from '@supabase/supabase-js'
+import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-)
-
 export async function GET() {
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    return NextResponse.json({ error: 'Missing Supabase configuration' }, { status: 500 })
+  }
+
+  const supabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL,
+    process.env.SUPABASE_SERVICE_ROLE_KEY
+  )
+
   try {
     const { data: activeUsers } = await supabase
       .from('kymia_agent_state')
@@ -18,7 +22,7 @@ export async function GET() {
     }
 
     const results = await Promise.allSettled(
-      activeUsers.map(state => runUserCycle(state))
+      activeUsers.map(state => runUserCycle(supabase, state))
     )
 
     return NextResponse.json({
@@ -127,9 +131,9 @@ async function fetchRealPrices(): Promise<Record<string, { price: number; change
 
     if (kraken.result) {
       const r = kraken.result
-      if (r.SOLUSD)    result['SOL'] = { price: parseFloat(r.SOLUSD.c[0]),    change: parseFloat(r.SOLUSD.P[1]) }
-      if (r.XXBTZUSD)  result['BTC'] = { price: parseFloat(r.XXBTZUSD.c[0]),  change: parseFloat(r.XXBTZUSD.P[1]) }
-      if (r.XETHZUSD)  result['ETH'] = { price: parseFloat(r.XETHZUSD.c[0]),  change: parseFloat(r.XETHZUSD.P[1]) }
+      if (r.SOLUSD)   result['SOL'] = { price: parseFloat(r.SOLUSD.c[0]),   change: parseFloat(r.SOLUSD.P[1]) }
+      if (r.XXBTZUSD) result['BTC'] = { price: parseFloat(r.XXBTZUSD.c[0]), change: parseFloat(r.XXBTZUSD.P[1]) }
+      if (r.XETHZUSD) result['ETH'] = { price: parseFloat(r.XETHZUSD.c[0]), change: parseFloat(r.XETHZUSD.P[1]) }
     }
     if (cg.jupiter) result['JUP'] = { price: cg.jupiter.usd, change: cg.jupiter?.usd_24h_change || 0 }
 
@@ -139,8 +143,9 @@ async function fetchRealPrices(): Promise<Record<string, { price: number; change
   }
 }
 
-// ── SL/TP checker — uses per-position sl/tp stored at open time ───────────────
+// ── SL/TP checker ─────────────────────────────────────────────────────────────
 async function checkPositions(
+  supabase: SupabaseClient,
   userId: string,
   state: any,
   prices: Record<string, { price: number; change: number }>
@@ -157,7 +162,6 @@ async function checkPositions(
     const pnl = isLong ? (cur - pos.avg) * pos.qty : (pos.avg - cur) * pos.qty
     const pct = (pnl / (pos.avg * pos.qty)) * 100
 
-    // Use stored ATR-based SL/TP if available, fall back to fixed %
     const sl: number = pos.sl ?? (isLong ? pos.avg * 0.982 : pos.avg * 1.018)
     const tp: number = pos.tp ?? (isLong ? pos.avg * 1.055 : pos.avg * 0.945)
 
@@ -188,7 +192,6 @@ async function checkPositions(
     }
   }
 
-  // Recalculate equity from remaining positions
   const equity =
     cash +
     Object.entries(updates).reduce((sum: number, [sym, p]: any) => {
@@ -203,24 +206,20 @@ async function checkPositions(
 }
 
 // ── Main cycle ─────────────────────────────────────────────────────────────────
-async function runUserCycle(state: any) {
+async function runUserCycle(supabase: SupabaseClient, state: any) {
   const userId = state.user_id
   const config = state.swarm_config || { profile: 'balanced', leverage: 1 }
 
-  // 1. Time filter
   const timeCheck = isGoodTradingHour()
   if (!timeCheck.allowed) {
     console.log(`[KYMIA] Off-hours (${timeCheck.session}) — skipping cycle`)
     return
   }
 
-  // 2. Fetch prices
   const prices = await fetchRealPrices()
 
-  // 3. Check existing positions SL/TP first
-  await checkPositions(userId, state, prices)
+  await checkPositions(supabase, userId, state, prices)
 
-  // Re-read state after checkPositions wrote to it
   const { data: freshState } = await supabase
     .from('kymia_agent_state')
     .select('positions,cash,equity')
@@ -242,7 +241,6 @@ async function runUserCycle(state: any) {
 
   const WATCHLIST = ['SOL', 'BTC', 'ETH', 'JUP']
 
-  // 4. Fetch trade history once for Kelly sizing
   const { data: tradeHistory } = await supabase
     .from('kymia_trades')
     .select('pnl,pct')
@@ -263,7 +261,6 @@ async function runUserCycle(state: any) {
   const currentEquity = freshState?.equity || state.equity || 10000
   const currentCash = freshState?.cash || state.cash || 10000
 
-  // 5. Scan watchlist for BB signals
   for (const sym of WATCHLIST) {
     if (currentPositions[sym]) continue
 
@@ -273,7 +270,6 @@ async function runUserCycle(state: any) {
     try {
       const bb = await calcBollinger(sym)
 
-      // Persist signal regardless of direction
       await supabase.from('kymia_signals').insert({
         user_id: userId,
         agent_id: 'bollinger',
@@ -290,35 +286,24 @@ async function runUserCycle(state: any) {
 
       if (bb.signal === 'HOLD') continue
 
-      // Volatility gate
       const vol = await checkVolatility(sym)
       if (!vol.safe) {
-        console.log(`[${sym}] Volatility unsafe (ATR out of range) — skip`)
+        console.log(`[${sym}] Volatility unsafe — skip`)
         continue
       }
 
-      // BTC macro alignment
       const btcChange = prices['BTC']?.change || 0
       if (bb.signal === 'BUY'  && btcChange < -2) continue
       if (bb.signal === 'SELL' && btcChange > 2)  continue
 
-      // Kelly position size
-      const size = kellySize(
-        currentEquity,
-        winRate,
-        avgWin,
-        avgLoss,
-        bb.strength,
-        config.leverage || 1
-      )
+      const size = kellySize(currentEquity, winRate, avgWin, avgLoss, bb.strength, config.leverage || 1)
 
       if (size < 10 || size > currentCash * 0.95) continue
 
-      // ATR-based SL/TP (1:2.3 minimum R:R)
       const slDistance = vol.atr * 1.5
       const tpDistance = vol.atr * 3.5
-      const sl = bb.signal === 'BUY'  ? price - slDistance : price + slDistance
-      const tp = bb.signal === 'BUY'  ? price + tpDistance : price - tpDistance
+      const sl = bb.signal === 'BUY' ? price - slDistance : price + slDistance
+      const tp = bb.signal === 'BUY' ? price + tpDistance : price - tpDistance
 
       const qty = size / price
       const newPositions = {
@@ -345,18 +330,15 @@ async function runUserCycle(state: any) {
       console.log(
         `[KYMIA] OPENED: ${sym} ${bb.signal} @ $${price.toFixed(2)} | ` +
         `Size: $${size.toFixed(0)} | Z-Score: ${bb.zScore.toFixed(2)} | ` +
-        `SL: $${sl.toFixed(2)} | TP: $${tp.toFixed(2)} | ` +
-        `Kelly WR: ${(winRate * 100).toFixed(0)}%`
+        `SL: $${sl.toFixed(2)} | TP: $${tp.toFixed(2)}`
       )
 
-      // 1 trade per cycle max
-      break
+      break // 1 trade per cycle max
     } catch (e) {
       console.error(`[KYMIA] Error processing ${sym}:`, e)
     }
   }
 
-  // 6. Update cycle metadata
   await supabase
     .from('kymia_agent_state')
     .update({ last_cycle: new Date().toISOString(), cycle_count: (state.cycle_count || 0) + 1 })
