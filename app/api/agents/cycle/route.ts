@@ -2,35 +2,64 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
 
 export async function GET() {
+  console.log('[cycle] Starting agent cycle...')
+  console.log('[cycle] ENV check:', {
+    hasSupabaseUrl: !!process.env.NEXT_PUBLIC_SUPABASE_URL,
+    hasServiceKey: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
+  })
+
   if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    console.error('[cycle] Missing Supabase env vars — aborting')
     return NextResponse.json({ error: 'Missing Supabase configuration' }, { status: 500 })
   }
 
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL,
-    process.env.SUPABASE_SERVICE_ROLE_KEY
-  )
-
   try {
+    const supabase = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL,
+      process.env.SUPABASE_SERVICE_ROLE_KEY
+    )
+
+    // Test connection before doing any work
+    const { error: connError } = await supabase
+      .from('kymia_agent_state')
+      .select('count')
+      .limit(1)
+
+    if (connError) {
+      console.error('[cycle] Supabase connection error:', connError.message)
+      return NextResponse.json({ error: connError.message }, { status: 500 })
+    }
+
+    console.log('[cycle] Supabase connected OK')
+
     const { data: activeUsers } = await supabase
       .from('kymia_agent_state')
       .select('*')
       .eq('running', true)
 
     if (!activeUsers?.length) {
-      return NextResponse.json({ ok: true, active: 0 })
+      console.log('[cycle] No active users — done')
+      return NextResponse.json({ ok: true, active: 0, timestamp: new Date().toISOString() })
     }
+
+    console.log(`[cycle] Running cycle for ${activeUsers.length} active user(s)`)
 
     const results = await Promise.allSettled(
       activeUsers.map(state => runUserCycle(supabase, state))
     )
 
+    const failed = results.filter(r => r.status === 'rejected').length
+    console.log(`[cycle] Done — ${results.length - failed} ok, ${failed} failed`)
+
     return NextResponse.json({
       ok: true,
       active: activeUsers.length,
       results: results.length,
+      failed,
+      timestamp: new Date().toISOString(),
     })
   } catch (e: any) {
+    console.error('[cycle] Fatal error:', e.message)
     return NextResponse.json({ error: e.message }, { status: 500 })
   }
 }
