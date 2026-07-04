@@ -239,13 +239,25 @@ async function runUserCycle(supabase: SupabaseClient, state: any) {
   const userId = state.user_id
   const config = state.swarm_config || { profile: 'balanced', leverage: 1 }
 
+  console.log('[cycle] User state:', {
+    running: state.running,
+    openPositions: Object.keys(state.positions || {}).length,
+    equity: state.equity,
+    cash: state.cash,
+    profile: config.profile,
+    leverage: config.leverage,
+  })
+
   const timeCheck = isGoodTradingHour()
+  console.log('[cycle] Time check:', timeCheck)
+
   if (!timeCheck.allowed) {
-    console.log(`[KYMIA] Off-hours (${timeCheck.session}) — skipping cycle`)
+    console.log(`[cycle] Off-hours (${timeCheck.session}) — skipping cycle`)
     return
   }
 
   const prices = await fetchRealPrices()
+  console.log('[cycle] Prices:', JSON.stringify(prices))
 
   await checkPositions(supabase, userId, state, prices)
 
@@ -259,8 +271,10 @@ async function runUserCycle(supabase: SupabaseClient, state: any) {
   const openCount = Object.keys(currentPositions).length
   const maxPositions = config.profile === 'aggressive' ? 3 : 2
 
+  console.log(`[cycle] Open positions: ${openCount}/${maxPositions} — ${JSON.stringify(Object.keys(currentPositions))}`)
+
   if (openCount >= maxPositions) {
-    console.log(`[KYMIA] Max positions reached (${openCount}/${maxPositions})`)
+    console.log(`[cycle] Max positions reached (${openCount}/${maxPositions}) — skipping entry scan`)
     await supabase
       .from('kymia_agent_state')
       .update({ last_cycle: new Date().toISOString(), cycle_count: (state.cycle_count || 0) + 1 })
@@ -287,17 +301,38 @@ async function runUserCycle(supabase: SupabaseClient, state: any) {
     ? losses.reduce((s: number, t: any) => s + Math.abs(t.pct || 2), 0) / losses.length / 100
     : 0.02
 
+  console.log(`[cycle] Kelly inputs — winRate: ${(winRate*100).toFixed(0)}% avgWin: ${(avgWin*100).toFixed(2)}% avgLoss: ${(avgLoss*100).toFixed(2)}% trades: ${trades.length}`)
+
   const currentEquity = freshState?.equity || state.equity || 10000
   const currentCash = freshState?.cash || state.cash || 10000
+  const btcChange = prices['BTC']?.change || 0
+  console.log('[cycle] BTC change:', btcChange)
+
+  let tradeOpened = false
 
   for (const sym of WATCHLIST) {
-    if (currentPositions[sym]) continue
+    if (currentPositions[sym]) {
+      console.log(`[cycle] ${sym} — already in position, skipping`)
+      continue
+    }
 
     const price = prices[sym]?.price
-    if (!price) continue
+    if (!price) {
+      console.log(`[cycle] ${sym} — no price data, skipping`)
+      continue
+    }
 
     try {
       const bb = await calcBollinger(sym)
+
+      console.log(`[cycle] ${sym} Bollinger:`, {
+        signal: bb.signal,
+        zScore: bb.zScore.toFixed(2),
+        strength: bb.strength.toFixed(1),
+        current: bb.current.toFixed(2),
+        upper: bb.upper.toFixed(2),
+        lower: bb.lower.toFixed(2),
+      })
 
       await supabase.from('kymia_signals').insert({
         user_id: userId,
@@ -313,21 +348,39 @@ async function runUserCycle(supabase: SupabaseClient, state: any) {
           `Session: ${timeCheck.session}`,
       })
 
-      if (bb.signal === 'HOLD') continue
-
-      const vol = await checkVolatility(sym)
-      if (!vol.safe) {
-        console.log(`[${sym}] Volatility unsafe — skip`)
+      if (bb.signal === 'HOLD') {
+        console.log(`[cycle] ${sym} HOLD — z-score ${bb.zScore.toFixed(2)} not extreme enough (need ≤-1.8 or ≥+1.8)`)
         continue
       }
 
-      const btcChange = prices['BTC']?.change || 0
-      if (bb.signal === 'BUY'  && btcChange < -2) continue
-      if (bb.signal === 'SELL' && btcChange > 2)  continue
+      const vol = await checkVolatility(sym)
+      console.log(`[cycle] ${sym} volatility:`, { safe: vol.safe, atr: vol.atr.toFixed(4) })
+
+      if (!vol.safe) {
+        console.log(`[cycle] ${sym} SKIP — volatility unsafe (ATR out of 0.3–4.0% range)`)
+        continue
+      }
+
+      if (bb.signal === 'BUY' && btcChange < -2) {
+        console.log(`[cycle] ${sym} SKIP — BUY blocked by BTC macro (${btcChange.toFixed(2)}% < -2%)`)
+        continue
+      }
+      if (bb.signal === 'SELL' && btcChange > 2) {
+        console.log(`[cycle] ${sym} SKIP — SELL blocked by BTC macro (${btcChange.toFixed(2)}% > +2%)`)
+        continue
+      }
 
       const size = kellySize(currentEquity, winRate, avgWin, avgLoss, bb.strength, config.leverage || 1)
+      console.log(`[cycle] ${sym} Kelly size: $${size.toFixed(2)} (equity: $${currentEquity}, cash: $${currentCash})`)
 
-      if (size < 10 || size > currentCash * 0.95) continue
+      if (size < 10) {
+        console.log(`[cycle] ${sym} SKIP — Kelly size $${size.toFixed(2)} too small (< $10)`)
+        continue
+      }
+      if (size > currentCash * 0.95) {
+        console.log(`[cycle] ${sym} SKIP — Kelly size $${size.toFixed(2)} exceeds 95% of cash ($${currentCash})`)
+        continue
+      }
 
       const slDistance = vol.atr * 1.5
       const tpDistance = vol.atr * 3.5
@@ -357,15 +410,20 @@ async function runUserCycle(supabase: SupabaseClient, state: any) {
         .eq('user_id', userId)
 
       console.log(
-        `[KYMIA] OPENED: ${sym} ${bb.signal} @ $${price.toFixed(2)} | ` +
+        `[cycle] OPENED: ${sym} ${bb.signal} @ $${price.toFixed(2)} | ` +
         `Size: $${size.toFixed(0)} | Z-Score: ${bb.zScore.toFixed(2)} | ` +
         `SL: $${sl.toFixed(2)} | TP: $${tp.toFixed(2)}`
       )
 
+      tradeOpened = true
       break // 1 trade per cycle max
     } catch (e) {
-      console.error(`[KYMIA] Error processing ${sym}:`, e)
+      console.error(`[cycle] Error processing ${sym}:`, e)
     }
+  }
+
+  if (!tradeOpened) {
+    console.log('[cycle] No trade opened this cycle — all signals HOLD or filtered')
   }
 
   await supabase
