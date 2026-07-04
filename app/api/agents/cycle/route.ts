@@ -74,58 +74,112 @@ function isGoodTradingHour(): { allowed: boolean; session: string; quality: numb
   return                                { allowed: false, session: 'OFF-HOURS',  quality: 20 }
 }
 
-// ── Bollinger Bands engine ─────────────────────────────────────────────────────
+// ── CoinGecko ID mapping ───────────────────────────────────────────────────────
+function getCGId(sym: string): string {
+  const map: Record<string, string> = {
+    SOL: 'solana',
+    BTC: 'bitcoin',
+    ETH: 'ethereum',
+    JUP: 'jupiter-ag',
+  }
+  return map[sym] || sym.toLowerCase()
+}
+
+// ── Bollinger Bands engine (CoinGecko market chart) ───────────────────────────
 async function calcBollinger(sym: string, period = 20): Promise<{
   upper: number; middle: number; lower: number; current: number
   zScore: number; signal: 'BUY' | 'SELL' | 'HOLD'; strength: number
 }> {
-  const res = await fetch(
-    `https://api.binance.com/api/v3/klines?symbol=${sym}USDT&interval=1h&limit=${period + 5}`
-  )
-  const data = await res.json()
-  const closes: number[] = data.map((c: any) => parseFloat(c[4]))
-  const recent = closes.slice(-period)
+  const HOLD = { signal: 'HOLD' as const, zScore: 0, strength: 0, current: 0, upper: 0, lower: 0, middle: 0 }
 
-  const sma = recent.reduce((a, b) => a + b, 0) / period
-  const variance = recent.reduce((sum, p) => sum + Math.pow(p - sma, 2), 0) / period
-  const stdDev = Math.sqrt(variance)
+  try {
+    const res = await fetch(
+      `https://api.coingecko.com/api/v3/coins/${getCGId(sym)}/market_chart?vs_currency=usd&days=2&interval=hourly`,
+      { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(8000) }
+    )
 
-  const upper = sma + stdDev * 2
-  const lower = sma - stdDev * 2
-  const current = closes[closes.length - 1]
-  const zScore = (current - sma) / stdDev
+    if (!res.ok) {
+      console.log(`[bollinger] ${sym} CoinGecko error: ${res.status}`)
+      return HOLD
+    }
 
-  let signal: 'BUY' | 'SELL' | 'HOLD' = 'HOLD'
-  let strength = 0
+    const data = await res.json()
 
-  if (zScore <= -1.8) {
-    signal = 'BUY'
-    strength = Math.min(100, Math.abs(zScore) * 30)
-  } else if (zScore >= 1.8) {
-    signal = 'SELL'
-    strength = Math.min(100, zScore * 30)
+    if (!data.prices || !Array.isArray(data.prices)) {
+      console.log(`[bollinger] ${sym} invalid data format`)
+      return HOLD
+    }
+
+    const closes: number[] = data.prices.slice(-period).map((p: [number, number]) => p[1])
+
+    if (closes.length < period) {
+      console.log(`[bollinger] ${sym} not enough candles (${closes.length}/${period})`)
+      return HOLD
+    }
+
+    const sma = closes.reduce((a, b) => a + b, 0) / closes.length
+    const variance = closes.reduce((sum, p) => sum + Math.pow(p - sma, 2), 0) / closes.length
+    const stdDev = Math.sqrt(variance)
+
+    const upper = sma + stdDev * 2
+    const lower = sma - stdDev * 2
+    const current = closes[closes.length - 1]
+    const zScore = stdDev === 0 ? 0 : (current - sma) / stdDev
+
+    let signal: 'BUY' | 'SELL' | 'HOLD' = 'HOLD'
+    let strength = 0
+
+    if (zScore <= -1.8) {
+      signal = 'BUY'
+      strength = Math.min(100, Math.abs(zScore) * 30)
+    } else if (zScore >= 1.8) {
+      signal = 'SELL'
+      strength = Math.min(100, zScore * 30)
+    }
+
+    return { upper, middle: sma, lower, current, zScore, signal, strength }
+  } catch (e: any) {
+    console.log(`[bollinger] ${sym} failed: ${e.message}`)
+    return HOLD
   }
-
-  return { upper, middle: sma, lower, current, zScore, signal, strength }
 }
 
-// ── Volatility / ATR filter ────────────────────────────────────────────────────
+// ── Volatility / ATR filter (CoinGecko OHLC) ──────────────────────────────────
 async function checkVolatility(sym: string): Promise<{ safe: boolean; atr: number }> {
-  const res = await fetch(
-    `https://api.binance.com/api/v3/klines?symbol=${sym}USDT&interval=1h&limit=15`
-  )
-  const data = await res.json()
+  try {
+    // CoinGecko OHLC — returns [timestamp, open, high, low, close]
+    const res = await fetch(
+      `https://api.coingecko.com/api/v3/coins/${getCGId(sym)}/ohlc?vs_currency=usd&days=1`,
+      { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(8000) }
+    )
 
-  const trs: number[] = data.slice(1).map((c: any, i: number) => {
-    const h = parseFloat(c[2])
-    const l = parseFloat(c[3])
-    const pc = parseFloat(data[i][4])
-    return Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc))
-  })
-  const atr = trs.reduce((a, b) => a + b, 0) / 14
-  const atrPct = (atr / parseFloat(data[data.length - 1][4])) * 100
+    if (!res.ok) {
+      console.log(`[volatility] ${sym} CoinGecko error: ${res.status}`)
+      return { safe: true, atr: 0 } // default safe so we don't block on API failure
+    }
 
-  return { safe: atrPct > 0.3 && atrPct < 4.0, atr }
+    const data = await res.json()
+
+    if (!Array.isArray(data) || data.length < 2) {
+      return { safe: true, atr: 0 }
+    }
+
+    const candles = data.slice(-15)
+    const trs: number[] = candles.slice(1).map((c: number[], i: number) => {
+      const h = c[2], l = c[3], pc = candles[i][4]
+      return Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc))
+    })
+
+    const atr = trs.reduce((a, b) => a + b, 0) / trs.length
+    const lastClose = candles[candles.length - 1][4]
+    const atrPct = lastClose > 0 ? (atr / lastClose) * 100 : 0
+
+    console.log(`[volatility] ${sym} ATR%: ${atrPct.toFixed(2)}%`)
+    return { safe: atrPct > 0.3 && atrPct < 4.0, atr }
+  } catch (e: any) {
+    console.log(`[volatility] ${sym} failed: ${e.message}`)
+    return { safe: true, atr: 0 }
+  }
 }
 
 // ── Kelly Criterion position sizing ───────────────────────────────────────────
@@ -147,52 +201,54 @@ function kellySize(
   return Math.min(raw, equity * 0.20)
 }
 
-// ── Price feed ────────────────────────────────────────────────────────────────
+// ── Price feed (CoinGecko — works on Vercel servers) ──────────────────────────
 async function fetchRealPrices(): Promise<Record<string, any>> {
   const prices: Record<string, any> = {}
 
-  const SYMBOLS = [
-    { sym: 'SOL', pair: 'SOLUSDT' },
-    { sym: 'BTC', pair: 'BTCUSDT' },
-    { sym: 'ETH', pair: 'ETHUSDT' },
-    { sym: 'JUP', pair: 'JUPUSDT' },
-  ]
-
-  for (const { sym, pair } of SYMBOLS) {
-    try {
-      const res = await fetch(
-        `https://api.binance.com/api/v3/ticker/24hr?symbol=${pair}`,
-        {
-          headers: { 'User-Agent': 'KYMIA/1.0' },
-          signal: AbortSignal.timeout(5000),
-        }
-      )
-
-      if (!res.ok) {
-        console.log(`[prices] ${sym} Binance error: ${res.status}`)
-        continue
+  try {
+    const res = await fetch(
+      'https://api.coingecko.com/api/v3/simple/price' +
+        '?ids=solana,bitcoin,ethereum,jupiter-ag' +
+        '&vs_currencies=usd' +
+        '&include_24hr_change=true' +
+        '&include_24hr_vol=true',
+      {
+        headers: { Accept: 'application/json', 'User-Agent': 'KYMIA/1.0' },
+        signal: AbortSignal.timeout(8000),
       }
+    )
 
+    if (res.ok) {
       const data = await res.json()
-      prices[sym] = {
-        price: parseFloat(data.lastPrice),
-        change: parseFloat(data.priceChangePercent),
-        volume: parseFloat(data.quoteVolume),
+      const mapping: Record<string, string> = {
+        solana: 'SOL',
+        bitcoin: 'BTC',
+        ethereum: 'ETH',
+        'jupiter-ag': 'JUP',
       }
-      console.log(`[prices] ${sym}: $${prices[sym].price} (${prices[sym].change}%)`)
-    } catch (e: any) {
-      console.log(`[prices] ${sym} fetch failed: ${e.message}`)
+      for (const [id, sym] of Object.entries(mapping)) {
+        if (data[id]) {
+          prices[sym] = {
+            price: data[id].usd,
+            change: data[id].usd_24h_change || 0,
+            volume: data[id].usd_24h_vol || 0,
+          }
+          console.log(`[prices] ${sym}: $${prices[sym].price} (${prices[sym].change?.toFixed(1)}%)`)
+        }
+      }
+    } else {
+      console.log('[prices] CoinGecko error:', res.status)
     }
+  } catch (e: any) {
+    console.log('[prices] CoinGecko failed:', e.message)
   }
 
   if (Object.keys(prices).length === 0) {
-    console.log('[prices] All APIs failed — using fallback prices')
-    return {
-      SOL: { price: 155,   change: 0, volume: 1000000 },
-      BTC: { price: 60000, change: 0, volume: 1000000 },
-      ETH: { price: 3200,  change: 0, volume: 1000000 },
-      JUP: { price: 1.1,   change: 0, volume: 100000  },
-    }
+    console.log('[prices] Using fallback prices')
+    prices['SOL'] = { price: 155,   change: 0, volume: 1000000 }
+    prices['BTC'] = { price: 60000, change: 0, volume: 1000000 }
+    prices['ETH'] = { price: 3200,  change: 0, volume: 1000000 }
+    prices['JUP'] = { price: 1.1,   change: 0, volume: 100000  }
   }
 
   return prices
