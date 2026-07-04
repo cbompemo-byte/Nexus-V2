@@ -65,13 +65,8 @@ export async function GET() {
 }
 
 // ── Time filter ────────────────────────────────────────────────────────────────
-function isGoodTradingHour(): { allowed: boolean; session: string; quality: number } {
-  const hour = new Date().getUTCHours()
-  if (hour >= 7 && hour <= 9)   return { allowed: true,  session: 'EU OPEN',    quality: 95 }
-  if (hour >= 13 && hour <= 16) return { allowed: true,  session: 'NY OPEN',    quality: 90 }
-  if (hour >= 9 && hour <= 13)  return { allowed: true,  session: 'EU SESSION', quality: 75 }
-  if (hour >= 16 && hour <= 20) return { allowed: true,  session: 'NY SESSION', quality: 70 }
-  return                                { allowed: false, session: 'OFF-HOURS',  quality: 20 }
+function isGoodTradingHour() {
+  return { allowed: true, session: 'ALWAYS ON', quality: 80 }
 }
 
 // ── CoinGecko ID mapping ───────────────────────────────────────────────────────
