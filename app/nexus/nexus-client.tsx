@@ -2330,6 +2330,18 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
     return()=>{stateChannel.unsubscribe();signalChannel.unsubscribe();tradeChannel.unsubscribe();};
   },[user,log]);
 
+  // ── Client-side agent polling (Hobby plan — no Vercel Cron) ─────────────────
+  useEffect(()=>{
+    if(!user||!running)return;
+    const runCycle=async()=>{
+      try{await fetch('/api/agents/cycle');}
+      catch(e){console.log('Cycle error:',e);}
+    };
+    runCycle();
+    const iv=setInterval(runCycle,60000);
+    return()=>clearInterval(iv);
+  },[user,running]);
+
   // ── Part 12: Demo/live scan intervals ────────────────────────────────
   const isDemoMode=!isLive;
   const SCAN_INTERVALS={
