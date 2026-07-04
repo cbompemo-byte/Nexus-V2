@@ -148,28 +148,54 @@ function kellySize(
 }
 
 // ── Price feed ────────────────────────────────────────────────────────────────
-async function fetchRealPrices(): Promise<Record<string, { price: number; change: number }>> {
-  try {
-    const [krakenRes, cgRes] = await Promise.all([
-      fetch('https://api.kraken.com/0/public/Ticker?pair=SOLUSD,BTCUSD,ETHUSD'),
-      fetch('https://api.coingecko.com/api/v3/simple/price?ids=jupiter&vs_currencies=usd&include_24hr_change=true'),
-    ])
-    const kraken = await krakenRes.json()
-    const cg = await cgRes.json()
-    const result: Record<string, { price: number; change: number }> = {}
+async function fetchRealPrices(): Promise<Record<string, any>> {
+  const prices: Record<string, any> = {}
 
-    if (kraken.result) {
-      const r = kraken.result
-      if (r.SOLUSD)   result['SOL'] = { price: parseFloat(r.SOLUSD.c[0]),   change: parseFloat(r.SOLUSD.P[1]) }
-      if (r.XXBTZUSD) result['BTC'] = { price: parseFloat(r.XXBTZUSD.c[0]), change: parseFloat(r.XXBTZUSD.P[1]) }
-      if (r.XETHZUSD) result['ETH'] = { price: parseFloat(r.XETHZUSD.c[0]), change: parseFloat(r.XETHZUSD.P[1]) }
+  const SYMBOLS = [
+    { sym: 'SOL', pair: 'SOLUSDT' },
+    { sym: 'BTC', pair: 'BTCUSDT' },
+    { sym: 'ETH', pair: 'ETHUSDT' },
+    { sym: 'JUP', pair: 'JUPUSDT' },
+  ]
+
+  for (const { sym, pair } of SYMBOLS) {
+    try {
+      const res = await fetch(
+        `https://api.binance.com/api/v3/ticker/24hr?symbol=${pair}`,
+        {
+          headers: { 'User-Agent': 'KYMIA/1.0' },
+          signal: AbortSignal.timeout(5000),
+        }
+      )
+
+      if (!res.ok) {
+        console.log(`[prices] ${sym} Binance error: ${res.status}`)
+        continue
+      }
+
+      const data = await res.json()
+      prices[sym] = {
+        price: parseFloat(data.lastPrice),
+        change: parseFloat(data.priceChangePercent),
+        volume: parseFloat(data.quoteVolume),
+      }
+      console.log(`[prices] ${sym}: $${prices[sym].price} (${prices[sym].change}%)`)
+    } catch (e: any) {
+      console.log(`[prices] ${sym} fetch failed: ${e.message}`)
     }
-    if (cg.jupiter) result['JUP'] = { price: cg.jupiter.usd, change: cg.jupiter?.usd_24h_change || 0 }
-
-    return result
-  } catch {
-    return {}
   }
+
+  if (Object.keys(prices).length === 0) {
+    console.log('[prices] All APIs failed — using fallback prices')
+    return {
+      SOL: { price: 155,   change: 0, volume: 1000000 },
+      BTC: { price: 60000, change: 0, volume: 1000000 },
+      ETH: { price: 3200,  change: 0, volume: 1000000 },
+      JUP: { price: 1.1,   change: 0, volume: 100000  },
+    }
+  }
+
+  return prices
 }
 
 // ── SL/TP checker ─────────────────────────────────────────────────────────────
@@ -257,7 +283,7 @@ async function runUserCycle(supabase: SupabaseClient, state: any) {
   }
 
   const prices = await fetchRealPrices()
-  console.log('[cycle] Prices:', JSON.stringify(prices))
+  console.log('[cycle] Prices loaded:', Object.entries(prices).map(([k,v]) => `${k}=$${(v as any).price}`).join(', '))
 
   await checkPositions(supabase, userId, state, prices)
 
