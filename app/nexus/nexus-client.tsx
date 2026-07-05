@@ -2026,6 +2026,204 @@ function ActivateScreen({onActivate,swarmConfig,user}:{onActivate:()=>void,swarm
   );
 }
 
+// ── Cinematic chart on trade open ─────────────────────────────────────────────
+const TV_SYMS:Record<string,string>={SOL:'BINANCE:SOLUSDT',BTC:'BINANCE:BTCUSDT',ETH:'BINANCE:ETHUSDT',JUP:'BINANCE:JUPUSDT',RAY:'BINANCE:RAYUSDT',BONK:'BINANCE:BONKUSDT',WIF:'BINANCE:WIFUSDT'};
+type CinPhase='entering'|'analyzing'|'drawing'|'holding'|'exiting';
+
+function CinematicChart({trade,onComplete}:{trade:{sym:string,pos:any},onComplete:()=>void}){
+  const [phase,setPhase]=useState<CinPhase>('entering');
+  const [countdown,setCountdown]=useState(18);
+  const [lines,setLines]=useState({entry:false,tp:false,sl:false,ema:false});
+  const [chartReady,setChartReady]=useState(false);
+  const chartRef=useRef<HTMLDivElement>(null);
+  const {sym,pos}=trade;
+  const isLong=pos.side!=='SHORT';
+  const col=isLong?'#00FF88':'#FF3366';
+  const entry:number=pos.avg||0;
+  const sl:number=pos.sl||(isLong?entry*0.982:entry*1.018);
+  const tp:number=pos.tp||(isLong?entry*1.055:entry*0.945);
+  const rr=entry!==sl?Math.abs((tp-entry)/(entry-sl)):0;
+
+  useEffect(()=>{
+    const seq:[number,()=>void][]=[
+      [0,()=>setPhase('entering')],
+      [600,()=>setPhase('analyzing')],
+      [1800,()=>setPhase('drawing')],
+      [2200,()=>setLines(l=>({...l,ema:true}))],
+      [2800,()=>setLines(l=>({...l,entry:true}))],
+      [3400,()=>setLines(l=>({...l,tp:true}))],
+      [4000,()=>setLines(l=>({...l,sl:true}))],
+      [4600,()=>setPhase('holding')],
+      [18000,()=>setPhase('exiting')],
+      [18800,onComplete],
+    ];
+    const ts=seq.map(([d,fn])=>setTimeout(fn,d));
+    return()=>ts.forEach(clearTimeout);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[]);
+
+  useEffect(()=>{
+    if(phase!=='holding')return;
+    const iv=setInterval(()=>setCountdown(c=>{if(c<=1){clearInterval(iv);return 0;}return c-1;}),1000);
+    return()=>clearInterval(iv);
+  },[phase]);
+
+  useEffect(()=>{
+    if(!chartRef.current)return;
+    chartRef.current.innerHTML='';
+    const s=document.createElement('script');
+    s.src='https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
+    s.async=true;
+    s.innerHTML=JSON.stringify({
+      autosize:true,
+      symbol:TV_SYMS[sym]||`BINANCE:${sym}USDT`,
+      interval:'5',timezone:'Etc/UTC',theme:'dark',style:'1',locale:'en',
+      backgroundColor:'rgba(4,6,13,1)',gridColor:'rgba(10,29,51,0.4)',
+      hide_top_toolbar:false,withdateranges:false,
+      studies:['RSI@tv-basicstudies','BB@tv-basicstudies','MAExp@tv-basicstudies','Volume@tv-basicstudies'],
+      overrides:{
+        "paneProperties.background":"#04060D","paneProperties.backgroundType":"solid",
+        "paneProperties.vertGridProperties.color":"#081422","paneProperties.horzGridProperties.color":"#081422",
+        "scalesProperties.textColor":"#4A7090","scalesProperties.backgroundColor":"#04060D",
+        "mainSeriesProperties.candleStyle.upColor":"#00FF88","mainSeriesProperties.candleStyle.downColor":"#FF3366",
+        "mainSeriesProperties.candleStyle.borderUpColor":"#00FF88","mainSeriesProperties.candleStyle.borderDownColor":"#FF3366",
+        "mainSeriesProperties.candleStyle.wickUpColor":"#00FF8850","mainSeriesProperties.candleStyle.wickDownColor":"#FF336650",
+      },
+      studies_overrides:{
+        "bollinger bands.upper.color":"#00F2FE","bollinger bands.lower.color":"#00F2FE",
+        "bollinger bands.median.color":"#FFD70060","relative strength index.plot.color":"#BD00FF",
+        "moving average exponential.Plot.color":"#00F2FE",
+      },
+      disabled_features:["use_localstorage_for_settings","header_symbol_search"],
+    });
+    chartRef.current.appendChild(s);
+    const t=setTimeout(()=>setChartReady(true),2500);
+    return()=>clearTimeout(t);
+  },[sym]);
+
+  const animStyle=(delay=0):React.CSSProperties=>({animation:`cinematicFadeIn 0.6s ${delay}ms cubic-bezier(0.16,1,0.3,1) both`});
+
+  return(
+    <div style={{position:'fixed',inset:0,zIndex:9999,background:'#04060D',display:'flex',flexDirection:'column',
+      animation:phase==='entering'?'cinematicIn 0.6s cubic-bezier(0.16,1,0.3,1) forwards':phase==='exiting'?'cinematicOut 0.8s ease-in forwards':'none'}}>
+      <style>{`
+        @keyframes cinematicIn{from{opacity:0;transform:scale(1.02)}to{opacity:1;transform:scale(1)}}
+        @keyframes cinematicOut{from{opacity:1;transform:scale(1)}to{opacity:0;transform:scale(0.98)}}
+        @keyframes cinematicFadeIn{from{opacity:0;transform:translateX(-12px)}to{opacity:1;transform:translateX(0)}}
+        @keyframes cinDrawLine{from{width:0;opacity:0}to{width:100%;opacity:1}}
+        @keyframes cinPulse{0%,100%{opacity:1}50%{opacity:0.4}}
+      `}</style>
+
+      {/* HEADER */}
+      <div style={{padding:'12px 20px',flexShrink:0,background:'rgba(4,6,13,0.98)',borderBottom:'1px solid rgba(0,242,254,0.1)',display:'flex',alignItems:'center',gap:12,zIndex:10}}>
+        <div style={{display:'flex',alignItems:'center',gap:10}}>
+          <div style={{width:8,height:8,borderRadius:'50%',background:col,boxShadow:`0 0 12px ${col}`,animation:'cinPulse 1s infinite'}}/>
+          <span style={{fontSize:22,fontWeight:900,color:'white',fontFamily:'monospace'}}>{sym}/USD</span>
+          <div style={{padding:'3px 12px',background:`${col}20`,border:`1px solid ${col}50`,borderRadius:4,fontSize:11,fontWeight:900,color:col,fontFamily:'monospace'}}>{isLong?'▲ LONG':'▼ SHORT'}</div>
+        </div>
+        <div style={{fontSize:10,color:'#2A5070',fontFamily:'monospace',flex:1}}>
+          {phase==='analyzing'&&<span style={{animation:'cinPulse 0.8s infinite'}}>◈ Agents analyzing chart patterns...</span>}
+          {phase==='drawing'&&'◈ Drawing technical levels...'}
+          {phase==='holding'&&'◈ Position active — monitoring'}
+        </div>
+        <div style={{fontSize:9,color:'#2A5070',fontFamily:'monospace'}}>Opened by {pos.signal||'BOLLINGER'}</div>
+        {phase==='holding'&&(
+          <div style={{display:'flex',alignItems:'center',gap:8,padding:'5px 14px',background:'rgba(0,242,254,0.06)',border:'1px solid rgba(0,242,254,0.2)',borderRadius:20}}>
+            <svg width="22" height="22">
+              <circle cx="11" cy="11" r="9" fill="none" stroke="#0A1D33" strokeWidth="2"/>
+              <circle cx="11" cy="11" r="9" fill="none" stroke="#00F2FE" strokeWidth="2"
+                strokeDasharray={`${(countdown/18)*56.5} 56.5`} strokeLinecap="round"
+                transform="rotate(-90 11 11)" style={{transition:'stroke-dasharray 1s linear'}}/>
+            </svg>
+            <span style={{fontSize:13,color:'#00F2FE',fontFamily:'monospace',fontWeight:900}}>{countdown}s</span>
+          </div>
+        )}
+        <button onClick={onComplete} style={{background:'none',border:'none',color:'#2A5070',cursor:'pointer',fontSize:20,padding:'0 4px',lineHeight:1}}>✕</button>
+      </div>
+
+      {/* CHART */}
+      <div style={{flex:1,position:'relative',overflow:'hidden'}}>
+        <div ref={chartRef} className="tradingview-widget-container" style={{width:'100%',height:'100%',background:'#04060D'}}/>
+
+        {/* Loading */}
+        {!chartReady&&(
+          <div style={{position:'absolute',inset:0,background:'#04060D',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:16,zIndex:5}}>
+            <div style={{fontSize:32,color:'#00F2FE',animation:'cinPulse 1s infinite'}}>◈</div>
+            <div style={{fontSize:12,color:'#2A5070',fontFamily:'monospace',letterSpacing:'.2em'}}>LOADING CHART...</div>
+          </div>
+        )}
+
+        {/* OVERLAYS */}
+        {chartReady&&(
+          <div style={{position:'absolute',inset:0,pointerEvents:'none',zIndex:10}}>
+            {/* Entry line */}
+            {lines.entry&&(
+              <div style={{position:'absolute',top:'48%',left:0,right:120,display:'flex',alignItems:'center',...animStyle()}}>
+                <div style={{flex:1,height:1,background:'rgba(0,242,254,0.6)',boxShadow:'0 0 8px rgba(0,242,254,0.4)'}}/>
+                <div style={{padding:'3px 10px',background:'#00F2FE',borderRadius:'0 4px 4px 0',fontSize:10,color:'#04060D',fontWeight:900,fontFamily:'monospace',whiteSpace:'nowrap'}}>ENTRY ${entry.toFixed(2)}</div>
+              </div>
+            )}
+            {/* TP line */}
+            {lines.tp&&(
+              <div style={{position:'absolute',top:'28%',left:0,right:120,display:'flex',alignItems:'center',...animStyle(200)}}>
+                <div style={{flex:1,height:1,background:'rgba(0,255,136,0.7)',boxShadow:'0 0 8px rgba(0,255,136,0.4)'}}/>
+                <div style={{padding:'3px 10px',background:'#00FF88',borderRadius:'0 4px 4px 0',fontSize:10,color:'#04060D',fontWeight:900,fontFamily:'monospace',whiteSpace:'nowrap'}}>TP ${tp.toFixed(2)}</div>
+              </div>
+            )}
+            {/* SL line */}
+            {lines.sl&&(
+              <div style={{position:'absolute',top:'68%',left:0,right:120,display:'flex',alignItems:'center',...animStyle(400)}}>
+                <div style={{flex:1,height:1,background:'rgba(255,51,102,0.7)',boxShadow:'0 0 8px rgba(255,51,102,0.4)'}}/>
+                <div style={{padding:'3px 10px',background:'#FF3366',borderRadius:'0 4px 4px 0',fontSize:10,color:'white',fontWeight:900,fontFamily:'monospace',whiteSpace:'nowrap'}}>SL ${sl.toFixed(2)}</div>
+              </div>
+            )}
+
+            {/* Agent panel — top right */}
+            {lines.entry&&(
+              <div style={{position:'absolute',top:12,right:12,display:'flex',flexDirection:'column',gap:4,...animStyle()}}>
+                <div style={{padding:'5px 10px',background:'rgba(4,6,13,0.95)',border:'1px solid rgba(0,242,254,0.15)',borderRadius:4,marginBottom:4,fontSize:8,color:'#2A5070',fontFamily:'monospace',letterSpacing:'.15em'}}>◈ AGENT ANALYSIS</div>
+                {([
+                  {n:'BOLLINGER',i:'BB bands',c:'#00F2FE',v:isLong?'Oversold':'Overbought'},
+                  {n:'LENS',i:'RSI(14)',c:'#BD00FF',v:isLong?'< 35':'> 65'},
+                  {n:'SURGE',i:'Volume',c:'#00FF88',v:'1.5x avg'},
+                  {n:'AEGIS',i:'Risk',c:'#FF3366',v:'APPROVED'},
+                ] as {n:string,i:string,c:string,v:string}[]).map((a,i)=>(
+                  <div key={i} style={{display:'flex',alignItems:'center',gap:8,padding:'4px 10px',background:'rgba(4,6,13,0.92)',border:`1px solid ${a.c}20`,borderRadius:4}}>
+                    <div style={{width:6,height:6,borderRadius:'50%',background:a.c}}/>
+                    <span style={{fontSize:9,color:a.c,fontWeight:700,fontFamily:'monospace'}}>{a.n}</span>
+                    <span style={{fontSize:8,color:'#2A5070',fontFamily:'monospace'}}>{a.i}</span>
+                    <span style={{fontSize:9,color:'white',fontFamily:'monospace',marginLeft:'auto',fontWeight:700}}>{a.v}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Position summary — bottom left */}
+            {lines.sl&&(
+              <div style={{position:'absolute',bottom:20,left:16,padding:'12px 16px',background:'rgba(4,6,13,0.95)',border:`1px solid ${col}30`,borderRadius:8,...animStyle(),boxShadow:`0 0 20px ${col}10`}}>
+                <div style={{fontSize:9,color:'#2A5070',fontFamily:'monospace',marginBottom:8,letterSpacing:'.2em'}}>◈ POSITION OPENED</div>
+                <div style={{display:'flex',gap:16,fontSize:11,fontFamily:'monospace'}}>
+                  {([
+                    {l:'CAPITAL',v:`$${pos.size?.toFixed(0)||'—'}`},
+                    {l:'RISK/REWARD',v:rr>0?`1:${rr.toFixed(1)}`:'—',col},
+                    {l:'CONFIDENCE',v:`${pos.conf||'—'}%`,col:'#FFD700'},
+                  ] as {l:string,v:string,col?:string}[]).map((x,i)=>(
+                    <div key={i}>
+                      <div style={{color:'#2A5070',fontSize:8,marginBottom:2}}>{x.l}</div>
+                      <div style={{color:x.col||'white',fontWeight:700}}>{x.v}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+      <style>{`.tradingview-widget-container,.tradingview-widget-container>div,.tradingview-widget-container iframe{background:#04060D!important;height:100%!important;}`}</style>
+    </div>
+  );
+}
+
 export default function KYMIA({isLive=false}:{isLive?:boolean}){
   const prices=usePrices();
   const pricesRef=useRef(prices);
@@ -2082,6 +2280,8 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   const [confirmClose,setConfirmClose]=useState<string|null>(null);
   const [focusMode,setFocusMode]=useState(false);
   const [flashingAgent,setFlashingAgent]=useState<string|null>(null);
+  const [cinematicTrade,setCinematicTrade]=useState<{sym:string,pos:any}|null>(null);
+  const prevPositionsRef=useRef<Record<string,any>>({});
   const [completedMissions,setCompletedMissions]=useState<number[]>([]);
   const [missionCelebration,setMissionCelebration]=useState<typeof MISSIONS[0]|null>(null);
   const [signalCount,setSignalCount]=useState(0);
@@ -2357,6 +2557,18 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
     const iv=setInterval(runCycle,60000);
     return()=>clearInterval(iv);
   },[user,running]);
+
+  // ── Cinematic chart: detect new positions from server ────────────────────────
+  useEffect(()=>{
+    const currentSyms=Object.keys(port.pos);
+    const prevSyms=Object.keys(prevPositionsRef.current);
+    const newSym=currentSyms.find(sym=>!prevSyms.includes(sym));
+    if(newSym&&port.pos[newSym]&&!cinematicTrade){
+      setCinematicTrade({sym:newSym,pos:port.pos[newSym]});
+    }
+    prevPositionsRef.current={...port.pos};
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[port.pos]);
 
   // ── Part 12: Demo/live scan intervals ────────────────────────────────
   const isDemoMode=!isLive;
@@ -4315,6 +4527,9 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
         if(!pos||!cur)return;
         closeLongPosition(sym,pos,cur,"MANUAL","Manually closed");
       }}/>}
+
+      {/* Cinematic chart on new trade */}
+      {cinematicTrade&&<CinematicChart trade={cinematicTrade} onComplete={()=>setCinematicTrade(null)}/>}
 
       {/* Win Cards */}
       <div style={{position:"fixed",bottom:60,right:16,zIndex:200,display:"flex",flexDirection:"column",gap:8,pointerEvents:"none"}}>
