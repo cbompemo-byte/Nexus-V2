@@ -294,11 +294,11 @@ async function fetchRealPrices(): Promise<Record<string, any>> {
   }
 
   if (Object.keys(prices).length === 0) {
-    console.log('[prices] Using fallback prices')
-    prices['SOL'] = { price: 155,   change: 0, volume: 1000000 }
-    prices['BTC'] = { price: 60000, change: 0, volume: 1000000 }
-    prices['ETH'] = { price: 3200,  change: 0, volume: 1000000 }
-    prices['JUP'] = { price: 1.1,   change: 0, volume: 100000  }
+    console.log('[prices] CoinGecko unavailable — using fallback prices (trades blocked)')
+    prices['SOL'] = { price: 80,    change: 0, volume: 0, fallback: true }
+    prices['BTC'] = { price: 62000, change: 0, volume: 0, fallback: true }
+    prices['ETH'] = { price: 1760,  change: 0, volume: 0, fallback: true }
+    prices['JUP'] = { price: 1.1,   change: 0, volume: 0, fallback: true }
   } else {
     priceCache = { data: prices, timestamp: now }
   }
@@ -318,7 +318,12 @@ async function checkPositions(
   let cash: number = state.cash || 10000
 
   for (const [sym, pos] of Object.entries(positions) as [string, any][]) {
-    const cur = prices[sym]?.price
+    const priceEntry = prices[sym]
+    if (!priceEntry || priceEntry.fallback) {
+      console.log(`[SL check] ${sym} SKIP — fallback price, not evaluating SL/TP`)
+      continue
+    }
+    const cur = priceEntry.price
     if (!cur) continue
 
     const isLong = pos.side === 'LONG' || pos.side === 'BUY'
@@ -458,11 +463,16 @@ async function runUserCycle(supabase: SupabaseClient, state: any) {
       continue
     }
 
-    const price = prices[sym]?.price
-    if (!price) {
+    const priceData = prices[sym]
+    if (!priceData) {
       console.log(`[cycle] ${sym} — no price data, skipping`)
       continue
     }
+    if (priceData.fallback) {
+      console.log(`[cycle] ${sym} SKIP — fallback price ($${priceData.price}), not safe to trade`)
+      continue
+    }
+    const price = priceData.price
 
     try {
       const bb = await calcBollinger(sym)
