@@ -1,6 +1,10 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
 
+// ── Module-level caches (survive across requests on same function instance) ───
+let priceCache: { data: Record<string, any>; timestamp: number } = { data: {}, timestamp: 0 }
+let bollingerCache: Record<string, { data: any; timestamp: number }> = {}
+
 export async function GET() {
   console.log('[cycle] Starting agent cycle...')
   console.log('[cycle] ENV check:', {
@@ -87,6 +91,12 @@ async function calcBollinger(sym: string, period = 20): Promise<{
 }> {
   const HOLD = { signal: 'HOLD' as const, zScore: 0, strength: 0, current: 0, upper: 0, lower: 0, middle: 0 }
 
+  const nowBB = Date.now()
+  if (bollingerCache[sym] && nowBB - bollingerCache[sym].timestamp < 300000) {
+    console.log(`[bollinger] ${sym} Using cache`)
+    return bollingerCache[sym].data
+  }
+
   try {
     const res = await fetch(
       `https://api.coingecko.com/api/v3/coins/${getCGId(sym)}/market_chart?vs_currency=usd&days=2&interval=hourly`,
@@ -124,15 +134,17 @@ async function calcBollinger(sym: string, period = 20): Promise<{
     let signal: 'BUY' | 'SELL' | 'HOLD' = 'HOLD'
     let strength = 0
 
-    if (zScore <= -1.8) {
+    if (zScore <= -1.2) {
       signal = 'BUY'
       strength = Math.min(100, Math.abs(zScore) * 30)
-    } else if (zScore >= 1.8) {
+    } else if (zScore >= 1.2) {
       signal = 'SELL'
       strength = Math.min(100, zScore * 30)
     }
 
-    return { upper, middle: sma, lower, current, zScore, signal, strength }
+    const result = { upper, middle: sma, lower, current, zScore, signal, strength }
+    bollingerCache[sym] = { data: result, timestamp: nowBB }
+    return result
   } catch (e: any) {
     console.log(`[bollinger] ${sym} failed: ${e.message}`)
     return HOLD
@@ -196,8 +208,49 @@ function kellySize(
   return Math.min(raw, equity * 0.20)
 }
 
+// ── RSI calculation ───────────────────────────────────────────────────────────
+function calcRSI(closes: number[], period = 14): number {
+  if (closes.length < period + 1) return 50
+  let gains = 0, losses = 0
+  for (let i = closes.length - period; i < closes.length; i++) {
+    const diff = closes[i] - closes[i - 1]
+    if (diff > 0) gains += diff
+    else losses += Math.abs(diff)
+  }
+  const avgGain = gains / period
+  const avgLoss = losses / period
+  if (avgLoss === 0) return 100
+  const rs = avgGain / avgLoss
+  return 100 - 100 / (1 + rs)
+}
+
+async function getSimpleRSI(sym: string): Promise<{ signal: 'BUY' | 'SELL' | 'HOLD'; rsi: number; strength: number }> {
+  try {
+    const res = await fetch(
+      `https://api.coingecko.com/api/v3/coins/${getCGId(sym)}/market_chart?vs_currency=usd&days=2&interval=hourly`,
+      { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(8000) }
+    )
+    if (!res.ok) return { signal: 'HOLD', rsi: 50, strength: 0 }
+    const data = await res.json()
+    if (!data.prices || !Array.isArray(data.prices) || data.prices.length < 16) return { signal: 'HOLD', rsi: 50, strength: 0 }
+    const closes = data.prices.slice(-30).map((p: [number, number]) => p[1])
+    const rsi = calcRSI(closes)
+    if (rsi <= 30) return { signal: 'BUY', rsi, strength: Math.min(100, (30 - rsi) * 3) }
+    if (rsi >= 70) return { signal: 'SELL', rsi, strength: Math.min(100, (rsi - 70) * 3) }
+    return { signal: 'HOLD', rsi, strength: 0 }
+  } catch {
+    return { signal: 'HOLD', rsi: 50, strength: 0 }
+  }
+}
+
 // ── Price feed (CoinGecko — works on Vercel servers) ──────────────────────────
 async function fetchRealPrices(): Promise<Record<string, any>> {
+  const now = Date.now()
+  if (now - priceCache.timestamp < 60000 && Object.keys(priceCache.data).length > 0) {
+    console.log('[prices] Using cache')
+    return priceCache.data
+  }
+
   const prices: Record<string, any> = {}
 
   try {
@@ -244,6 +297,8 @@ async function fetchRealPrices(): Promise<Record<string, any>> {
     prices['BTC'] = { price: 60000, change: 0, volume: 1000000 }
     prices['ETH'] = { price: 3200,  change: 0, volume: 1000000 }
     prices['JUP'] = { price: 1.1,   change: 0, volume: 100000  }
+  } else {
+    priceCache = { data: prices, timestamp: now }
   }
 
   return prices
@@ -425,9 +480,20 @@ async function runUserCycle(supabase: SupabaseClient, state: any) {
           `Session: ${timeCheck.session}`,
       })
 
+      let finalSignal = bb.signal
+      let finalStrength = bb.strength
+      let signalSource = 'BOLLINGER'
+
       if (bb.signal === 'HOLD') {
-        console.log(`[cycle] ${sym} HOLD — z-score ${bb.zScore.toFixed(2)} not extreme enough (need ≤-1.8 or ≥+1.8)`)
-        continue
+        console.log(`[cycle] ${sym} BB HOLD — z-score ${bb.zScore.toFixed(2)} not extreme enough (need ≤-1.2 or ≥+1.2), trying RSI fallback...`)
+        const rsiResult = await getSimpleRSI(sym)
+        console.log(`[cycle] ${sym} RSI: ${rsiResult.rsi.toFixed(1)} → ${rsiResult.signal} (strength ${rsiResult.strength.toFixed(1)})`)
+        if (rsiResult.signal === 'HOLD') {
+          continue
+        }
+        finalSignal = rsiResult.signal
+        finalStrength = rsiResult.strength
+        signalSource = 'RSI'
       }
 
       const vol = await checkVolatility(sym)
@@ -438,16 +504,16 @@ async function runUserCycle(supabase: SupabaseClient, state: any) {
         continue
       }
 
-      if (bb.signal === 'BUY' && btcChange < -2) {
+      if (finalSignal === 'BUY' && btcChange < -2) {
         console.log(`[cycle] ${sym} SKIP — BUY blocked by BTC macro (${btcChange.toFixed(2)}% < -2%)`)
         continue
       }
-      if (bb.signal === 'SELL' && btcChange > 2) {
+      if (finalSignal === 'SELL' && btcChange > 2) {
         console.log(`[cycle] ${sym} SKIP — SELL blocked by BTC macro (${btcChange.toFixed(2)}% > +2%)`)
         continue
       }
 
-      const size = kellySize(currentEquity, winRate, avgWin, avgLoss, bb.strength, config.leverage || 1)
+      const size = kellySize(currentEquity, winRate, avgWin, avgLoss, finalStrength, config.leverage || 1)
       console.log(`[cycle] ${sym} Kelly size: $${size.toFixed(2)} (equity: $${currentEquity}, cash: $${currentCash})`)
 
       if (size < 10) {
@@ -461,8 +527,8 @@ async function runUserCycle(supabase: SupabaseClient, state: any) {
 
       const slDistance = vol.atr * 1.5
       const tpDistance = vol.atr * 3.5
-      const sl = bb.signal === 'BUY' ? price - slDistance : price + slDistance
-      const tp = bb.signal === 'BUY' ? price + tpDistance : price - tpDistance
+      const sl = finalSignal === 'BUY' ? price - slDistance : price + slDistance
+      const tp = finalSignal === 'BUY' ? price + tpDistance : price - tpDistance
 
       const qty = size / price
       const newPositions = {
@@ -470,13 +536,14 @@ async function runUserCycle(supabase: SupabaseClient, state: any) {
         [sym]: {
           avg: price,
           qty: parseFloat(qty.toFixed(6)),
-          side: bb.signal === 'BUY' ? 'LONG' : 'SHORT',
+          side: finalSignal === 'BUY' ? 'LONG' : 'SHORT',
           size: parseFloat(size.toFixed(2)),
           sl: parseFloat(sl.toFixed(4)),
           tp: parseFloat(tp.toFixed(4)),
           openedAt: new Date().toISOString(),
-          conf: Math.round(bb.strength),
+          conf: Math.round(finalStrength),
           zScore: parseFloat(bb.zScore.toFixed(3)),
+          signal: signalSource,
           session: timeCheck.session,
         },
       }
@@ -487,9 +554,9 @@ async function runUserCycle(supabase: SupabaseClient, state: any) {
         .eq('user_id', userId)
 
       console.log(
-        `[cycle] OPENED: ${sym} ${bb.signal} @ $${price.toFixed(2)} | ` +
-        `Size: $${size.toFixed(0)} | Z-Score: ${bb.zScore.toFixed(2)} | ` +
-        `SL: $${sl.toFixed(2)} | TP: $${tp.toFixed(2)}`
+        `[cycle] OPENED: ${sym} ${finalSignal} @ $${price.toFixed(2)} | ` +
+        `Signal: ${signalSource} | Size: $${size.toFixed(0)} | ` +
+        `Z-Score: ${bb.zScore.toFixed(2)} | SL: $${sl.toFixed(2)} | TP: $${tp.toFixed(2)}`
       )
 
       tradeOpened = true
