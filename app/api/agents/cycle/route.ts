@@ -311,7 +311,7 @@ async function checkPositions(
   supabase: SupabaseClient,
   userId: string,
   state: any,
-  prices: Record<string, { price: number; change: number }>
+  prices: Record<string, { price: number; change: number; fallback?: boolean }>
 ) {
   const positions = state.positions || {}
   const updates: any = { ...positions }
