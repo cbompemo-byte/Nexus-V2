@@ -182,10 +182,10 @@ async function checkVolatility(sym: string): Promise<{ safe: boolean; atr: numbe
     const atrPct = lastClose > 0 ? (atr / lastClose) * 100 : 0
 
     console.log(`[volatility] ${sym} ATR%: ${atrPct.toFixed(2)}%`)
-    return { safe: atrPct > 0.3 && atrPct < 4.0, atr }
+    return { safe: atrPct > 0.1 && atrPct < 5.0, atr }
   } catch (e: any) {
-    console.log(`[volatility] ${sym} failed: ${e.message}`)
-    return { safe: true, atr: 0 }
+    console.log(`[volatility] ${sym} error: ${e.message}`)
+    return { safe: true, atr: 0.002 } // assume safe on error, don't block trade
   }
 }
 
@@ -198,14 +198,16 @@ function kellySize(
   signalStrength: number,
   leverage: number
 ): number {
-  const b = avgWinPct / avgLossPct
+  const cappedAvgLoss = Math.min(avgLossPct, 0.10) // cap at 10% to prevent Kelly collapse after big loss
+  const b = avgWinPct / cappedAvgLoss
   const p = winRate
   const q = 1 - p
   const kelly = Math.max(0, (b * p - q) / b)
   const safeKelly = kelly * 0.25
   const strengthMultiplier = signalStrength / 100
   const raw = equity * safeKelly * strengthMultiplier * leverage
-  return Math.min(raw, equity * 0.20)
+  const minimum = equity * 0.03 // always at least 3% of equity
+  return Math.max(minimum, Math.min(raw, equity * 0.15))
 }
 
 // ── RSI calculation ───────────────────────────────────────────────────────────
@@ -323,10 +325,18 @@ async function checkPositions(
     const pnl = isLong ? (cur - pos.avg) * pos.qty : (pos.avg - cur) * pos.qty
     const pct = (pnl / (pos.avg * pos.qty)) * 100
 
-    const sl: number = pos.sl ?? (isLong ? pos.avg * 0.982 : pos.avg * 1.018)
-    const tp: number = pos.tp ?? (isLong ? pos.avg * 1.055 : pos.avg * 0.945)
+    const sl: number = pos.sl || (isLong ? pos.avg * 0.982 : pos.avg * 1.018)
+    const tp: number = pos.tp || (isLong ? pos.avg * 1.055 : pos.avg * 0.95)
 
-    const slHit = isLong ? cur <= sl : cur >= sl
+    // Hard stop at -5% regardless of stored SL
+    const hardStop = isLong ? pos.avg * 0.95 : pos.avg * 1.05
+    const effectiveSL = isLong
+      ? Math.max(sl, hardStop)  // higher of the two for LONG (closer to entry)
+      : Math.min(sl, hardStop)  // lower for SHORT
+
+    console.log(`[SL check] ${sym}: cur=${cur.toFixed(2)} sl=${effectiveSL.toFixed(2)} tp=${tp.toFixed(2)} hit=${isLong ? cur <= effectiveSL : cur >= effectiveSL}`)
+
+    const slHit = isLong ? cur <= effectiveSL : cur >= effectiveSL
     const tpHit = isLong ? cur >= tp : cur <= tp
 
     if (slHit || tpHit) {
