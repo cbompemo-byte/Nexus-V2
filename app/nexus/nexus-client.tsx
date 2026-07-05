@@ -325,7 +325,7 @@ type NewToken={address:string,name:string,price:string,change1h:number,volume24h
 type DataStatus={jupiter:"ok"|"err"|"loading",binance:"ok"|"err"|"loading",coingecko:"ok"|"err"|"loading",lastUpdate:number};
 type Position={qty:number,avg:number,peak?:number,entryMs?:number,trailActive?:boolean,side?:"LONG"|"SHORT",scaledIn?:boolean,leverage?:number,leveragedSize?:number,conviction?:string};
 type AgentSignals={lens?:{rsi:number,signal:string},radar?:{ema9:number,ema21:number,signal:string},razor?:{rsi:number,macd:number,signal:string},vector?:{adx:number,signal:string},surge?:{volumeChange:number,signal:string},leviathan?:{buyPressure:number,signal:string},echo?:{fg:number,signal:string}};
-type Trade={id:string,sym:string,side:string,qty:number,price:number,pnl:number,conf:number,t:string,ms:number,agent?:string,reason?:string,agentSignals?:AgentSignals};
+type Trade={id:string,sym:string,side:string,qty:number,price:number,pnl:number,pct?:number,conf:number,t:string,ms:number,agent?:string,reason?:string,agentSignals?:AgentSignals};
 type LogEntry={t:string,ag:string,msg:string,col:string};
 type WinCard={id:string,sym:string,pnl:number,pct:number,price:number,agent:string,t:string,origin?:{x:number,y:number}};
 type EdgeToast={id:string,type:string,icon:string,col:string,title:string,body:string};
@@ -2297,8 +2297,14 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
         setRunning(data.running||false);
         if(data.swarm_config){setSwarmConfig(data.swarm_config);setHasShownOnboarding(true);}
       }
-      const{data:tradesData}=await supabase.from('kymia_trades').select('*').eq('user_id',user.id).order('created_at',{ascending:false}).limit(100);
-      if(tradesData)setTrades(tradesData);
+      const{data:tradesData}=await supabase.from('kymia_trades').select('*').eq('user_id',user.id).order('closed_at',{ascending:false}).limit(20);
+      if(tradesData)setTrades(tradesData.map((t:any)=>({
+        id:t.id,sym:t.sym,side:t.side||'LONG',qty:t.qty||0,
+        price:t.exit||t.entry||0,pnl:t.pnl||0,pct:t.pct||0,conf:80,
+        t:t.closed_at?new Date(t.closed_at).toLocaleTimeString('en-US',{hour12:false}):ts(),
+        ms:t.closed_at?new Date(t.closed_at).getTime():Date.now(),
+        agent:t.agent||'KYMIA',
+      })));
     };
     loadState();
   },[user]);
@@ -2322,9 +2328,19 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
       .subscribe();
     const tradeChannel=supabase.channel('agent-trades')
       .on('postgres_changes',{event:'INSERT',schema:'public',table:'kymia_trades',filter:`user_id=eq.${user.id}`},payload=>{
-        const t=payload.new as any;
-        setTrades(prev=>[t,...prev]);
-        log('AEGIS',`${t.pnl>=0?'▲ PROFIT':'▼ LOSS'}: ${t.sym} ${t.pnl>=0?'+':''}$${f2(t.pnl)}`,t.pnl>=0?K.g:K.r);
+        const raw=payload.new as any;
+        const trade:Trade={
+          id:raw.id,sym:raw.sym,side:raw.side||'LONG',qty:raw.qty||0,
+          price:raw.exit||raw.entry||0,pnl:raw.pnl||0,pct:raw.pct||0,conf:80,
+          t:raw.closed_at?new Date(raw.closed_at).toLocaleTimeString('en-US',{hour12:false}):ts(),
+          ms:raw.closed_at?new Date(raw.closed_at).getTime():Date.now(),
+          agent:raw.agent||'KYMIA',
+        };
+        setTrades(prev=>[trade,...prev.slice(0,99)]);
+        // Show win/loss popup card
+        const card:WinCard={id:Math.random().toString(36).slice(2),sym:trade.sym,pnl:trade.pnl,pct:trade.pct||0,price:trade.price,agent:trade.agent||'KYMIA',t:trade.t};
+        setWinCards(prev=>[...prev.slice(-1),card]);
+        log('AEGIS',`${trade.pnl>=0?'▲ PROFIT':'▼ LOSS'}: ${trade.sym} ${trade.pnl>=0?'+':''}$${f2(trade.pnl)}`,trade.pnl>=0?K.g:K.r);
       })
       .subscribe();
     return()=>{stateChannel.unsubscribe();signalChannel.unsubscribe();tradeChannel.unsubscribe();};
