@@ -325,7 +325,7 @@ type NewToken={address:string,name:string,price:string,change1h:number,volume24h
 type DataStatus={jupiter:"ok"|"err"|"loading",binance:"ok"|"err"|"loading",coingecko:"ok"|"err"|"loading",lastUpdate:number};
 type Position={qty:number,avg:number,peak?:number,entryMs?:number,trailActive?:boolean,side?:"LONG"|"SHORT",scaledIn?:boolean,leverage?:number,leveragedSize?:number,conviction?:string};
 type AgentSignals={lens?:{rsi:number,signal:string},radar?:{ema9:number,ema21:number,signal:string},razor?:{rsi:number,macd:number,signal:string},vector?:{adx:number,signal:string},surge?:{volumeChange:number,signal:string},leviathan?:{buyPressure:number,signal:string},echo?:{fg:number,signal:string}};
-type Trade={id:string,sym:string,side:string,qty:number,price:number,pnl:number,pct?:number,conf:number,t:string,ms:number,agent?:string,reason?:string,agentSignals?:AgentSignals};
+type Trade={id:string,sym:string,side:string,qty:number,entry?:number,price:number,pnl:number,pct?:number,conf:number,t:string,ms:number,agent?:string,reason?:string,agentSignals?:AgentSignals};
 type LogEntry={t:string,ag:string,msg:string,col:string};
 type WinCard={id:string,sym:string,pnl:number,pct:number,price:number,agent:string,t:string,origin?:{x:number,y:number}};
 type EdgeToast={id:string,type:string,icon:string,col:string,title:string,body:string};
@@ -2300,7 +2300,7 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
       const{data:tradesData}=await supabase.from('kymia_trades').select('*').eq('user_id',user.id).order('closed_at',{ascending:false}).limit(20);
       if(tradesData)setTrades(tradesData.map((t:any)=>({
         id:t.id,sym:t.sym,side:t.side||'LONG',qty:t.qty||0,
-        price:t.exit||t.entry||0,pnl:t.pnl||0,pct:t.pct||0,conf:80,
+        entry:t.entry||0,price:t.exit||t.entry||0,pnl:t.pnl||0,pct:t.pct||0,conf:80,
         t:t.closed_at?new Date(t.closed_at).toLocaleTimeString('en-US',{hour12:false}):ts(),
         ms:t.closed_at?new Date(t.closed_at).getTime():Date.now(),
         agent:t.agent||'KYMIA',
@@ -2331,7 +2331,7 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
         const raw=payload.new as any;
         const trade:Trade={
           id:raw.id,sym:raw.sym,side:raw.side||'LONG',qty:raw.qty||0,
-          price:raw.exit||raw.entry||0,pnl:raw.pnl||0,pct:raw.pct||0,conf:80,
+          entry:raw.entry||0,price:raw.exit||raw.entry||0,pnl:raw.pnl||0,pct:raw.pct||0,conf:80,
           t:raw.closed_at?new Date(raw.closed_at).toLocaleTimeString('en-US',{hour12:false}):ts(),
           ms:raw.closed_at?new Date(raw.closed_at).getTime():Date.now(),
           agent:raw.agent||'KYMIA',
@@ -3690,32 +3690,76 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
               </div>
             )}
             <div className="panel" style={{padding:9,flex:1,overflow:"auto"}}>
+              {/* Session stats bar */}
+              {(()=>{
+                const ct=trades.filter((t:any)=>t.pnl!==0);
+                const cw=ct.filter((t:any)=>t.pnl>0);
+                const tp2=ct.reduce((s:number,t:any)=>s+t.pnl,0);
+                const wr2=ct.length>0?(cw.length/ct.length*100).toFixed(0):'—';
+                return(
+                  <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:6,padding:'8px 12px',background:'rgba(4,6,13,0.9)',border:'1px solid #0A1D33',borderRadius:6,marginBottom:12}}>
+                    {([{l:'TRADES',v:ct.length,c:K.c},{l:'WIN RATE',v:`${wr2}%`,c:K.g},{l:'NET P&L',v:`${tp2>=0?'+$':'-$'}${Math.abs(tp2).toFixed(0)}`,c:tp2>=0?K.g:K.r},{l:'EQUITY',v:`$${port.equity?.toFixed(0)}`,c:'white'}] as {l:string,v:string|number,c:string}[]).map((s,i)=>(
+                      <div key={i} style={{textAlign:'center'}}>
+                        <div style={{fontSize:8,color:K.dim,fontFamily:'monospace'}}>{s.l}</div>
+                        <div style={{fontSize:13,fontWeight:700,color:s.c,fontFamily:'monospace',marginTop:2}}>{s.v}</div>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
               <div style={{fontSize:8,color:K.dim,marginBottom:6,letterSpacing:".12em"}}>◉ POSITIONS</div>
               {Object.keys(port.pos).length===0
                 ?<div style={{textAlign:"center",color:"#0A1E30",padding:"12px 0",fontSize:9}}>No open positions</div>
                 :Object.entries(port.pos).map(([sym,pos])=>{
+                  const p=pos as any;
                   const cur=prices[sym]?.price||pos.avg;
-                  const isShort=pos.side==="SHORT";
-                  const pnl=isShort?(pos.avg-cur)*pos.qty:(cur-pos.avg)*pos.qty;
-                  const pp=isShort?((pos.avg-cur)/pos.avg*100):((cur-pos.avg)/pos.avg*100);
-                  const posCol=isShort?K.r:K.c;
+                  const isLong=pos.side!=="SHORT";
+                  const pnl=isLong?(cur-pos.avg)*pos.qty:(pos.avg-cur)*pos.qty;
+                  const pct2=p.size>0?pnl/p.size*100:((cur-pos.avg)/pos.avg*100*(isLong?1:-1));
+                  const col=pnl>=0?K.g:K.r;
                   return(
-                    <div key={sym} onClick={()=>{const tr=trades.find(t=>t.sym===sym&&(t.side==="BUY"||t.side==="SHORT"));setChartTrade({trade:tr||null,position:pos,agentSignals:tr?.agentSignals});}} style={{marginBottom:6,padding:7,background:(pnl>=0?K.g:K.r)+"08",borderRadius:2,border:"1px solid "+(pnl>=0?K.g:K.r)+"20",cursor:"pointer",transition:"border-color .2s"}} title="Click to view chart">
-                      <div style={{display:"flex",justifyContent:"space-between",marginBottom:2}}>
-                        <span style={{color:posCol,fontWeight:700,fontSize:10}}>{sym} {isShort?"▼ SHORT":"LONG"} {pos.trailActive&&<span style={{color:K.gold,fontSize:8}}> ◈TRAIL</span>}{pos.leverage&&pos.leverage>1&&<span style={{fontSize:7,padding:"0 3px",background:"#BD00FF20",border:"1px solid #BD00FF55",borderRadius:2,color:"#BD00FF",marginLeft:3}}>x{pos.leverage}</span>}</span>
-                        <span style={{color:pnl>=0?K.g:K.r,fontSize:10}}>{fU(pnl)}</span>
+                    <div key={sym} style={{padding:'12px 16px',background:'rgba(6,10,18,0.9)',border:`1px solid ${col}30`,borderLeft:`3px solid ${col}`,borderRadius:8,marginBottom:8}}>
+                      {/* Header */}
+                      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+                        <div style={{display:'flex',gap:8,alignItems:'center'}}>
+                          <span style={{fontSize:16,fontWeight:900,color:col,fontFamily:'monospace'}}>{sym}</span>
+                          <span style={{padding:'2px 8px',background:`${col}15`,border:`1px solid ${col}30`,borderRadius:4,fontSize:10,color:col,fontWeight:700}}>{pos.side||'LONG'}</span>
+                          {p.conf&&<span style={{fontSize:9,color:K.dim,fontFamily:'monospace'}}>{p.conf}% conf</span>}
+                        </div>
+                        <div style={{textAlign:'right'}}>
+                          <div style={{fontSize:18,fontWeight:900,color:col,fontFamily:'monospace',textShadow:`0 0 10px ${col}`}}>{pnl>=0?'+$':'-$'}{Math.abs(pnl).toFixed(2)}</div>
+                          <div style={{fontSize:10,color:col,fontFamily:'monospace'}}>{pct2>=0?'+':''}{pct2.toFixed(2)}%</div>
+                        </div>
                       </div>
-                      {pos.conviction&&<div style={{fontSize:8,color:'#FFD700',fontFamily:'monospace',marginBottom:2}}>{pos.conviction}</div>}
-                      <div style={{display:"flex",justifyContent:"space-between",fontSize:8,color:K.tx}}>
-                        <span>@${f2(pos.avg)}</span><span>${f2(cur)}</span><span style={{color:pnl>=0?K.g:K.r}}>{fP(pp)}</span>
+                      {/* Trade levels */}
+                      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr',gap:6,marginBottom:8}}>
+                        {([{l:'ENTRY',v:`$${pos.avg?.toFixed(2)}`,c:K.c},{l:'CURRENT',v:`$${cur?.toFixed(2)}`,c:'white'},{l:'TP',v:p.tp?`$${p.tp.toFixed(2)}`:'—',c:K.g},{l:'SL',v:p.sl?`$${p.sl.toFixed(2)}`:'—',c:K.r}] as {l:string,v:string,c:string}[]).map((item,i)=>(
+                          <div key={i} style={{padding:'6px 8px',background:'rgba(4,6,13,0.8)',borderRadius:4,textAlign:'center'}}>
+                            <div style={{fontSize:8,color:K.dim,fontFamily:'monospace'}}>{item.l}</div>
+                            <div style={{fontSize:11,color:item.c,fontWeight:700,fontFamily:'monospace',marginTop:2}}>{item.v}</div>
+                          </div>
+                        ))}
                       </div>
-                      <div style={{marginTop:3,height:2,background:"#050810",borderRadius:1}}>
-                        <div style={{height:"100%",borderRadius:1,background:pnl>=0?K.g:K.r,width:Math.min(100,Math.max(0,50+pp*8))+"%",transition:"width .5s"}}/>
+                      {/* Capital */}
+                      <div style={{display:'flex',justifyContent:'space-between',fontSize:9,color:K.dim,fontFamily:'monospace',marginBottom:6}}>
+                        <span>Capital: ${p.size?.toFixed(0)||'—'}</span>
+                        <span>Qty: {pos.qty?.toFixed(4)} {sym}</span>
+                        <span>Agent: {p.agent||p.signal||'BOLLINGER'}</span>
                       </div>
-                      <div style={{display:"flex",justifyContent:"space-between",marginTop:3,fontSize:7,color:K.dim,alignItems:"center"}}>
-                        <span>STOP:{fPrice(getStop(pos,cur))}</span><span>PEAK:{fPrice(pos.peak||pos.avg)}</span>
-                        <button onClick={e=>{e.stopPropagation();setConfirmClose(sym);}} style={{fontSize:7,padding:"1px 5px",background:K.r+"18",border:"1px solid "+K.r+"55",borderRadius:2,color:K.r,cursor:"pointer",fontFamily:"monospace"}}>✕ CLOSE</button>
-                      </div>
+                      {/* Progress bar to TP */}
+                      {p.tp&&p.sl&&(
+                        <div style={{marginBottom:6}}>
+                          <div style={{height:4,background:'#06090F',borderRadius:2,overflow:'hidden'}}>
+                            <div style={{height:'100%',width:`${Math.max(0,Math.min(100,isLong?(cur-p.sl)/(p.tp-p.sl)*100:(p.sl-cur)/(p.sl-p.tp)*100))}%`,background:`linear-gradient(90deg,${col}60,${col})`,borderRadius:2,transition:'width .3s'}}/>
+                          </div>
+                          <div style={{display:'flex',justifyContent:'space-between',fontSize:8,color:'#1A3050',fontFamily:'monospace',marginTop:3}}>
+                            <span style={{color:K.r}}>SL ${p.sl?.toFixed(2)}</span>
+                            <span style={{color:K.g}}>TP ${p.tp?.toFixed(2)}</span>
+                          </div>
+                        </div>
+                      )}
+                      {/* Close button */}
+                      <button onClick={()=>setConfirmClose(sym)} style={{marginTop:4,width:'100%',padding:'6px',background:'rgba(255,51,102,0.08)',border:'1px solid rgba(255,51,102,0.25)',borderRadius:4,color:K.r,fontFamily:'monospace',fontSize:10,cursor:'pointer',fontWeight:700}}>✕ CLOSE POSITION</button>
                     </div>
                   );
                 })}
@@ -3870,31 +3914,33 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
                 <div style={{textAlign:"right"}}><div style={{fontSize:7,color:K.dim}}>TRADES</div><div style={{color:K.c,fontWeight:700}}>{filtered2.length}</div></div>
               </div>
             </div>
-            {/* Table */}
+            {/* Trade list */}
             <div className="panel" style={{overflow:"auto",flex:1}}>
               {sorted2.length===0
                 ?<div style={{padding:50,textAlign:"center",color:"#0A1E30",fontSize:10}}>No closed trades in this period. Activate swarm.</div>
-                :<table style={{width:"100%",borderCollapse:"collapse"}}>
-                  <thead><tr style={{fontSize:8,color:K.dim,borderBottom:"1px solid #060A14",position:"sticky",top:0,background:K.pan}}>
-                    {["TIME","ASSET","SIDE","PRICE","P&L","AGENT","REASON"].map(h=><th key={h} style={{padding:"6px 10px",textAlign:"left",fontWeight:400,letterSpacing:".06em"}}>{h}</th>)}
-                  </tr></thead>
-                  <tbody>
-                    {sorted2.map(t=>{
-                      const sv=SYMS[t.sym],win=t.pnl>0,col=win?K.g:K.r;
-                      return(
-                        <tr key={t.id} className="tr" onClick={()=>setChartTrade({trade:t,position:null,agentSignals:t.agentSignals})} style={{borderBottom:"1px solid #040910",borderLeft:"2px solid "+(win?K.g+"40":K.r+"40"),cursor:"pointer"}}>
-                          <td style={{padding:"5px 10px",color:"#102030",fontSize:9,whiteSpace:"nowrap"}}>{t.t}</td>
-                          <td style={{padding:"5px 10px"}}><span style={{color:sv?.col,marginRight:4}}>{sv?.icon}</span><span style={{color:K.c,fontWeight:700,fontSize:10}}>{t.sym}</span></td>
-                          <td style={{padding:"5px 10px"}}><span style={{padding:"1px 5px",background:col+"12",color:col,border:"1px solid "+col+"30",fontSize:8,borderRadius:1}}>{win?"▲ WIN":"▼ LOSS"}</span></td>
-                          <td style={{padding:"5px 10px",color:K.hi,fontSize:9}}>{fPrice(t.price)}</td>
-                          <td style={{padding:"5px 10px",color:col,fontWeight:700,fontSize:10}}>{win?"+":"-"}${f2(Math.abs(t.pnl))}</td>
-                          <td style={{padding:"5px 10px",color:K.dim,fontSize:9}}>{t.agent||"ALGO"}</td>
-                          <td style={{padding:"5px 10px",color:K.tx,fontSize:9}}>{t.reason||"—"}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>}
+                :sorted2.map((t,i)=>{
+                  const col=t.pnl>=0?K.g:K.r;
+                  const ta=t as any;
+                  return(
+                    <div key={t.id||i} onClick={()=>setChartTrade({trade:t,position:null,agentSignals:t.agentSignals})} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 12px',borderBottom:'1px solid #06090F',borderLeft:`2px solid ${col}`,cursor:'pointer'}}>
+                      <div>
+                        <div style={{display:'flex',gap:6,alignItems:'center',marginBottom:3}}>
+                          <span style={{fontSize:12,fontWeight:700,color:col,fontFamily:'monospace'}}>{t.sym}</span>
+                          <span style={{fontSize:9,color:t.side==='LONG'||t.side==='BUY'?K.g:K.r,fontFamily:'monospace'}}>{t.side==='LONG'||t.side==='BUY'?'▲':'▼'} {t.side}</span>
+                        </div>
+                        {(ta.entry||0)>0&&(t.price||0)>0&&(
+                          <div style={{fontSize:9,color:K.dim,fontFamily:'monospace'}}>${f2(ta.entry)} → ${f2(t.price)}</div>
+                        )}
+                        <div style={{fontSize:8,color:'#1A3050',fontFamily:'monospace',marginTop:2}}>{t.agent||'KYMIA'} · {t.t}</div>
+                      </div>
+                      <div style={{textAlign:'right'}}>
+                        <div style={{fontSize:16,fontWeight:900,color:col,fontFamily:'monospace',textShadow:`0 0 8px ${col}`}}>{t.pnl>=0?'+$':'-$'}{Math.abs(t.pnl).toFixed(2)}</div>
+                        <div style={{fontSize:10,color:col,fontFamily:'monospace'}}>{(t.pct||0)>=0?'+':''}{(t.pct||0).toFixed(2)}%</div>
+                        {ta.size&&<div style={{fontSize:8,color:K.dim,fontFamily:'monospace',marginTop:2}}>Capital: ${ta.size?.toFixed(0)}</div>}
+                      </div>
+                    </div>
+                  );
+                })}
             </div>
           </div>
         );
