@@ -2494,7 +2494,13 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
     const loadState=async()=>{
       const{data}=await supabase.from('kymia_agent_state').select('*').eq('user_id',user.id).single();
       if(data){
-        setPort({equity:data.equity||CAP,cash:data.cash||CAP,pos:data.positions||{},peak:Math.max(data.equity||CAP,CAP)});
+        const existingPositions=data.positions||{};
+        // Mark ALL existing positions as already seen so cinematic doesn't fire on reload
+        Object.keys(existingPositions).forEach(sym=>{
+          prevPositionSyms.current.add(sym);
+          cinematicShown.current.add(sym);
+        });
+        setPort({equity:data.equity||CAP,cash:data.cash||CAP,pos:existingPositions,peak:Math.max(data.equity||CAP,CAP)});
         setRunning(data.running||false);
         if(data.swarm_config){setSwarmConfig(data.swarm_config);setHasShownOnboarding(true);}
       }
