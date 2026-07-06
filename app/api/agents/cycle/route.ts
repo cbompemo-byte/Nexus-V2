@@ -1,9 +1,8 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
 
-// ── Module-level caches (survive across requests on same function instance) ───
+// ── Module-level price cache (survives across requests on same instance) ───────
 let priceCache: { data: Record<string, any>; timestamp: number } = { data: {}, timestamp: 0 }
-let bollingerCache: Record<string, { data: any; timestamp: number }> = {}
 
 export async function GET() {
   console.log('[cycle] Starting agent cycle...')
@@ -23,7 +22,6 @@ export async function GET() {
       process.env.SUPABASE_SERVICE_ROLE_KEY
     )
 
-    // Test connection before doing any work
     const { error: connError } = await supabase
       .from('kymia_agent_state')
       .select('count')
@@ -68,12 +66,11 @@ export async function GET() {
   }
 }
 
-// ── Time filter ────────────────────────────────────────────────────────────────
+// ── Helpers ────────────────────────────────────────────────────────────────────
 function isGoodTradingHour() {
   return { allowed: true, session: 'ALWAYS ON', quality: 80 }
 }
 
-// ── CoinGecko ID mapping ───────────────────────────────────────────────────────
 function getCGId(sym: string): string {
   const map: Record<string, string> = {
     SOL: 'solana',
@@ -84,133 +81,16 @@ function getCGId(sym: string): string {
   return map[sym] || sym.toLowerCase()
 }
 
-// ── Bollinger Bands engine (CoinGecko market chart) ───────────────────────────
-async function calcBollinger(sym: string, period = 20): Promise<{
-  upper: number; middle: number; lower: number; current: number
-  zScore: number; signal: 'BUY' | 'SELL' | 'HOLD'; strength: number
-}> {
-  const HOLD = { signal: 'HOLD' as const, zScore: 0, strength: 0, current: 0, upper: 0, lower: 0, middle: 0 }
-
-  const nowBB = Date.now()
-  if (bollingerCache[sym] && nowBB - bollingerCache[sym].timestamp < 300000) {
-    console.log(`[bollinger] ${sym} Using cache`)
-    return bollingerCache[sym].data
+function calcEMA(closes: number[], period: number): number {
+  if (closes.length < period) return closes[closes.length - 1] ?? 0
+  const k = 2 / (period + 1)
+  let ema = closes.slice(0, period).reduce((a, b) => a + b, 0) / period
+  for (let i = period; i < closes.length; i++) {
+    ema = closes[i] * k + ema * (1 - k)
   }
-
-  try {
-    const res = await fetch(
-      `https://api.coingecko.com/api/v3/coins/${getCGId(sym)}/market_chart?vs_currency=usd&days=2&interval=hourly`,
-      { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(8000) }
-    )
-
-    if (!res.ok) {
-      console.log(`[bollinger] ${sym} CoinGecko error: ${res.status}`)
-      return HOLD
-    }
-
-    const data = await res.json()
-
-    if (!data.prices || !Array.isArray(data.prices)) {
-      console.log(`[bollinger] ${sym} invalid data format`)
-      return HOLD
-    }
-
-    const closes: number[] = data.prices.slice(-period).map((p: [number, number]) => p[1])
-
-    if (closes.length < period) {
-      console.log(`[bollinger] ${sym} not enough candles (${closes.length}/${period})`)
-      return HOLD
-    }
-
-    const sma = closes.reduce((a, b) => a + b, 0) / closes.length
-    const variance = closes.reduce((sum, p) => sum + Math.pow(p - sma, 2), 0) / closes.length
-    const stdDev = Math.sqrt(variance)
-
-    const upper = sma + stdDev * 2
-    const lower = sma - stdDev * 2
-    const current = closes[closes.length - 1]
-    const zScore = stdDev === 0 ? 0 : (current - sma) / stdDev
-
-    let signal: 'BUY' | 'SELL' | 'HOLD' = 'HOLD'
-    let strength = 0
-
-    if (zScore <= -1.2) {
-      signal = 'BUY'
-      strength = Math.min(100, Math.abs(zScore) * 30)
-    } else if (zScore >= 1.2) {
-      signal = 'SELL'
-      strength = Math.min(100, zScore * 30)
-    }
-
-    const result = { upper, middle: sma, lower, current, zScore, signal, strength }
-    bollingerCache[sym] = { data: result, timestamp: nowBB }
-    return result
-  } catch (e: any) {
-    console.log(`[bollinger] ${sym} failed: ${e.message}`)
-    return HOLD
-  }
+  return ema
 }
 
-// ── Volatility / ATR filter (CoinGecko OHLC) ──────────────────────────────────
-async function checkVolatility(sym: string): Promise<{ safe: boolean; atr: number }> {
-  try {
-    // CoinGecko OHLC — returns [timestamp, open, high, low, close]
-    const res = await fetch(
-      `https://api.coingecko.com/api/v3/coins/${getCGId(sym)}/ohlc?vs_currency=usd&days=1`,
-      { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(8000) }
-    )
-
-    if (!res.ok) {
-      console.log(`[volatility] ${sym} CoinGecko error: ${res.status}`)
-      return { safe: true, atr: 0 } // default safe so we don't block on API failure
-    }
-
-    const data = await res.json()
-
-    if (!Array.isArray(data) || data.length < 2) {
-      return { safe: true, atr: 0 }
-    }
-
-    const candles = data.slice(-15)
-    const trs: number[] = candles.slice(1).map((c: number[], i: number) => {
-      const h = c[2], l = c[3], pc = candles[i][4]
-      return Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc))
-    })
-
-    const atr = trs.reduce((a, b) => a + b, 0) / trs.length
-    const lastClose = candles[candles.length - 1][4]
-    const atrPct = lastClose > 0 ? (atr / lastClose) * 100 : 0
-
-    console.log(`[volatility] ${sym} ATR%: ${atrPct.toFixed(2)}%`)
-    return { safe: atrPct > 0.1 && atrPct < 5.0, atr }
-  } catch (e: any) {
-    console.log(`[volatility] ${sym} error: ${e.message}`)
-    return { safe: true, atr: 0.002 } // assume safe on error, don't block trade
-  }
-}
-
-// ── Kelly Criterion position sizing ───────────────────────────────────────────
-function kellySize(
-  equity: number,
-  winRate: number,
-  avgWinPct: number,
-  avgLossPct: number,
-  signalStrength: number,
-  leverage: number
-): number {
-  const cappedAvgLoss = Math.min(avgLossPct, 0.10) // cap at 10% to prevent Kelly collapse after big loss
-  const b = avgWinPct / cappedAvgLoss
-  const p = winRate
-  const q = 1 - p
-  const kelly = Math.max(0, (b * p - q) / b)
-  const safeKelly = kelly * 0.25
-  const strengthMultiplier = signalStrength / 100
-  const raw = equity * safeKelly * strengthMultiplier * leverage
-  const minimum = equity * 0.03 // always at least 3% of equity
-  return Math.max(minimum, Math.min(raw, equity * 0.15))
-}
-
-// ── RSI calculation ───────────────────────────────────────────────────────────
 function calcRSI(closes: number[], period = 14): number {
   if (closes.length < period + 1) return 50
   let gains = 0, losses = 0
@@ -222,30 +102,117 @@ function calcRSI(closes: number[], period = 14): number {
   const avgGain = gains / period
   const avgLoss = losses / period
   if (avgLoss === 0) return 100
-  const rs = avgGain / avgLoss
-  return 100 - 100 / (1 + rs)
+  return 100 - 100 / (1 + avgGain / avgLoss)
 }
 
-async function getSimpleRSI(sym: string): Promise<{ signal: 'BUY' | 'SELL' | 'HOLD'; rsi: number; strength: number }> {
+// ── EMA Trend Following strategy ───────────────────────────────────────────────
+async function findTradingOpportunity(
+  sym: string,
+  prices: Record<string, any>
+): Promise<{
+  signal: 'BUY' | 'SELL' | 'NONE'
+  confidence: number
+  reason: string
+  entry: number
+  sl: number
+  tp: number
+  size_pct: number
+}> {
+  const NONE = { signal: 'NONE' as const, confidence: 0, reason: '', entry: 0, sl: 0, tp: 0, size_pct: 0 }
+  const price = prices[sym]?.price
+  if (!price) return { ...NONE, reason: 'no price' }
+
   try {
     const res = await fetch(
-      `https://api.coingecko.com/api/v3/coins/${getCGId(sym)}/market_chart?vs_currency=usd&days=2&interval=hourly`,
+      `https://api.coingecko.com/api/v3/coins/${getCGId(sym)}/market_chart` +
+      `?vs_currency=usd&days=3&interval=hourly`,
       { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(8000) }
     )
-    if (!res.ok) return { signal: 'HOLD', rsi: 50, strength: 0 }
+    if (!res.ok) throw new Error(`CG ${res.status}`)
+
     const data = await res.json()
-    if (!data.prices || !Array.isArray(data.prices) || data.prices.length < 16) return { signal: 'HOLD', rsi: 50, strength: 0 }
-    const closes = data.prices.slice(-30).map((p: [number, number]) => p[1])
-    const rsi = calcRSI(closes)
-    if (rsi <= 30) return { signal: 'BUY', rsi, strength: Math.min(100, (30 - rsi) * 3) }
-    if (rsi >= 70) return { signal: 'SELL', rsi, strength: Math.min(100, (rsi - 70) * 3) }
-    return { signal: 'HOLD', rsi, strength: 0 }
-  } catch {
-    return { signal: 'HOLD', rsi: 50, strength: 0 }
+    const closes: number[] = data.prices?.slice(-50)?.map((p: any[]) => p[1]) || []
+    if (closes.length < 30) throw new Error('Not enough data')
+
+    const ema9  = calcEMA(closes, 9)
+    const ema21 = calcEMA(closes, 21)
+    const ema50 = calcEMA(closes, 50)
+    const rsi   = calcRSI(closes.slice(-15))
+    const last3 = closes.slice(-3)
+    const momentum = (last3[2] - last3[0]) / last3[0] * 100
+    const change24h = prices[sym]?.change || 0
+    const atr = closes.slice(1)
+      .map((c, i) => Math.abs(c - closes[i]))
+      .slice(-14)
+      .reduce((a, b) => a + b, 0) / 14
+
+    console.log(
+      `[strategy] ${sym}:` +
+      ` ema9=${ema9.toFixed(2)} ema21=${ema21.toFixed(2)} ema50=${ema50.toFixed(2)}` +
+      ` rsi=${rsi.toFixed(1)} mom=${momentum.toFixed(2)}% 24h=${change24h.toFixed(2)}% atr=${atr.toFixed(4)}`
+    )
+
+    // BULL: all EMAs aligned up + RSI ok + momentum
+    const bullTrend     = ema9 > ema21 && ema21 > ema50
+    const priceAboveEMA = price > ema9
+    const rsiBull       = rsi > 45 && rsi < 72
+    const posMom        = momentum > 0.1
+    const posDay        = change24h > -1
+
+    if (bullTrend && priceAboveEMA && rsiBull && posMom && posDay) {
+      const sl   = price - atr * 2.0
+      const tp   = price + atr * 4.0
+      const conf = Math.min(95,
+        60 +
+        (bullTrend     ? 15 : 0) +
+        (priceAboveEMA ? 10 : 0) +
+        (momentum > 0.3 ? 8 : 3) +
+        (change24h > 2  ? 7 : 0)
+      )
+      return {
+        signal: 'BUY', confidence: conf,
+        reason: `Bull EMA: ${ema9.toFixed(1)}>${ema21.toFixed(1)}>${ema50.toFixed(1)} RSI:${rsi.toFixed(0)} mom:${momentum.toFixed(2)}%`,
+        entry: price, sl, tp,
+        size_pct: conf >= 85 ? 0.12 : conf >= 75 ? 0.08 : 0.05,
+      }
+    }
+
+    // BEAR: all EMAs aligned down + RSI ok + momentum
+    const bearTrend      = ema9 < ema21 && ema21 < ema50
+    const priceBelowEMA  = price < ema9
+    const rsiBear        = rsi > 28 && rsi < 55
+    const negMom         = momentum < -0.1
+    const negDay         = change24h < 1
+
+    if (bearTrend && priceBelowEMA && rsiBear && negMom && negDay) {
+      const sl   = price + atr * 2.0
+      const tp   = price - atr * 4.0
+      const conf = Math.min(95,
+        60 +
+        (bearTrend      ? 15 : 0) +
+        (priceBelowEMA  ? 10 : 0) +
+        (momentum < -0.3 ? 8 : 3) +
+        (change24h < -2  ? 7 : 0)
+      )
+      return {
+        signal: 'SELL', confidence: conf,
+        reason: `Bear EMA: ${ema9.toFixed(1)}<${ema21.toFixed(1)}<${ema50.toFixed(1)} RSI:${rsi.toFixed(0)} mom:${momentum.toFixed(2)}%`,
+        entry: price, sl, tp,
+        size_pct: conf >= 85 ? 0.12 : conf >= 75 ? 0.08 : 0.05,
+      }
+    }
+
+    return {
+      ...NONE,
+      reason: `No trend: ema9=${ema9.toFixed(1)} ema21=${ema21.toFixed(1)} rsi=${rsi.toFixed(0)}`,
+    }
+  } catch (e: any) {
+    console.log(`[strategy] ${sym} error: ${e.message}`)
+    return { ...NONE, reason: e.message }
   }
 }
 
-// ── Price feed (CoinGecko — works on Vercel servers) ──────────────────────────
+// ── Price feed ─────────────────────────────────────────────────────────────────
 async function fetchRealPrices(): Promise<Record<string, any>> {
   const now = Date.now()
   if (now - priceCache.timestamp < 60000 && Object.keys(priceCache.data).length > 0) {
@@ -259,9 +226,7 @@ async function fetchRealPrices(): Promise<Record<string, any>> {
     const res = await fetch(
       'https://api.coingecko.com/api/v3/simple/price' +
         '?ids=solana,bitcoin,ethereum,jupiter-ag' +
-        '&vs_currencies=usd' +
-        '&include_24hr_change=true' +
-        '&include_24hr_vol=true',
+        '&vs_currencies=usd&include_24hr_change=true&include_24hr_vol=true',
       {
         headers: { Accept: 'application/json', 'User-Agent': 'KYMIA/1.0' },
         signal: AbortSignal.timeout(8000),
@@ -271,10 +236,7 @@ async function fetchRealPrices(): Promise<Record<string, any>> {
     if (res.ok) {
       const data = await res.json()
       const mapping: Record<string, string> = {
-        solana: 'SOL',
-        bitcoin: 'BTC',
-        ethereum: 'ETH',
-        'jupiter-ag': 'JUP',
+        solana: 'SOL', bitcoin: 'BTC', ethereum: 'ETH', 'jupiter-ag': 'JUP',
       }
       for (const [id, sym] of Object.entries(mapping)) {
         if (data[id]) {
@@ -306,7 +268,7 @@ async function fetchRealPrices(): Promise<Record<string, any>> {
   return prices
 }
 
-// ── SL/TP checker ─────────────────────────────────────────────────────────────
+// ── SL/TP checker ──────────────────────────────────────────────────────────────
 async function checkPositions(
   supabase: SupabaseClient,
   userId: string,
@@ -335,9 +297,7 @@ async function checkPositions(
 
     // Hard stop at -5% regardless of stored SL
     const hardStop = isLong ? pos.avg * 0.95 : pos.avg * 1.05
-    const effectiveSL = isLong
-      ? Math.max(sl, hardStop)  // higher of the two for LONG (closer to entry)
-      : Math.min(sl, hardStop)  // lower for SHORT
+    const effectiveSL = isLong ? Math.max(sl, hardStop) : Math.min(sl, hardStop)
 
     console.log(`[SL check] ${sym}: cur=${cur.toFixed(2)} sl=${effectiveSL.toFixed(2)} tp=${tp.toFixed(2)} hit=${isLong ? cur <= effectiveSL : cur >= effectiveSL}`)
 
@@ -356,7 +316,7 @@ async function checkPositions(
         exit: cur,
         pnl: parseFloat(pnl.toFixed(2)),
         pct: parseFloat(pct.toFixed(2)),
-        agent: 'BOLLINGER',
+        agent: pos.agent || 'EMA_TREND',
         opened_at: pos.openedAt,
         closed_at: new Date().toISOString(),
       })
@@ -396,15 +356,13 @@ async function runUserCycle(supabase: SupabaseClient, state: any) {
   })
 
   const timeCheck = isGoodTradingHour()
-  console.log('[cycle] Time check:', timeCheck)
-
   if (!timeCheck.allowed) {
-    console.log(`[cycle] Off-hours (${timeCheck.session}) — skipping cycle`)
+    console.log(`[cycle] Off-hours — skipping`)
     return
   }
 
   const prices = await fetchRealPrices()
-  console.log('[cycle] Prices loaded:', Object.entries(prices).map(([k,v]) => `${k}=$${(v as any).price}`).join(', '))
+  console.log('[cycle] Prices loaded:', Object.entries(prices).map(([k, v]) => `${k}=$${(v as any).price}`).join(', '))
 
   await checkPositions(supabase, userId, state, prices)
 
@@ -421,7 +379,7 @@ async function runUserCycle(supabase: SupabaseClient, state: any) {
   console.log(`[cycle] Open positions: ${openCount}/${maxPositions} — ${JSON.stringify(Object.keys(currentPositions))}`)
 
   if (openCount >= maxPositions) {
-    console.log(`[cycle] Max positions reached (${openCount}/${maxPositions}) — skipping entry scan`)
+    console.log(`[cycle] Max positions reached — skipping entry scan`)
     await supabase
       .from('kymia_agent_state')
       .update({ last_cycle: new Date().toISOString(), cycle_count: (state.cycle_count || 0) + 1 })
@@ -430,164 +388,76 @@ async function runUserCycle(supabase: SupabaseClient, state: any) {
   }
 
   const WATCHLIST = ['SOL', 'BTC', 'ETH', 'JUP']
-
-  const { data: tradeHistory } = await supabase
-    .from('kymia_trades')
-    .select('pnl,pct')
-    .eq('user_id', userId)
-    .limit(30)
-
-  const trades = tradeHistory || []
-  const wins = trades.filter((t: any) => t.pnl > 0)
-  const losses = trades.filter((t: any) => t.pnl < 0)
-  const winRate = trades.length > 5 ? wins.length / trades.length : 0.60
-  const avgWin = wins.length > 0
-    ? wins.reduce((s: number, t: any) => s + Math.abs(t.pct || 5), 0) / wins.length / 100
-    : 0.05
-  const avgLoss = losses.length > 0
-    ? losses.reduce((s: number, t: any) => s + Math.abs(t.pct || 2), 0) / losses.length / 100
-    : 0.02
-
-  console.log(`[cycle] Kelly inputs — winRate: ${(winRate*100).toFixed(0)}% avgWin: ${(avgWin*100).toFixed(2)}% avgLoss: ${(avgLoss*100).toFixed(2)}% trades: ${trades.length}`)
-
-  const currentEquity = freshState?.equity || state.equity || 10000
-  const currentCash = freshState?.cash || state.cash || 10000
-  const btcChange = prices['BTC']?.change || 0
-  console.log('[cycle] BTC change:', btcChange)
-
-  let tradeOpened = false
+  let tradedThisCycle = false
 
   for (const sym of WATCHLIST) {
+    if (tradedThisCycle) break
+
     if (currentPositions[sym]) {
-      console.log(`[cycle] ${sym} — already in position, skipping`)
+      console.log(`[cycle] ${sym} already open`)
       continue
     }
 
-    const priceData = prices[sym]
-    if (!priceData) {
-      console.log(`[cycle] ${sym} — no price data, skipping`)
+    if (prices[sym]?.fallback) {
+      console.log(`[cycle] ${sym} SKIP — fallback price`)
       continue
     }
-    if (priceData.fallback) {
-      console.log(`[cycle] ${sym} SKIP — fallback price ($${priceData.price}), not safe to trade`)
+
+    const opp = await findTradingOpportunity(sym, prices)
+
+    console.log(`[cycle] ${sym}: ${opp.signal} conf=${opp.confidence} reason="${opp.reason}"`)
+
+    if (opp.signal === 'NONE') continue
+    if (opp.confidence < 70) {
+      console.log(`[cycle] ${sym} conf too low (${opp.confidence} < 70)`)
       continue
     }
-    const price = priceData.price
 
-    try {
-      const bb = await calcBollinger(sym)
+    const currentEquity = freshState?.equity || state.equity || 10000
+    const currentCash   = freshState?.cash   || state.cash   || 10000
+    const rawSize = currentEquity * opp.size_pct * (config.leverage || 1)
+    const size = Math.min(rawSize, currentEquity * 0.20, currentCash * 0.80)
 
-      console.log(`[cycle] ${sym} Bollinger:`, {
-        signal: bb.signal,
-        zScore: bb.zScore.toFixed(2),
-        strength: bb.strength.toFixed(1),
-        current: bb.current.toFixed(2),
-        upper: bb.upper.toFixed(2),
-        lower: bb.lower.toFixed(2),
-      })
+    if (size < 50) {
+      console.log(`[cycle] ${sym} size too small: $${size.toFixed(0)}`)
+      continue
+    }
 
-      await supabase.from('kymia_signals').insert({
-        user_id: userId,
-        agent_id: 'bollinger',
-        sym,
-        signal: bb.signal,
-        confidence: Math.round(bb.strength),
-        reasoning:
-          `Z-Score: ${bb.zScore.toFixed(2)} | ` +
-          `Price: $${price.toFixed(2)} | ` +
-          `BB Lower: $${bb.lower.toFixed(2)} | ` +
-          `BB Upper: $${bb.upper.toFixed(2)} | ` +
-          `Session: ${timeCheck.session}`,
-      })
+    const qty = size / opp.entry
 
-      let finalSignal = bb.signal
-      let finalStrength = bb.strength
-      let signalSource = 'BOLLINGER'
-
-      if (bb.signal === 'HOLD') {
-        console.log(`[cycle] ${sym} BB HOLD — z-score ${bb.zScore.toFixed(2)} not extreme enough (need ≤-1.2 or ≥+1.2), trying RSI fallback...`)
-        const rsiResult = await getSimpleRSI(sym)
-        console.log(`[cycle] ${sym} RSI: ${rsiResult.rsi.toFixed(1)} → ${rsiResult.signal} (strength ${rsiResult.strength.toFixed(1)})`)
-        if (rsiResult.signal === 'HOLD') {
-          continue
-        }
-        finalSignal = rsiResult.signal
-        finalStrength = rsiResult.strength
-        signalSource = 'RSI'
-      }
-
-      const vol = await checkVolatility(sym)
-      console.log(`[cycle] ${sym} volatility:`, { safe: vol.safe, atr: vol.atr.toFixed(4) })
-
-      if (!vol.safe) {
-        console.log(`[cycle] ${sym} SKIP — volatility unsafe (ATR out of 0.3–4.0% range)`)
-        continue
-      }
-
-      if (finalSignal === 'BUY' && btcChange < -2) {
-        console.log(`[cycle] ${sym} SKIP — BUY blocked by BTC macro (${btcChange.toFixed(2)}% < -2%)`)
-        continue
-      }
-      if (finalSignal === 'SELL' && btcChange > 2) {
-        console.log(`[cycle] ${sym} SKIP — SELL blocked by BTC macro (${btcChange.toFixed(2)}% > +2%)`)
-        continue
-      }
-
-      const size = kellySize(currentEquity, winRate, avgWin, avgLoss, finalStrength, config.leverage || 1)
-      console.log(`[cycle] ${sym} Kelly size: $${size.toFixed(2)} (equity: $${currentEquity}, cash: $${currentCash})`)
-
-      if (size < 10) {
-        console.log(`[cycle] ${sym} SKIP — Kelly size $${size.toFixed(2)} too small (< $10)`)
-        continue
-      }
-      if (size > currentCash * 0.95) {
-        console.log(`[cycle] ${sym} SKIP — Kelly size $${size.toFixed(2)} exceeds 95% of cash ($${currentCash})`)
-        continue
-      }
-
-      const slDistance = vol.atr * 1.5
-      const tpDistance = vol.atr * 3.5
-      const sl = finalSignal === 'BUY' ? price - slDistance : price + slDistance
-      const tp = finalSignal === 'BUY' ? price + tpDistance : price - tpDistance
-
-      const qty = size / price
-      const newPositions = {
-        ...currentPositions,
-        [sym]: {
-          avg: price,
-          qty: parseFloat(qty.toFixed(6)),
-          side: finalSignal === 'BUY' ? 'LONG' : 'SHORT',
-          size: parseFloat(size.toFixed(2)),
-          sl: parseFloat(sl.toFixed(4)),
-          tp: parseFloat(tp.toFixed(4)),
-          openedAt: new Date().toISOString(),
-          conf: Math.round(finalStrength),
-          zScore: parseFloat(bb.zScore.toFixed(3)),
-          signal: signalSource,
-          session: timeCheck.session,
+    await supabase
+      .from('kymia_agent_state')
+      .update({
+        positions: {
+          ...currentPositions,
+          [sym]: {
+            avg:      opp.entry,
+            qty:      parseFloat(qty.toFixed(6)),
+            side:     opp.signal === 'BUY' ? 'LONG' : 'SHORT',
+            size:     parseFloat(size.toFixed(2)),
+            sl:       parseFloat(opp.sl.toFixed(4)),
+            tp:       parseFloat(opp.tp.toFixed(4)),
+            openedAt: new Date().toISOString(),
+            conf:     opp.confidence,
+            agent:    'EMA_TREND',
+            reason:   opp.reason,
+          },
         },
-      }
+        cash:       parseFloat((currentCash - size).toFixed(2)),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('user_id', userId)
 
-      await supabase
-        .from('kymia_agent_state')
-        .update({ positions: newPositions, cash: parseFloat((currentCash - size).toFixed(2)) })
-        .eq('user_id', userId)
+    console.log(
+      `[KYMIA] OPENED: ${sym} ${opp.signal} @ $${opp.entry.toFixed(2)}` +
+      ` size=$${size.toFixed(0)} sl=$${opp.sl.toFixed(2)} tp=$${opp.tp.toFixed(2)} conf=${opp.confidence}%`
+    )
 
-      console.log(
-        `[cycle] OPENED: ${sym} ${finalSignal} @ $${price.toFixed(2)} | ` +
-        `Signal: ${signalSource} | Size: $${size.toFixed(0)} | ` +
-        `Z-Score: ${bb.zScore.toFixed(2)} | SL: $${sl.toFixed(2)} | TP: $${tp.toFixed(2)}`
-      )
-
-      tradeOpened = true
-      break // 1 trade per cycle max
-    } catch (e) {
-      console.error(`[cycle] Error processing ${sym}:`, e)
-    }
+    tradedThisCycle = true
   }
 
-  if (!tradeOpened) {
-    console.log('[cycle] No trade opened this cycle — all signals HOLD or filtered')
+  if (!tradedThisCycle) {
+    console.log('[cycle] No trade opened this cycle')
   }
 
   await supabase
