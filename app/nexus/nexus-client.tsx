@@ -2281,7 +2281,8 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   const [focusMode,setFocusMode]=useState(false);
   const [flashingAgent,setFlashingAgent]=useState<string|null>(null);
   const [cinematicTrade,setCinematicTrade]=useState<{sym:string,pos:any}|null>(null);
-  const prevPositionsRef=useRef<Record<string,any>>({});
+  const prevPositionSyms=useRef<Set<string>>(new Set());
+  const cinematicShown=useRef<Set<string>>(new Set());
   const [completedMissions,setCompletedMissions]=useState<number[]>([]);
   const [missionCelebration,setMissionCelebration]=useState<typeof MISSIONS[0]|null>(null);
   const [signalCount,setSignalCount]=useState(0);
@@ -2561,12 +2562,28 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   // ── Cinematic chart: detect new positions from server ────────────────────────
   useEffect(()=>{
     const currentSyms=Object.keys(port.pos);
-    const prevSyms=Object.keys(prevPositionsRef.current);
-    const newSym=currentSyms.find(sym=>!prevSyms.includes(sym));
-    if(newSym&&port.pos[newSym]&&!cinematicTrade){
-      setCinematicTrade({sym:newSym,pos:port.pos[newSym]});
-    }
-    prevPositionsRef.current={...port.pos};
+    // Trigger cinematic for genuinely new positions only
+    currentSyms.forEach(sym=>{
+      if(
+        !prevPositionSyms.current.has(sym)&&
+        !cinematicShown.current.has(sym)&&
+        (port.pos[sym] as any)?.avg>0
+      ){
+        cinematicShown.current.add(sym);
+        setTimeout(()=>{
+          setCinematicTrade({sym,pos:port.pos[sym]});
+        },500);
+      }
+    });
+    // Add current syms to prev tracker (never remove during session)
+    currentSyms.forEach(sym=>prevPositionSyms.current.add(sym));
+    // Clear cinematic cache when position closes so re-entry on same sym works
+    prevPositionSyms.current.forEach(sym=>{
+      if(!currentSyms.includes(sym)){
+        prevPositionSyms.current.delete(sym);
+        cinematicShown.current.delete(sym);
+      }
+    });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[port.pos]);
 
