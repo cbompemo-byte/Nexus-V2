@@ -2332,6 +2332,56 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   const [missedOpps,setMissedOpps]=useState<MissedOpportunity[]>([]);
   const [layer3Aggressive,setLayer3Aggressive]=useState(false);
 
+  // ── Scanning messages ─────────────────────────────────────────────────
+  const SCANNING_MESSAGES=[
+    '◈ Scanning SOL/USD orderbook depth...',
+    '◈ Monitoring BTC whale wallets...',
+    '◈ Checking EMA9/21/50 alignment...',
+    '◈ Evaluating liquidity vectors...',
+    '◈ Analyzing funding rates on Deribit...',
+    '◈ Watching for institutional momentum...',
+    '◈ Scanning top 50 for breakouts...',
+    '◈ Checking Fear & Greed index...',
+    '◈ Monitoring new Solana listings...',
+    '◈ Calculating portfolio heat...',
+    '◈ Verifying BTC correlation...',
+    '◈ LEVIATHAN scanning whale movements...',
+    '◈ AEGIS running risk matrix...',
+    '◈ ORACLE seeking alpha opportunities...',
+    '◈ Checking liquidation cascades...',
+    '◈ Evaluating EMA trend strength...',
+    '◈ Monitoring smart money flows...',
+  ];
+  const [scanMsg,setScanMsg]=useState(SCANNING_MESSAGES[0]);
+  const scanIdx=useRef(0);
+  useEffect(()=>{
+    if(!running)return;
+    const iv=setInterval(()=>{
+      scanIdx.current=(scanIdx.current+1)%SCANNING_MESSAGES.length;
+      setScanMsg(SCANNING_MESSAGES[scanIdx.current]);
+    },2500);
+    return()=>clearInterval(iv);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[running]);
+
+  // ── Market pressure gauge ─────────────────────────────────────────────
+  const [pressureScore,setPressureScore]=useState(50);
+  const [pressureDir,setPressureDir]=useState<'BULL'|'BEAR'|'NEUTRAL'>('NEUTRAL');
+  useEffect(()=>{
+    if(!running)return;
+    const iv=setInterval(()=>{
+      const sigs=Object.values(agSt);
+      if(!sigs.length)return;
+      const bulls=sigs.filter((s:any)=>s?.sig==='BUY').length;
+      const bears=sigs.filter((s:any)=>s?.sig==='SELL').length;
+      const score=Math.round(50+(bulls-bears)/sigs.length*50);
+      const clamped=Math.max(0,Math.min(100,score));
+      setPressureScore(clamped);
+      setPressureDir(clamped>60?'BULL':clamped<40?'BEAR':'NEUTRAL');
+    },3000);
+    return()=>clearInterval(iv);
+  },[running,agSt]);
+
   // Keep completedMissions ref in sync for use inside effects
   useEffect(()=>{completedMissionsRef.current=completedMissions;},[completedMissions]);
 
@@ -3942,9 +3992,34 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
                   </div>
                 );
               })()}
+              {running&&(()=>{
+                const pCol=pressureDir==='BULL'?K.g:pressureDir==='BEAR'?K.r:K.dim;
+                return(
+                  <div style={{marginBottom:10,padding:'8px 12px',background:'rgba(4,6,13,0.9)',border:'1px solid #0A1D33',borderRadius:6}}>
+                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+                      <span style={{fontSize:8,color:K.dim,fontFamily:'monospace',letterSpacing:'.12em'}}>◈ MARKET PRESSURE</span>
+                      <span style={{fontSize:9,color:pCol,fontFamily:'monospace',fontWeight:700}}>{pressureDir} {pressureScore}</span>
+                    </div>
+                    <div style={{height:4,background:'rgba(255,255,255,0.05)',borderRadius:2,overflow:'hidden'}}>
+                      <div style={{height:'100%',width:`${pressureScore}%`,background:`linear-gradient(90deg,${K.r},${K.dim} 40%,${K.g})`,borderRadius:2,transition:'width 0.8s ease'}}/>
+                    </div>
+                    <div style={{display:'flex',justifyContent:'space-between',marginTop:4}}>
+                      <span style={{fontSize:7,color:K.r,fontFamily:'monospace'}}>BEAR</span>
+                      <span style={{fontSize:7,color:K.dim,fontFamily:'monospace'}}>NEUTRAL</span>
+                      <span style={{fontSize:7,color:K.g,fontFamily:'monospace'}}>BULL</span>
+                    </div>
+                  </div>
+                );
+              })()}
               <div style={{fontSize:8,color:K.dim,marginBottom:6,letterSpacing:".12em"}}>◉ POSITIONS</div>
               {Object.keys(port.pos).length===0
-                ?<div style={{textAlign:"center",color:"#0A1E30",padding:"12px 0",fontSize:9}}>No open positions</div>
+                ?<div>
+                  {running&&<div style={{padding:'10px 14px',background:'rgba(0,242,254,0.04)',border:'1px solid rgba(0,242,254,0.1)',borderRadius:6,display:'flex',alignItems:'center',gap:10}}>
+                    <div style={{width:6,height:6,borderRadius:'50%',background:'#00F2FE',boxShadow:'0 0 8px #00F2FE',animation:'pulse 1s infinite',flexShrink:0}}/>
+                    <span style={{fontSize:11,color:'#00F2FE',fontFamily:'monospace'}}>{scanMsg}</span>
+                  </div>}
+                  {!running&&<div style={{textAlign:"center",color:"#0A1E30",padding:"12px 0",fontSize:9}}>No open positions</div>}
+                </div>
                 :Object.entries(port.pos).map(([sym,pos])=>{
                   const p=pos as any;
                   const cur=prices[sym]?.price||pos.avg;
