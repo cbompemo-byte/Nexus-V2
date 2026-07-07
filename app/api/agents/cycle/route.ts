@@ -202,6 +202,14 @@ async function findTradingOpportunity(
       }
     }
 
+    console.log(`[${sym}] NO SIGNAL:`, {
+      bullTrend: ema9 > ema21 && ema21 > ema50,
+      bearTrend: ema9 < ema21 && ema21 < ema50,
+      priceVsEMA9: ((price - ema9) / ema9 * 100).toFixed(2) + '%',
+      rsi: rsi.toFixed(1),
+      momentum: momentum.toFixed(3),
+      change24h: change24h.toFixed(2),
+    })
     return {
       ...NONE,
       reason: `No trend: ema9=${ema9.toFixed(1)} ema21=${ema21.toFixed(1)} rsi=${rsi.toFixed(0)}`,
@@ -233,8 +241,25 @@ async function fetchRealPrices(): Promise<Record<string, any>> {
       }
     )
 
-    if (res.ok) {
-      const data = await res.json()
+    let priceRes = res
+    if (res.status === 429) {
+      console.log('[prices] CoinGecko rate limited — waiting 30s')
+      await new Promise(r => setTimeout(r, 30000))
+      const retry = await fetch(
+        'https://api.coingecko.com/api/v3/simple/price' +
+          '?ids=solana,bitcoin,ethereum,jupiter-ag' +
+          '&vs_currencies=usd&include_24hr_change=true&include_24hr_vol=true',
+        {
+          headers: { Accept: 'application/json', 'User-Agent': 'KYMIA/1.0' },
+          signal: AbortSignal.timeout(8000),
+        }
+      )
+      console.log('[prices] CoinGecko retry status:', retry.status)
+      priceRes = retry
+    }
+
+    if (priceRes.ok) {
+      const data = await priceRes.json()
       const mapping: Record<string, string> = {
         solana: 'SOL', bitcoin: 'BTC', ethereum: 'ETH', 'jupiter-ag': 'JUP',
       }
@@ -249,7 +274,7 @@ async function fetchRealPrices(): Promise<Record<string, any>> {
         }
       }
     } else {
-      console.log('[prices] CoinGecko error:', res.status)
+      console.log('[prices] CoinGecko error:', priceRes.status)
     }
   } catch (e: any) {
     console.log('[prices] CoinGecko failed:', e.message)
@@ -389,6 +414,7 @@ async function runUserCycle(supabase: SupabaseClient, state: any) {
 
   const WATCHLIST = ['SOL', 'BTC', 'ETH', 'JUP']
   let tradedThisCycle = false
+  let anySignalFound = false
 
   for (const sym of WATCHLIST) {
     if (tradedThisCycle) break
@@ -408,8 +434,9 @@ async function runUserCycle(supabase: SupabaseClient, state: any) {
     console.log(`[cycle] ${sym}: ${opp.signal} conf=${opp.confidence} reason="${opp.reason}"`)
 
     if (opp.signal === 'NONE') continue
-    if (opp.confidence < 70) {
-      console.log(`[cycle] ${sym} conf too low (${opp.confidence} < 70)`)
+    anySignalFound = true
+    if (opp.confidence < 65) {
+      console.log(`[cycle] ${sym} conf too low (${opp.confidence} < 65)`)
       continue
     }
 
@@ -457,7 +484,11 @@ async function runUserCycle(supabase: SupabaseClient, state: any) {
   }
 
   if (!tradedThisCycle) {
-    console.log('[cycle] No trade opened this cycle')
+    if (!anySignalFound) {
+      console.log('[cycle] No opportunities found — market ranging or APIs limited')
+    } else {
+      console.log('[cycle] No trade opened this cycle')
+    }
   }
 
   await supabase
