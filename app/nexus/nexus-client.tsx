@@ -2611,7 +2611,8 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
       catch(e){console.log('Cycle error:',e);}
     };
     runCycle();
-    const iv=setInterval(runCycle,60000);
+    const CYCLE_INTERVAL = 45000 // 45 seconds
+    const iv=setInterval(runCycle,CYCLE_INTERVAL);
     return()=>clearInterval(iv);
   },[user,running]);
 
