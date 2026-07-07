@@ -1,8 +1,15 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
 
-// ── Module-level price cache (survives across requests on same instance) ───────
+// ── Module-level caches (survive across requests on the same instance) ─────────
 let priceCache: { data: Record<string, any>; timestamp: number } = { data: {}, timestamp: 0 }
+
+// Per-symbol chart cache so CoinGecko is hit at most once per 5 min per symbol
+const cgCache = new Map<string, { data: number[]; timestamp: number }>()
+const CACHE_TTL = 300_000 // 5 minutes
+
+// Tracks which rotation slice to analyze this cycle
+const cycleCountRef = { current: 0 }
 
 export async function GET() {
   console.log('[cycle] Starting agent cycle...')
@@ -159,17 +166,30 @@ async function findTradingOpportunity(
   if (!price) return { ...NONE, reason: 'no price' }
 
   try {
-    const res = await fetch(
-      `https://api.coingecko.com/api/v3/coins/${getCGId(sym)}/market_chart` +
-      `?vs_currency=usd&days=3&interval=hourly`,
-      { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(8000) }
-    )
-    if (!res.ok) throw new Error(`CG ${res.status}`)
+    // ── Chart data: serve from cache when fresh, else fetch ──────────────────
+    let closes: number[]
+    const cached = cgCache.get(sym)
 
-    const data = await res.json()
-    const closes: number[] = data.prices?.slice(-50)?.map((p: any[]) => p[1]) || []
-    if (closes.length < 30) throw new Error('Not enough data')
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+      console.log(`[${sym}] Using cached chart data (age ${Math.round((Date.now() - cached.timestamp) / 1000)}s)`)
+      closes = cached.data
+    } else {
+      const res = await fetch(
+        `https://api.coingecko.com/api/v3/coins/${getCGId(sym)}/market_chart` +
+        `?vs_currency=usd&days=3&interval=hourly`,
+        { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(8000) }
+      )
+      if (!res.ok) throw new Error(`CG ${res.status}`)
 
+      const data = await res.json()
+      closes = data.prices?.slice(-50)?.map((p: any[]) => p[1]) || []
+      if (closes.length < 30) throw new Error('Not enough data')
+
+      cgCache.set(sym, { data: closes, timestamp: Date.now() })
+      console.log(`[${sym}] Fetched fresh chart data (${closes.length} candles)`)
+    }
+
+    // ── Indicators ───────────────────────────────────────────────────────────
     const ema9  = calcEMA(closes, 9)
     const ema21 = calcEMA(closes, 21)
     const ema50 = calcEMA(closes, 50)
@@ -207,7 +227,7 @@ async function findTradingOpportunity(
           (momentum > 0.3 ? 8 : 3) +
           (change24h > 2  ? 7 : 0)
         )
-        console.log(`[${sym}] ATR=${atr.toFixed(2)} SL_dist=${(price-sl).toFixed(2)} (${((price-sl)/price*100).toFixed(2)}%) TP_dist=${(tp-price).toFixed(2)} (${((tp-price)/price*100).toFixed(2)}%)`)
+        console.log(`[${sym}] ATR=${atr.toFixed(2)} SL_dist=${(price - sl).toFixed(2)} (${((price - sl) / price * 100).toFixed(2)}%) TP_dist=${(tp - price).toFixed(2)} (${((tp - price) / price * 100).toFixed(2)}%)`)
         return {
           signal: 'BUY', confidence: conf,
           reason: `TREND Bull EMA ADX:${adx.toFixed(0)} RSI:${rsi.toFixed(0)}`,
@@ -224,7 +244,7 @@ async function findTradingOpportunity(
           (momentum < -0.3 ? 8 : 3) +
           (change24h < -2  ? 7 : 0)
         )
-        console.log(`[${sym}] ATR=${atr.toFixed(2)} SL_dist=${(sl-price).toFixed(2)} (${((sl-price)/price*100).toFixed(2)}%) TP_dist=${(price-tp).toFixed(2)} (${((price-tp)/price*100).toFixed(2)}%)`)
+        console.log(`[${sym}] ATR=${atr.toFixed(2)} SL_dist=${(sl - price).toFixed(2)} (${((sl - price) / price * 100).toFixed(2)}%) TP_dist=${(price - tp).toFixed(2)} (${((price - tp) / price * 100).toFixed(2)}%)`)
         return {
           signal: 'SELL', confidence: conf,
           reason: `TREND Bear EMA ADX:${adx.toFixed(0)} RSI:${rsi.toFixed(0)}`,
@@ -236,12 +256,11 @@ async function findTradingOpportunity(
 
     // ── RANGING MARKET → RSI mean reversion ──────────────────────────────────
     if (isRanging) {
-      // Oversold in range → BUY
       if (rsi < 32 && momentum > -0.5) {
-        const sl   = price * 0.985  // -1.5%
-        const tp   = price * 1.035  // +3.5%
+        const sl   = price * 0.985
+        const tp   = price * 1.035
         const conf = Math.min(90, 60 + (rsi < 25 ? 20 : 10) + (momentum > 0 ? 5 : 0))
-        console.log(`[${sym}] ATR=${atr.toFixed(2)} SL_dist=${(price-sl).toFixed(2)} (1.50%) TP_dist=${(tp-price).toFixed(2)} (3.50%)`)
+        console.log(`[${sym}] ATR=${atr.toFixed(2)} SL_dist=${(price - sl).toFixed(2)} (1.50%) TP_dist=${(tp - price).toFixed(2)} (3.50%)`)
         return {
           signal: 'BUY', confidence: conf,
           reason: `RANGE Oversold RSI:${rsi.toFixed(0)} ADX:${adx.toFixed(0)}`,
@@ -250,12 +269,11 @@ async function findTradingOpportunity(
         }
       }
 
-      // Overbought in range → SELL
       if (rsi > 68 && momentum < 0.5) {
-        const sl   = price * 1.015  // +1.5%
-        const tp   = price * 0.965  // -3.5%
+        const sl   = price * 1.015
+        const tp   = price * 0.965
         const conf = Math.min(90, 60 + (rsi > 75 ? 20 : 10) + (momentum < 0 ? 5 : 0))
-        console.log(`[${sym}] ATR=${atr.toFixed(2)} SL_dist=${(sl-price).toFixed(2)} (1.50%) TP_dist=${(price-tp).toFixed(2)} (3.50%)`)
+        console.log(`[${sym}] ATR=${atr.toFixed(2)} SL_dist=${(sl - price).toFixed(2)} (1.50%) TP_dist=${(price - tp).toFixed(2)} (3.50%)`)
         return {
           signal: 'SELL', confidence: conf,
           reason: `RANGE Overbought RSI:${rsi.toFixed(0)} ADX:${adx.toFixed(0)}`,
@@ -273,10 +291,7 @@ async function findTradingOpportunity(
       return {
         signal: 'BUY', confidence: 72,
         reason: `MIXED Bull RSI:${rsi.toFixed(0)} mom:${momentum.toFixed(2)}%`,
-        entry: price,
-        sl: price * 0.982,
-        tp: price * 1.045,
-        size_pct: 0.05,
+        entry: price, sl: price * 0.982, tp: price * 1.045, size_pct: 0.05,
       }
     }
 
@@ -284,21 +299,18 @@ async function findTradingOpportunity(
       return {
         signal: 'SELL', confidence: 72,
         reason: `MIXED Bear RSI:${rsi.toFixed(0)} mom:${momentum.toFixed(2)}%`,
-        entry: price,
-        sl: price * 1.018,
-        tp: price * 0.955,
-        size_pct: 0.05,
+        entry: price, sl: price * 1.018, tp: price * 0.955, size_pct: 0.05,
       }
     }
 
     console.log(`[${sym}] NO SIGNAL:`, {
-      bullTrend: ema9 > ema21 && ema21 > ema50,
-      bearTrend: ema9 < ema21 && ema21 < ema50,
+      bullTrend:  ema9 > ema21 && ema21 > ema50,
+      bearTrend:  ema9 < ema21 && ema21 < ema50,
       priceVsEMA9: ((price - ema9) / ema9 * 100).toFixed(2) + '%',
-      rsi: rsi.toFixed(1),
-      momentum: momentum.toFixed(3),
-      change24h: change24h.toFixed(2),
-      adx: adx.toFixed(1),
+      rsi:        rsi.toFixed(1),
+      momentum:   momentum.toFixed(3),
+      change24h:  change24h.toFixed(2),
+      adx:        adx.toFixed(1),
     })
     return {
       ...NONE,
@@ -336,7 +348,7 @@ async function fetchRealPrices(): Promise<Record<string, any>> {
   }
 
   const prices: Record<string, any> = {}
-  const url = `https://api.coingecko.com/api/v3/simple/price?ids=${CG_IDS}&vs_currencies=usd&include_24hr_change=true&include_24hr_vol=true`
+  const url  = `https://api.coingecko.com/api/v3/simple/price?ids=${CG_IDS}&vs_currencies=usd&include_24hr_change=true&include_24hr_vol=true`
   const opts = { headers: { Accept: 'application/json', 'User-Agent': 'KYMIA/1.0' }, signal: AbortSignal.timeout(8000) }
 
   try {
@@ -372,10 +384,10 @@ async function fetchRealPrices(): Promise<Record<string, any>> {
 
   if (Object.keys(prices).length === 0) {
     console.log('[prices] CoinGecko unavailable — using fallback prices (trades blocked)')
-    prices['SOL']  = { price: 80,    change: 0, volume: 0, fallback: true }
-    prices['BTC']  = { price: 62000, change: 0, volume: 0, fallback: true }
-    prices['ETH']  = { price: 1760,  change: 0, volume: 0, fallback: true }
-    prices['JUP']  = { price: 1.1,   change: 0, volume: 0, fallback: true }
+    prices['SOL'] = { price: 80,    change: 0, volume: 0, fallback: true }
+    prices['BTC'] = { price: 62000, change: 0, volume: 0, fallback: true }
+    prices['ETH'] = { price: 1760,  change: 0, volume: 0, fallback: true }
+    prices['JUP'] = { price: 1.1,   change: 0, volume: 0, fallback: true }
   } else {
     priceCache = { data: prices, timestamp: now }
   }
@@ -410,7 +422,6 @@ async function checkPositions(
     const sl: number = pos.sl || (isLong ? pos.avg * 0.982 : pos.avg * 1.018)
     const tp: number = pos.tp || (isLong ? pos.avg * 1.055 : pos.avg * 0.95)
 
-    // Hard stop at -5% regardless of stored SL
     const hardStop    = isLong ? pos.avg * 0.95 : pos.avg * 1.05
     const effectiveSL = isLong ? Math.max(sl, hardStop) : Math.min(sl, hardStop)
 
@@ -456,14 +467,18 @@ async function checkPositions(
     .eq('user_id', userId)
 }
 
-// ── Main cycle ─────────────────────────────────────────────────────────────────
-const WATCHLIST_TIER_A = ['SOL', 'BTC', 'ETH', 'BNB', 'XRP', 'AVAX', 'LINK', 'JUP']
-const WATCHLIST_TIER_B = ['WIF', 'BONK', 'JTO', 'PYTH', 'RAY']
-const WATCHLIST = [...WATCHLIST_TIER_A, ...WATCHLIST_TIER_B]
+// ── Watchlists ─────────────────────────────────────────────────────────────────
+const TIER_A = ['SOL', 'BTC', 'ETH', 'BNB', 'XRP', 'AVAX', 'LINK', 'JUP']
+const TIER_B = ['WIF', 'BONK', 'JTO', 'PYTH', 'RAY']
 
+// ── Main cycle ─────────────────────────────────────────────────────────────────
 async function runUserCycle(supabase: SupabaseClient, state: any) {
   const userId = state.user_id
   const config = state.swarm_config || { profile: 'balanced', leverage: 1 }
+
+  // Increment rotation counter
+  cycleCountRef.current++
+  const cycleNum = cycleCountRef.current
 
   console.log('[cycle] User state:', {
     running:       state.running,
@@ -471,7 +486,7 @@ async function runUserCycle(supabase: SupabaseClient, state: any) {
     equity:        state.equity,
     cash:          state.cash,
     profile:       config.profile,
-    leverage:      config.leverage,
+    cycleNum,
   })
 
   const timeCheck = isGoodTradingHour()
@@ -506,29 +521,47 @@ async function runUserCycle(supabase: SupabaseClient, state: any) {
     return
   }
 
-  let tradedThisCycle     = 0
-  const MAX_TRADES_PER_CYCLE = 2
-  let anySignalFound      = false
+  // Pair rotation: 3-4 symbols per cycle to stay well under CoinGecko rate limits
+  // Cycle N%5===0 → Tier B  |  N%2===0 → Tier A[4-7]  |  else → Tier A[0-3]
+  let pairsToAnalyze: string[]
+  if (cycleNum % 5 === 0) {
+    pairsToAnalyze = TIER_B
+  } else if (cycleNum % 2 === 0) {
+    pairsToAnalyze = TIER_A.slice(4, 8)
+  } else {
+    pairsToAnalyze = TIER_A.slice(0, 4)
+  }
 
-  for (const sym of WATCHLIST) {
+  console.log(`[cycle] Analyzing (cycle #${cycleNum}): ${pairsToAnalyze.join(', ')}`)
+
+  let tradedThisCycle        = 0
+  const MAX_TRADES_PER_CYCLE = 2
+  const signalResults: Record<string, { signal: string; confidence: number }> = {}
+
+  for (const sym of pairsToAnalyze) {
     if (tradedThisCycle >= MAX_TRADES_PER_CYCLE) break
+
+    // 500ms between calls to avoid burst rate-limiting
+    await new Promise(r => setTimeout(r, 500))
 
     if (currentPositions[sym]) {
       console.log(`[cycle] ${sym} already open`)
+      signalResults[sym] = { signal: 'OPEN', confidence: 0 }
       continue
     }
 
     if (prices[sym]?.fallback) {
       console.log(`[cycle] ${sym} SKIP — fallback price`)
+      signalResults[sym] = { signal: 'SKIP', confidence: 0 }
       continue
     }
 
     const opp = await findTradingOpportunity(sym, prices)
+    signalResults[sym] = { signal: opp.signal, confidence: opp.confidence }
 
     console.log(`[cycle] ${sym}: ${opp.signal} conf=${opp.confidence} reason="${opp.reason}"`)
 
     if (opp.signal === 'NONE') continue
-    anySignalFound = true
     if (opp.confidence < 65) {
       console.log(`[cycle] ${sym} conf too low (${opp.confidence} < 65)`)
       continue
@@ -577,14 +610,18 @@ async function runUserCycle(supabase: SupabaseClient, state: any) {
     tradedThisCycle++
   }
 
-  if (tradedThisCycle === 0) {
-    if (!anySignalFound) {
+  // Cycle summary
+  const signals = Object.entries(signalResults)
+    .map(([sym, r]) => `${sym}:${r.signal}(${r.confidence}%)`)
+    .join(' ')
+  console.log(`[cycle] Signals: ${signals || 'none'}`)
+  console.log(`[cycle] Trades opened: ${tradedThisCycle}`)
+
+  if (tradedThisCycle === 0 && Object.keys(signalResults).length > 0) {
+    const hasSignal = Object.values(signalResults).some(r => r.signal !== 'NONE' && r.signal !== 'OPEN' && r.signal !== 'SKIP')
+    if (!hasSignal) {
       console.log('[cycle] No opportunities found — market ranging or APIs limited')
-    } else {
-      console.log('[cycle] No trade opened this cycle')
     }
-  } else {
-    console.log(`[cycle] Opened ${tradedThisCycle} trade(s) this cycle`)
   }
 
   await supabase
