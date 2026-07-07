@@ -146,11 +146,21 @@ async function findTradingOpportunity(
       .slice(-14)
       .reduce((a, b) => a + b, 0) / 14
 
+    // Enforce minimum SL/TP distances so tight ATR on hourly candles
+    // doesn't produce stops < 1.5% away (e.g. BTC at $105K with hourly ATR ~$328)
+    const minSlPct = 0.015 // minimum 1.5% SL
+    const atrSlDistance = atr * 2.0
+    const slDistance = Math.max(atrSlDistance, price * minSlPct)
+
+    // TP: minimum 1:2 ratio vs actual SL distance
+    const tpDistance = Math.max(atr * 4.0, slDistance * 2.0)
+
     console.log(
       `[strategy] ${sym}:` +
       ` ema9=${ema9.toFixed(2)} ema21=${ema21.toFixed(2)} ema50=${ema50.toFixed(2)}` +
       ` rsi=${rsi.toFixed(1)} mom=${momentum.toFixed(2)}% 24h=${change24h.toFixed(2)}% atr=${atr.toFixed(4)}`
     )
+    console.log(`[${sym}] ATR=${atr.toFixed(2)} SL_dist=${slDistance.toFixed(2)} (${(slDistance / price * 100).toFixed(2)}%) TP_dist=${tpDistance.toFixed(2)} (${(tpDistance / price * 100).toFixed(2)}%)`)
 
     // BULL: all EMAs aligned up + RSI ok + momentum
     const bullTrend     = ema9 > ema21 && ema21 > ema50
@@ -160,8 +170,8 @@ async function findTradingOpportunity(
     const posDay        = change24h > -1
 
     if (bullTrend && priceAboveEMA && rsiBull && posMom && posDay) {
-      const sl   = price - atr * 2.0
-      const tp   = price + atr * 4.0
+      const sl   = price - slDistance
+      const tp   = price + tpDistance
       const conf = Math.min(95,
         60 +
         (bullTrend     ? 15 : 0) +
@@ -185,8 +195,8 @@ async function findTradingOpportunity(
     const negDay         = change24h < 1
 
     if (bearTrend && priceBelowEMA && rsiBear && negMom && negDay) {
-      const sl   = price + atr * 2.0
-      const tp   = price - atr * 4.0
+      const sl   = price + slDistance
+      const tp   = price - tpDistance
       const conf = Math.min(95,
         60 +
         (bearTrend      ? 15 : 0) +
