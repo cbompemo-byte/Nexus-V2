@@ -96,24 +96,176 @@ function calcRSI(closes: number[], period = 14): number {
   return 100 - 100 / (1 + avgGain / avgLoss)
 }
 
-// ── Binance pair map ───────────────────────────────────────────────────────────
-const BINANCE_PAIRS: Record<string, string> = {
-  'SOL':  'SOLUSDT',
-  'BTC':  'BTCUSDT',
-  'ETH':  'ETHUSDT',
-  'BNB':  'BNBUSDT',
-  'XRP':  'XRPUSDT',
-  'AVAX': 'AVAXUSDT',
-  'LINK': 'LINKUSDT',
-  'JUP':  'JUPUSDT',
-  'WIF':  'WIFUSDT',
-  'BONK': 'BONKUSDT',
-  'JTO':  'JTOUSDT',
-  'PYTH': 'PYTHUSDT',
-  'RAY':  'RAYUSDT',
+// ── Exchange pair maps ─────────────────────────────────────────────────────────
+const KRAKEN_PAIRS: Record<string, string> = {
+  'SOL':  'SOLUSD',
+  'BTC':  'XBTUSD',
+  'ETH':  'ETHUSD',
+  'XRP':  'XRPUSD',
+  'LINK': 'LINKUSD',
+  'AVAX': 'AVAXUSD',
+  'BNB':  'BNBUSD',
 }
 
-// ── Hybrid EMA/RSI strategy (Binance klines) ──────────────────────────────────
+const KUCOIN_PAIRS: Record<string, string> = {
+  'JUP':  'JUP-USDT',
+  'WIF':  'WIF-USDT',
+  'BONK': 'BONK-USDT',
+  'JTO':  'JTO-USDT',
+  'PYTH': 'PYTH-USDT',
+  'RAY':  'RAY-USDT',
+}
+
+// ── Price feed (Kraken + KuCoin) ───────────────────────────────────────────────
+async function fetchRealPrices(): Promise<Record<string, any>> {
+  const now = Date.now()
+  if (now - priceCache.timestamp < 60000 && Object.keys(priceCache.data).length > 0) {
+    console.log('[prices] Using cache')
+    return priceCache.data
+  }
+
+  const prices: Record<string, any> = {}
+
+  // Kraken for major pairs
+  try {
+    const krakenRes = await fetch(
+      'https://api.kraken.com/0/public/Ticker' +
+      '?pair=SOLUSD,XBTUSD,ETHUSD,XRPUSD,LINKUSD,AVAXUSD',
+      { headers: { 'User-Agent': 'KYMIA/1.0' }, signal: AbortSignal.timeout(8000) }
+    )
+
+    if (krakenRes.ok) {
+      const kData = await krakenRes.json()
+      const r = kData.result || {}
+
+      const KRAKEN_MAP: Record<string, string> = {
+        'SOLUSD':  'SOL',
+        'XBTUSD':  'BTC',
+        'ETHUSD':  'ETH',
+        'XRPUSD':  'XRP',
+        'LINKUSD': 'LINK',
+        'AVAXUSD': 'AVAX',
+      }
+
+      Object.entries(r).forEach(([pair, data]: any) => {
+        const sym = KRAKEN_MAP[pair]
+        if (sym) {
+          prices[sym] = {
+            price:    parseFloat(data.c[0]),
+            change:   parseFloat(data.P[1]),
+            volume:   parseFloat(data.v[1]),
+            fallback: false,
+          }
+        }
+      })
+      console.log(`[prices] Kraken OK: ${Object.keys(prices).length} pairs`)
+    }
+  } catch (e: any) {
+    console.log(`[prices] Kraken error: ${e.message}`)
+  }
+
+  // KuCoin for Solana ecosystem tokens
+  try {
+    const kuRes = await fetch(
+      'https://api.kucoin.com/api/v1/prices' +
+      '?currencies=JUP,WIF,BONK,JTO,PYTH,RAY,BNB',
+      { headers: { 'User-Agent': 'KYMIA/1.0' }, signal: AbortSignal.timeout(8000) }
+    )
+
+    if (kuRes.ok) {
+      const kuData = await kuRes.json()
+      const kuPrices = kuData.data || {}
+
+      Object.entries(kuPrices).forEach(([sym, price]: any) => {
+        if (!prices[sym]) {
+          prices[sym] = {
+            price:    parseFloat(price),
+            change:   0,
+            volume:   0,
+            fallback: false,
+          }
+        }
+      })
+      console.log(`[prices] KuCoin OK: added ${Object.keys(kuPrices).length} pairs`)
+    }
+  } catch (e: any) {
+    console.log(`[prices] KuCoin error: ${e.message}`)
+  }
+
+  console.log(
+    `[prices] Total: ${Object.keys(prices).length} pairs` +
+    ` | SOL=$${prices['SOL']?.price?.toFixed(2) || '?'}` +
+    ` | BTC=$${prices['BTC']?.price?.toFixed(0) || '?'}`
+  )
+
+  if (Object.keys(prices).length === 0) {
+    console.log('[prices] All exchanges failed — using fallback prices (trades blocked)')
+    prices['SOL'] = { price: 80,    change: 0, volume: 0, fallback: true }
+    prices['BTC'] = { price: 62000, change: 0, volume: 0, fallback: true }
+    prices['ETH'] = { price: 1760,  change: 0, volume: 0, fallback: true }
+    prices['JUP'] = { price: 1.1,   change: 0, volume: 0, fallback: true }
+  } else {
+    priceCache = { data: prices, timestamp: now }
+  }
+
+  return prices
+}
+
+// ── Candle fetcher (Kraken OHLC → KuCoin fallback) ────────────────────────────
+async function getCandles(sym: string): Promise<number[] | null> {
+  // Try Kraken first
+  if (KRAKEN_PAIRS[sym]) {
+    try {
+      const res = await fetch(
+        `https://api.kraken.com/0/public/OHLC` +
+        `?pair=${KRAKEN_PAIRS[sym]}&interval=60&count=52`,
+        { headers: { 'User-Agent': 'KYMIA/1.0' }, signal: AbortSignal.timeout(8000) }
+      )
+      if (res.ok) {
+        const data = await res.json()
+        const pairKey = Object.keys(data.result || {}).find(k => k !== 'last')
+        if (pairKey) {
+          const closes = data.result[pairKey].map((c: any) => parseFloat(c[4]))
+          if (closes.length >= 30) {
+            console.log(`[${sym}] Kraken OHLC OK (${closes.length} candles)`)
+            return closes
+          }
+        }
+      }
+    } catch (e: any) {
+      console.log(`[${sym}] Kraken OHLC error: ${e.message}`)
+    }
+  }
+
+  // KuCoin for Solana ecosystem tokens
+  if (KUCOIN_PAIRS[sym]) {
+    try {
+      const endTime   = Math.floor(Date.now() / 1000)
+      const startTime = endTime - 52 * 3600
+      const res = await fetch(
+        `https://api.kucoin.com/api/v1/market/candles` +
+        `?symbol=${KUCOIN_PAIRS[sym]}&type=1hour&startAt=${startTime}&endAt=${endTime}`,
+        { headers: { 'User-Agent': 'KYMIA/1.0' }, signal: AbortSignal.timeout(8000) }
+      )
+      if (res.ok) {
+        const data = await res.json()
+        const candles = data.data || []
+        // KuCoin: [time, open, close, high, low, vol, turnover] — newest first
+        const closes = candles.reverse().map((c: any) => parseFloat(c[2]))
+        if (closes.length >= 30) {
+          console.log(`[${sym}] KuCoin candles OK (${closes.length} candles)`)
+          return closes
+        }
+      }
+    } catch (e: any) {
+      console.log(`[${sym}] KuCoin error: ${e.message}`)
+    }
+  }
+
+  return null
+}
+
+// ── Hybrid EMA/RSI strategy ────────────────────────────────────────────────────
 async function findTradingOpportunity(
   sym: string,
   prices: Record<string, any>
@@ -131,89 +283,43 @@ async function findTradingOpportunity(
   if (!price) return { ...NONE, reason: 'no price' }
 
   try {
-    const pair = BINANCE_PAIRS[sym]
-    if (!pair) return { ...NONE, reason: 'unsupported pair' }
-
-    // Fetch 1h candles from Binance (free, no rate limit)
-    const res = await fetch(
-      `https://api.binance.com/api/v3/klines?symbol=${pair}&interval=1h&limit=52`,
-      { headers: { 'User-Agent': 'KYMIA/1.0' }, signal: AbortSignal.timeout(8000) }
-    )
-
-    if (!res.ok) {
-      console.log(`[${sym}] Binance error: ${res.status}`)
-      return { ...NONE, reason: `Binance ${res.status}` }
-    }
-
-    const candles = await res.json()
-    if (!Array.isArray(candles) || candles.length < 30) {
-      return { ...NONE, reason: 'insufficient candles' }
-    }
-
-    const closes = candles.map((c: any) => parseFloat(c[4]))
-    const highs  = candles.map((c: any) => parseFloat(c[2]))
-    const lows   = candles.map((c: any) => parseFloat(c[3]))
-    const vols   = candles.map((c: any) => parseFloat(c[5]))
+    const closes = await getCandles(sym)
+    if (!closes) return { ...NONE, reason: 'no candle data' }
 
     // Indicators
     const ema9  = calcEMA(closes, 9)
     const ema21 = calcEMA(closes, 21)
     const ema50 = calcEMA(closes, 50)
     const rsi   = calcRSI(closes.slice(-15))
-
-    const last3    = closes.slice(-3)
-    const momentum = (last3[2] - last3[0]) / last3[0] * 100
+    const last3 = closes.slice(-3)
+    const momentum  = (last3[2] - last3[0]) / last3[0] * 100
     const change24h = prices[sym]?.change || 0
 
-    // ATR from real high/low/close
-    const trs = candles.slice(1).map((c: any, i: number) => {
-      const h  = parseFloat(c[2])
-      const l  = parseFloat(c[3])
-      const pc = parseFloat(candles[i][4])
-      return Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc))
-    })
-    const atr = trs.slice(-14).reduce((a: number, b: number) => a + b, 0) / 14
+    // ATR
+    const trs = closes.slice(1).map((c, i) => Math.abs(c - closes[i]))
+    const atr  = trs.slice(-14).reduce((a: number, b: number) => a + b, 0) / 14
 
-    // ADX (inline, uses real highs/lows)
-    let plusDM = 0, minusDM = 0, tr = 0
-    for (let i = 1; i < Math.min(15, candles.length); i++) {
-      const upMove   = highs[i] - highs[i - 1]
-      const downMove = lows[i - 1] - lows[i]
-      plusDM  += upMove > downMove && upMove > 0 ? upMove : 0
-      minusDM += downMove > upMove && downMove > 0 ? downMove : 0
-      tr += Math.max(
-        highs[i] - lows[i],
-        Math.abs(highs[i] - closes[i - 1]),
-        Math.abs(lows[i]  - closes[i - 1])
-      )
+    // Trend strength (% of candles that closed in the dominant direction)
+    let trend = 0
+    for (let i = 1; i < closes.length; i++) {
+      trend += closes[i] > closes[i - 1] ? 1 : -1
     }
-    const plusDI  = tr > 0 ? (plusDM / tr) * 100 : 0
-    const minusDI = tr > 0 ? (minusDM / tr) * 100 : 0
-    const adx = (plusDI + minusDI) > 0
-      ? Math.abs(plusDI - minusDI) / (plusDI + minusDI) * 100
-      : 0
+    const adx = Math.abs(trend) / closes.length * 100
 
-    // Volume ratio (current vs average)
-    const avgVol  = vols.slice(0, -1).reduce((a: number, b: number) => a + b, 0) / (vols.length - 1)
-    const volRatio = vols[vols.length - 1] / avgVol
+    const isTrending = adx > 55
+    const isRanging  = adx < 40
+
+    const slDist = Math.max(atr * 2, price * 0.012)
+    const tpDist = Math.max(slDist * 2.5, price * 0.03)
 
     console.log(
-      `[${sym}] ema9=${ema9.toFixed(2)} ema21=${ema21.toFixed(2)} ema50=${ema50.toFixed(2)}` +
+      `[${sym}] price=${price.toFixed(4)}` +
+      ` ema9=${ema9.toFixed(4)} ema21=${ema21.toFixed(4)}` +
       ` rsi=${rsi.toFixed(1)} mom=${momentum.toFixed(2)}%` +
-      ` adx=${adx.toFixed(1)} vol=${volRatio.toFixed(2)}x`
+      ` trend=${adx.toFixed(0)}% regime=${isTrending ? 'TREND' : isRanging ? 'RANGE' : 'MIXED'}`
     )
 
-    const isTrending = adx > 20
-    const isRanging  = adx < 18
-
-    console.log(`[${sym}] regime=${isTrending ? 'TREND' : isRanging ? 'RANGE' : 'MIXED'}`)
-
-    // SL/TP distances with ATR floor + minimum 1.2%
-    const minSlDist = price * 0.012
-    const slDist    = Math.max(atr * 2.0, minSlDist)
-    const tpDist    = Math.max(slDist * 2.5, price * 0.03)
-
-    // ── TRENDING → EMA trend following ──────────────────────────────────────
+    // ── TRENDING → EMA trend following ────────────────────────────────────
     if (isTrending) {
       const bullTrend = ema9 > ema21 && ema21 > ema50
       const bearTrend = ema9 < ema21 && ema21 < ema50
@@ -222,19 +328,14 @@ async function findTradingOpportunity(
         const sl   = price - slDist
         const tp   = price + tpDist
         const conf = Math.min(95,
-          65 + (adx > 30 ? 20 : 10) +
+          65 + (adx > 70 ? 20 : 10) +
           (momentum > 0.3 ? 8 : 3) +
-          (change24h > 2  ? 7 : 0) +
-          (volRatio > 1.2 ? 5 : 0)
+          (change24h > 2  ? 7 : 0)
         )
-        console.log(
-          `[${sym}] ATR=${atr.toFixed(2)} SL_dist=${slDist.toFixed(2)}` +
-          ` (${(slDist / price * 100).toFixed(2)}%) TP_dist=${tpDist.toFixed(2)}` +
-          ` (${(tpDist / price * 100).toFixed(2)}%)`
-        )
+        console.log(`[${sym}] TREND BUY: sl=${sl.toFixed(4)} tp=${tp.toFixed(4)} conf=${conf}`)
         return {
           signal: 'BUY', confidence: conf,
-          reason: `TREND Bull EMA ADX:${adx.toFixed(0)} RSI:${rsi.toFixed(0)}`,
+          reason: `TREND Bull EMA trend=${adx.toFixed(0)}% RSI:${rsi.toFixed(0)}`,
           entry: price, sl, tp,
           size_pct: conf >= 85 ? 0.10 : 0.07,
         }
@@ -244,35 +345,30 @@ async function findTradingOpportunity(
         const sl   = price + slDist
         const tp   = price - tpDist
         const conf = Math.min(95,
-          65 + (adx > 30 ? 20 : 10) +
+          65 + (adx > 70 ? 20 : 10) +
           (momentum < -0.3 ? 8 : 3) +
-          (change24h < -2  ? 7 : 0) +
-          (volRatio > 1.2  ? 5 : 0)
+          (change24h < -2  ? 7 : 0)
         )
-        console.log(
-          `[${sym}] ATR=${atr.toFixed(2)} SL_dist=${slDist.toFixed(2)}` +
-          ` (${(slDist / price * 100).toFixed(2)}%) TP_dist=${tpDist.toFixed(2)}` +
-          ` (${(tpDist / price * 100).toFixed(2)}%)`
-        )
+        console.log(`[${sym}] TREND SELL: sl=${sl.toFixed(4)} tp=${tp.toFixed(4)} conf=${conf}`)
         return {
           signal: 'SELL', confidence: conf,
-          reason: `TREND Bear EMA ADX:${adx.toFixed(0)} RSI:${rsi.toFixed(0)}`,
+          reason: `TREND Bear EMA trend=${adx.toFixed(0)}% RSI:${rsi.toFixed(0)}`,
           entry: price, sl, tp,
           size_pct: conf >= 85 ? 0.10 : 0.07,
         }
       }
     }
 
-    // ── RANGING → RSI mean reversion ────────────────────────────────────────
+    // ── RANGING → RSI mean reversion ──────────────────────────────────────
     if (isRanging) {
       if (rsi < 32 && momentum > -0.5) {
         const sl   = price - Math.max(price * 0.015, slDist)
         const tp   = price + Math.max(price * 0.035, tpDist)
         const conf = Math.min(90, 60 + (rsi < 25 ? 20 : 10) + (momentum > 0 ? 5 : 0))
-        console.log(`[${sym}] RANGE Oversold: sl=${sl.toFixed(2)} tp=${tp.toFixed(2)}`)
+        console.log(`[${sym}] RANGE BUY: rsi=${rsi.toFixed(1)} sl=${sl.toFixed(4)} tp=${tp.toFixed(4)} conf=${conf}`)
         return {
           signal: 'BUY', confidence: conf,
-          reason: `RANGE Oversold RSI:${rsi.toFixed(0)} ADX:${adx.toFixed(0)}`,
+          reason: `RANGE Oversold RSI:${rsi.toFixed(0)} trend=${adx.toFixed(0)}%`,
           entry: price, sl, tp,
           size_pct: 0.06,
         }
@@ -282,17 +378,17 @@ async function findTradingOpportunity(
         const sl   = price + Math.max(price * 0.015, slDist)
         const tp   = price - Math.max(price * 0.035, tpDist)
         const conf = Math.min(90, 60 + (rsi > 75 ? 20 : 10) + (momentum < 0 ? 5 : 0))
-        console.log(`[${sym}] RANGE Overbought: sl=${sl.toFixed(2)} tp=${tp.toFixed(2)}`)
+        console.log(`[${sym}] RANGE SELL: rsi=${rsi.toFixed(1)} sl=${sl.toFixed(4)} tp=${tp.toFixed(4)} conf=${conf}`)
         return {
           signal: 'SELL', confidence: conf,
-          reason: `RANGE Overbought RSI:${rsi.toFixed(0)} ADX:${adx.toFixed(0)}`,
+          reason: `RANGE Overbought RSI:${rsi.toFixed(0)} trend=${adx.toFixed(0)}%`,
           entry: price, sl, tp,
           size_pct: 0.06,
         }
       }
     }
 
-    // ── MIXED → only very strong setups ─────────────────────────────────────
+    // ── MIXED → only very strong setups ───────────────────────────────────
     const veryBull = ema9 > ema21 && rsi > 50 && momentum > 0.2
     const veryBear = ema9 < ema21 && rsi < 50 && momentum < -0.2
 
@@ -319,77 +415,21 @@ async function findTradingOpportunity(
     }
 
     console.log(`[${sym}] NO SIGNAL:`, {
-      bullTrend:   ema9 > ema21 && ema21 > ema50,
-      bearTrend:   ema9 < ema21 && ema21 < ema50,
-      priceVsEMA9: ((price - ema9) / ema9 * 100).toFixed(2) + '%',
-      rsi:         rsi.toFixed(1),
-      momentum:    momentum.toFixed(3),
-      change24h:   change24h.toFixed(2),
-      adx:         adx.toFixed(1),
+      bullTrend:  ema9 > ema21 && ema21 > ema50,
+      bearTrend:  ema9 < ema21 && ema21 < ema50,
+      rsi:        rsi.toFixed(1),
+      momentum:   momentum.toFixed(3),
+      change24h:  change24h.toFixed(2),
+      trend:      adx.toFixed(1) + '%',
     })
     return {
       ...NONE,
-      reason: `No signal: ema9=${ema9.toFixed(1)} rsi=${rsi.toFixed(0)} adx=${adx.toFixed(0)}`,
+      reason: `No signal: ema9=${ema9.toFixed(1)} rsi=${rsi.toFixed(0)} trend=${adx.toFixed(0)}%`,
     }
   } catch (e: any) {
     console.log(`[strategy] ${sym} error: ${e.message}`)
     return { ...NONE, reason: e.message }
   }
-}
-
-// ── Price feed (Binance 24hr ticker — free, no rate limit) ────────────────────
-const BINANCE_SYMBOLS = Object.values(BINANCE_PAIRS) // all 13 USDT pairs
-
-async function fetchRealPrices(): Promise<Record<string, any>> {
-  const now = Date.now()
-  if (now - priceCache.timestamp < 60000 && Object.keys(priceCache.data).length > 0) {
-    console.log('[prices] Using cache')
-    return priceCache.data
-  }
-
-  const prices: Record<string, any> = {}
-
-  try {
-    const symbolsParam = encodeURIComponent(JSON.stringify(BINANCE_SYMBOLS))
-    const res = await fetch(
-      `https://api.binance.com/api/v3/ticker/24hr?symbols=${symbolsParam}`,
-      { headers: { 'User-Agent': 'KYMIA/1.0' }, signal: AbortSignal.timeout(8000) }
-    )
-
-    if (!res.ok) {
-      console.log('[prices] Binance ticker error:', res.status)
-    } else {
-      const tickers = await res.json()
-      const reverseMap = Object.fromEntries(
-        Object.entries(BINANCE_PAIRS).map(([sym, pair]) => [pair, sym])
-      )
-
-      for (const t of tickers) {
-        const sym = reverseMap[t.symbol]
-        if (!sym) continue
-        prices[sym] = {
-          price:  parseFloat(t.lastPrice),
-          change: parseFloat(t.priceChangePercent),
-          volume: parseFloat(t.volume) * parseFloat(t.lastPrice), // volume in USD
-        }
-        console.log(`[prices] ${sym}: $${prices[sym].price} (${prices[sym].change?.toFixed(1)}%)`)
-      }
-    }
-  } catch (e: any) {
-    console.log('[prices] Binance failed:', e.message)
-  }
-
-  if (Object.keys(prices).length === 0) {
-    console.log('[prices] Binance unavailable — using fallback prices (trades blocked)')
-    prices['SOL'] = { price: 80,    change: 0, volume: 0, fallback: true }
-    prices['BTC'] = { price: 62000, change: 0, volume: 0, fallback: true }
-    prices['ETH'] = { price: 1760,  change: 0, volume: 0, fallback: true }
-    prices['JUP'] = { price: 1.1,   change: 0, volume: 0, fallback: true }
-  } else {
-    priceCache = { data: prices, timestamp: now }
-  }
-
-  return prices
 }
 
 // ── SL/TP checker ──────────────────────────────────────────────────────────────
@@ -422,7 +462,7 @@ async function checkPositions(
     const hardStop    = isLong ? pos.avg * 0.95 : pos.avg * 1.05
     const effectiveSL = isLong ? Math.max(sl, hardStop) : Math.min(sl, hardStop)
 
-    console.log(`[SL check] ${sym}: cur=${cur.toFixed(2)} sl=${effectiveSL.toFixed(2)} tp=${tp.toFixed(2)} hit=${isLong ? cur <= effectiveSL : cur >= effectiveSL}`)
+    console.log(`[SL check] ${sym}: cur=${cur.toFixed(4)} sl=${effectiveSL.toFixed(4)} tp=${tp.toFixed(4)} hit=${isLong ? cur <= effectiveSL : cur >= effectiveSL}`)
 
     const slHit = isLong ? cur <= effectiveSL : cur >= effectiveSL
     const tpHit = isLong ? cur >= tp : cur <= tp
@@ -445,7 +485,7 @@ async function checkPositions(
       })
 
       console.log(
-        `[KYMIA] CLOSED: ${sym} ${pos.side} @ $${cur.toFixed(2)} | ` +
+        `[KYMIA] CLOSED: ${sym} ${pos.side} @ $${cur.toFixed(4)} | ` +
         `PnL: $${pnl.toFixed(2)} (${pct.toFixed(2)}%) | ${slHit ? 'SL' : 'TP'}`
       )
     }
@@ -581,8 +621,8 @@ async function runUserCycle(supabase: SupabaseClient, state: any) {
             qty:      parseFloat(qty.toFixed(6)),
             side:     opp.signal === 'BUY' ? 'LONG' : 'SHORT',
             size:     parseFloat(size.toFixed(2)),
-            sl:       parseFloat(opp.sl.toFixed(4)),
-            tp:       parseFloat(opp.tp.toFixed(4)),
+            sl:       parseFloat(opp.sl.toFixed(6)),
+            tp:       parseFloat(opp.tp.toFixed(6)),
             openedAt: new Date().toISOString(),
             conf:     opp.confidence,
             agent:    'HYBRID',
@@ -595,8 +635,8 @@ async function runUserCycle(supabase: SupabaseClient, state: any) {
       .eq('user_id', userId)
 
     console.log(
-      `[KYMIA] OPENED: ${sym} ${opp.signal} @ $${opp.entry.toFixed(2)}` +
-      ` size=$${size.toFixed(0)} sl=$${opp.sl.toFixed(2)} tp=$${opp.tp.toFixed(2)} conf=${opp.confidence}%`
+      `[KYMIA] OPENED: ${sym} ${opp.signal} @ $${opp.entry.toFixed(4)}` +
+      ` size=$${size.toFixed(0)} sl=$${opp.sl.toFixed(4)} tp=$${opp.tp.toFixed(4)} conf=${opp.confidence}%`
     )
 
     tradedThisCycle++
@@ -612,7 +652,7 @@ async function runUserCycle(supabase: SupabaseClient, state: any) {
   if (tradedThisCycle === 0 && Object.keys(signalResults).length > 0) {
     const hasSignal = Object.values(signalResults).some(r => r.signal !== 'NONE' && r.signal !== 'OPEN' && r.signal !== 'SKIP')
     if (!hasSignal) {
-      console.log('[cycle] No opportunities found — market ranging or conditions not met')
+      console.log('[cycle] No opportunities found — conditions not met')
     }
   }
 
