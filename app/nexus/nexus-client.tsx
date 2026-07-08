@@ -2407,16 +2407,8 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
         setSwarmConfig(data.swarm_config);
         setHasShownOnboarding(true); // has config → skip onboarding on next ACTIVATE
       }
-      // Restore portfolio state: cash, equity, open positions
-      if(data.cash!=null||data.equity!=null||data.open_positions!=null){
-        setPort(prev=>({
-          ...prev,
-          cash:data.cash??prev.cash,
-          equity:data.equity??prev.equity,
-          peak:Math.max(data.equity??prev.equity,prev.peak),
-          pos:data.open_positions??prev.pos,
-        }));
-      }
+      // Portfolio state (pos/cash/equity) is loaded exclusively from kymia_agent_state below.
+      // kymia_sessions is only used to restore swarm_config for onboarding skip.
       log('KYMIA',`◈ Welcome back! Session restored · ${data.total_trades||0} trades on record`,K.c);
     }
     // NEVER call setRunning(false) here — don't kill agents on token refresh
