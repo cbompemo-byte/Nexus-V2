@@ -419,25 +419,10 @@ const get1H4HTrend=async(sym:string):Promise<{trend1h:'BULL'|'BEAR'|'NEUTRAL',tr
 function usePrices(){
   const [px,setPx]=useState<{[k:string]:PriceData}>(()=>
     Object.fromEntries(Object.entries(SYMS).map(([k,v])=>[k,{
-      price:v.base,prev:v.base,trend:"up",change:(Math.random()-.4)*8,rsi:40+Math.random()*35,
-      hist:Array.from({length:60},(_,i)=>v.base*(1+(Math.random()-.5)*.05*(i/60))),
+      price:v.base,prev:v.base,trend:"up" as const,change:0,rsi:50,
+      hist:Array.from({length:60},()=>v.base),
     }]))
   );
-  // micro-simulation (sparklines + RSI)
-  useEffect(()=>{
-    const iv=setInterval(()=>setPx(p=>{
-      const n:{[k:string]:PriceData}={};
-      for(const[k,v]of Object.entries(SYMS)){
-        const c=p[k];if(!c)continue;
-        const d=(Math.random()-.499)*2*v.vol,np=Math.max(c.price*(1+d),c.price*0.9);
-        n[k]={...c,price:np,prev:c.price,trend:np>c.price?"up":"dn",
-          hist:[...c.hist.slice(1),np],change:c.change+(Math.random()-.5)*.15,
-          rsi:Math.max(15,Math.min(85,c.rsi+(Math.random()-.5)*2.5))};
-      }
-      return n;
-    }),900);
-    return()=>clearInterval(iv);
-  },[]);
   // real Jupiter prices every 5 s
   useEffect(()=>{
     const mintMap:Record<string,string>=Object.fromEntries(Object.entries(SYMS).map(([sym,info])=>[info.mint,sym]));
@@ -2475,22 +2460,7 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
     },{onConflict:'user_id'});
   },[user,swarmConfig]);
 
-  const saveTrade=useCallback(async(sym:string,side:string,entry:number,exit:number,pnl:number,pct:number,agent:string,openedAt:number)=>{
-    if(!user)return;
-    await supabase.from('kymia_trades').insert({
-      user_id:user.id,
-      sym,
-      side,
-      entry,
-      exit,
-      pnl,
-      pct,
-      agent,
-      opened_at:new Date(openedAt).toISOString(),
-      closed_at:new Date().toISOString(),
-      session_id:sessionId,
-    });
-  },[user,sessionId]);
+  // saveTrade removed — trades written exclusively by /api/agents/cycle (server-side)
 
   const saveOpenPositions=useCallback(async()=>{
     if(!user)return;
@@ -3196,60 +3166,8 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[isLive,walletAddress,log]);
 
-  // Unified LONG close: live (Jupiter) or demo (direct setPort)
-  // Guards against double-fire during async tx confirmation window.
-  const closeLongPosition=useCallback((
-    sym:string,pos:{avg:number,qty:number,leverage?:number},
-    exitPrice:number,agent:string,reason:string,
-  )=>{
-    if(pendingCloseRef.current.has(sym))return;
-    pendingCloseRef.current.add(sym);
-    const pnl=(exitPrice-pos.avg)*pos.qty;
-    const pct=((exitPrice-pos.avg)/pos.avg)*100;
-    void(async()=>{
-      try{
-        const liveOk=await performLiveClose(sym,pos,exitPrice);
-        if(!liveOk){
-          // Demo or live-failed fallback: update portfolio state directly
-          setPort(prev=>{const p2={...prev.pos};delete p2[sym];return{...prev,cash:prev.cash+exitPrice*pos.qty,pos:p2};});
-        }
-        addWinCard(sym,pnl,pct,exitPrice,agent,reason);
-        const effPnl=pos.leverage&&pos.leverage>1?pnl*pos.leverage:pnl;
-        log(agent,(pnl>=0?"💰 ":"⛔ ")+"CLOSE "+sym+" @ "+fPrice(exitPrice)+" "+fU(pnl)+(pos.leverage&&pos.leverage>1?" (x"+pos.leverage+" eff: "+fU(effPnl)+")":""),pnl>=0?K.g:K.r);
-      }finally{
-        pendingCloseRef.current.delete(sym);
-      }
-    })();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[performLiveClose]);
-
-  const addWinCard=(sym:string,pnl:number,pct:number,price:number,agent:string,reason?:string)=>{
-    // Track per-symbol losses for cooldown filter
-    if(pnl<0){
-      symLossRef.current[sym]=(symLossRef.current[sym]||0)+1;
-      if(symLossRef.current[sym]>=2){
-        log("AEGIS",`⛔ ${sym} blacklisted 30min after ${symLossRef.current[sym]} losses`,K.r);
-        setTimeout(()=>{symLossRef.current[sym]=0;log("AEGIS",`◈ ${sym} blacklist cleared — resuming`,K.g);},1800000);
-      }
-    }else{
-      symLossRef.current[sym]=0; // reset on win
-    }
-    const origin=(()=>{
-      const el=swarmRef.current;if(!el)return undefined;
-      const rect=el.getBoundingClientRect();
-      const scale=rect.width/480;
-      return{x:rect.left+GCX*scale,y:rect.top+GCY*scale};
-    })();
-    const card:WinCard={id:Math.random().toString(36).slice(2),sym,pnl,pct,price,agent,t:ts(),origin};
-    setWinCards(prev=>[...prev.slice(-1),card]);
-    setTrades(t=>[{id:card.id,sym,side:"SELL",qty:0,price,pnl,conf:80,t:card.t,ms:Date.now(),agent,reason:reason||agent},...t.slice(0,99)]);
-    // Look up entry price + open time from the open position
-    const openPos=portRef.current.pos[sym];
-    const entryPrice=openPos?.avg??price;
-    const openedAt=openPos?.entryMs??Date.now();
-    saveTrade(sym,openPos?.side||'LONG',entryPrice,price,pnl,pct,agent,openedAt);
-    saveSession();
-  };
+  // closeLongPosition + addWinCard removed — positions closed exclusively by /api/agents/cycle server-side
+  // Win cards are triggered by the kymia_trades realtime INSERT subscription above
 
   // Real-data agents — NEVER overwritten by simulation (only AEGIS remains sim)
   const REAL_AGENT_IDS=new Set(["leviathan","lens","surge","atlas","echo","radar","shield","oracle","phantom","titan","hydra","neural","watch","delta","razor","vector","consensus"]);
@@ -3356,60 +3274,7 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
     return()=>clearInterval(iv);
   },[running,log]);
 
-  // Force a specific trade (used by cinematic sequence)
-  const forceTrade=useCallback((sym:string,side:"BUY"|"SELL",agent:string,conf=70)=>{
-    const p=pricesRef.current[sym];if(!p)return;
-    const prt=portRef.current;
-    if(side==="BUY"){
-      if(prt.cash<500||prt.pos[sym])return;
-      const lev=SWARM_CONFIG.leverage;
-      const baseAlloc=Math.min(prt.cash*.12,prt.cash*.9);
-      const leveragedSize=Math.min(baseAlloc*lev,(prt.equity||prt.cash)*0.40);
-      const qty=leveragedSize/p.price;
-      setPort(prev=>{if(prev.pos[sym])return prev;return{...prev,cash:prev.cash-baseAlloc,pos:{...prev.pos,[sym]:{qty,avg:p.price,entryMs:Date.now(),leverage:lev,leveragedSize}}};});
-      const agsFt=agStRef.current;
-      const agSigFt:AgentSignals={};
-      if(agsFt["lens"]?.sig)agSigFt.lens={rsi:38,signal:agsFt["lens"].sig||"BUY"};
-      if(agsFt["leviathan"]?.sig)agSigFt.leviathan={buyPressure:0.64,signal:agsFt["leviathan"].sig||"BUY"};
-      if(agsFt["surge"]?.sig)agSigFt.surge={volumeChange:4.2,signal:agsFt["surge"].sig||"BUY"};
-      setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym,side:"BUY",qty,price:p.price,pnl:0,conf,t:ts(),ms:Date.now(),agent,reason:"AI Signal",agentSignals:agSigFt},...t.slice(0,99)]);
-      log("EXEC","▶ ["+agent+"] LONG "+sym+" @ $"+f2(p.price)+" conf:"+conf+"%",K.g);
-    }else{
-      const pos=prt.pos[sym];if(!pos)return;
-      closeLongPosition(sym,pos,p.price,agent,"Signal Exit");
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[]);
-
-  // Open a SHORT position directly (bypasses trader rules — used by demo + consensus path)
-  const openShort=useCallback((sym:string,reason:string,agent:string,conf=70)=>{
-    const p=pricesRef.current[sym];if(!p)return;
-    const prt=portRef.current;
-    if(prt.pos[sym]||prt.cash<500)return;
-    const lev=SWARM_CONFIG.leverage;
-    const baseAlloc=Math.min(prt.cash*0.08,prt.cash*0.9);
-    const leveragedSize=Math.min(baseAlloc*lev,(prt.equity||prt.cash)*0.40);
-    const qty=leveragedSize/p.price;
-    setPort(prev=>{if(prev.pos[sym])return prev;return{...prev,cash:prev.cash-baseAlloc,pos:{...prev.pos,[sym]:{qty,avg:p.price,peak:p.price,entryMs:Date.now(),trailActive:false,side:"SHORT",leverage:lev,leveragedSize}}};});
-    setTrades(t=>[{id:Math.random().toString(36).slice(2,8).toUpperCase(),sym,side:"SHORT",qty,price:p.price,pnl:0,conf,t:ts(),ms:Date.now(),agent,reason},...t.slice(0,99)]);
-    log("EXEC","▼ ["+agent+"] SHORT "+sym+" @ "+fPrice(p.price)+" conf:"+conf+"%",K.r);
-    setSignalCount(n=>n+1);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[]);
-
-  // Pick best SHORT candidate — most overbought, not already held
-  const selectBestShort=useCallback(():string|null=>{
-    const prt=portRef.current;
-    return Object.keys(SYMS)
-      .filter(s=>!STABLE_SYMS.has(s)&&!prt.pos[s])
-      .sort((a,b)=>{
-        const da=pricesRef.current[a],db=pricesRef.current[b];
-        if(!da||!db)return 0;
-        // highest RSI first (most overbought), tiebreak by most negative recent change
-        return(db.rsi-da.rsi)+(db.change-da.change)*0.3;
-      })[0]||null;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[]);
+  // forceTrade, openShort, selectBestShort removed — all trading handled server-side by /api/agents/cycle
 
 
   const runAI=useCallback(async()=>{
@@ -4069,8 +3934,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
                           </div>
                         </div>
                       )}
-                      {/* Close button */}
-                      <button onClick={()=>setConfirmClose(sym)} style={{marginTop:4,width:'100%',padding:'6px',background:'rgba(255,51,102,0.08)',border:'1px solid rgba(255,51,102,0.25)',borderRadius:4,color:K.r,fontFamily:'monospace',fontSize:10,cursor:'pointer',fontWeight:700}}>✕ CLOSE POSITION</button>
+                      {/* Close position handled server-side by /api/agents/cycle SL/TP */}
                     </div>
                   );
                 })}
@@ -4153,7 +4017,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
           <div style={{gridColumn:"2/3",overflow:"hidden",display:"flex",flexDirection:"column",gap:4}}>
             {/* Decision Zone */}
             <div style={{flexShrink:0}}>
-              <DecisionZone agSt={agSt} running={running} onExecute={(sym,side)=>{const syms=Object.keys(port.pos).length<5?["SOL","JUP","WIF","BTC","ETH"]:[];const target=syms[0]||"SOL";forceTrade(target,side,"CONSENSUS",70);log("EXEC","⚡ Manual execute: "+side+" "+target,side==="BUY"?K.g:K.r);}}/>
+              <DecisionZone agSt={agSt} running={running} onExecute={()=>{}}/>
             </div>
             {/* Compact Claude AI bar (if available) */}
             {aiData&&(
@@ -4618,14 +4482,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
       />}
 
       {/* Confirm Close Modal */}
-      {confirmClose&&<ConfirmCloseModal sym={confirmClose} onCancel={()=>setConfirmClose(null)} onConfirm={()=>{
-        const sym=confirmClose;
-        setConfirmClose(null);
-        const pos=portRef.current.pos[sym];
-        const cur=pricesRef.current[sym]?.price||pos?.avg||0;
-        if(!pos||!cur)return;
-        closeLongPosition(sym,pos,cur,"MANUAL","Manually closed");
-      }}/>}
+      {confirmClose&&<ConfirmCloseModal sym={confirmClose} onCancel={()=>setConfirmClose(null)} onConfirm={()=>setConfirmClose(null)}/>}
 
       {/* Cinematic chart on new trade */}
       {cinematicTrade&&<CinematicChart trade={cinematicTrade} onComplete={()=>setCinematicTrade(null)}/>}
