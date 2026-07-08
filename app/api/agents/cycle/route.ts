@@ -1,14 +1,8 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
 
-// ── Module-level caches (survive across requests on the same instance) ─────────
+// ── Module-level state ─────────────────────────────────────────────────────────
 let priceCache: { data: Record<string, any>; timestamp: number } = { data: {}, timestamp: 0 }
-
-// Per-symbol chart cache so CoinGecko is hit at most once per 5 min per symbol
-const cgCache = new Map<string, { data: number[]; timestamp: number }>()
-const CACHE_TTL = 300_000 // 5 minutes
-
-// Tracks which rotation slice to analyze this cycle
 const cycleCountRef = { current: 0 }
 
 export async function GET() {
@@ -78,25 +72,6 @@ function isGoodTradingHour() {
   return { allowed: true, session: 'ALWAYS ON', quality: 80 }
 }
 
-function getCGId(sym: string): string {
-  const ids: Record<string, string> = {
-    'SOL':  'solana',
-    'BTC':  'bitcoin',
-    'ETH':  'ethereum',
-    'JUP':  'jupiter-ag',
-    'BNB':  'binancecoin',
-    'XRP':  'ripple',
-    'AVAX': 'avalanche-2',
-    'LINK': 'chainlink',
-    'WIF':  'dogwifcoin',
-    'BONK': 'bonk',
-    'JTO':  'jito-governance-token',
-    'PYTH': 'pyth-network',
-    'RAY':  'raydium',
-  }
-  return ids[sym] || sym.toLowerCase()
-}
-
 function calcEMA(closes: number[], period: number): number {
   if (closes.length < period) return closes[closes.length - 1] ?? 0
   const k = 2 / (period + 1)
@@ -121,34 +96,24 @@ function calcRSI(closes: number[], period = 14): number {
   return 100 - 100 / (1 + avgGain / avgLoss)
 }
 
-// Simplified ADX — measures directional strength over the closes window
-function calcADX(closes: number[]): number {
-  if (closes.length < 15) return 20
-
-  const highs = closes.map((c, i) => i === 0 ? c : Math.max(c, closes[i - 1]))
-  const lows  = closes.map((c, i) => i === 0 ? c : Math.min(c, closes[i - 1]))
-
-  let plusDM = 0, minusDM = 0, tr = 0
-  for (let i = 1; i < closes.length; i++) {
-    const upMove   = highs[i] - highs[i - 1]
-    const downMove = lows[i - 1] - lows[i]
-    plusDM  += upMove > downMove && upMove > 0 ? upMove : 0
-    minusDM += downMove > upMove && downMove > 0 ? downMove : 0
-    tr += Math.max(
-      highs[i] - lows[i],
-      Math.abs(highs[i] - closes[i - 1]),
-      Math.abs(lows[i]  - closes[i - 1])
-    )
-  }
-
-  if (tr === 0) return 20
-  const plusDI  = (plusDM  / tr) * 100
-  const minusDI = (minusDM / tr) * 100
-  if (plusDI + minusDI === 0) return 20
-  return Math.abs(plusDI - minusDI) / (plusDI + minusDI) * 100
+// ── Binance pair map ───────────────────────────────────────────────────────────
+const BINANCE_PAIRS: Record<string, string> = {
+  'SOL':  'SOLUSDT',
+  'BTC':  'BTCUSDT',
+  'ETH':  'ETHUSDT',
+  'BNB':  'BNBUSDT',
+  'XRP':  'XRPUSDT',
+  'AVAX': 'AVAXUSDT',
+  'LINK': 'LINKUSDT',
+  'JUP':  'JUPUSDT',
+  'WIF':  'WIFUSDT',
+  'BONK': 'BONKUSDT',
+  'JTO':  'JTOUSDT',
+  'PYTH': 'PYTHUSDT',
+  'RAY':  'RAYUSDT',
 }
 
-// ── Hybrid EMA/RSI strategy ────────────────────────────────────────────────────
+// ── Hybrid EMA/RSI strategy (Binance klines) ──────────────────────────────────
 async function findTradingOpportunity(
   sym: string,
   prices: Record<string, any>
@@ -166,68 +131,107 @@ async function findTradingOpportunity(
   if (!price) return { ...NONE, reason: 'no price' }
 
   try {
-    // ── Chart data: serve from cache when fresh, else fetch ──────────────────
-    let closes: number[]
-    const cached = cgCache.get(sym)
+    const pair = BINANCE_PAIRS[sym]
+    if (!pair) return { ...NONE, reason: 'unsupported pair' }
 
-    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-      console.log(`[${sym}] Using cached chart data (age ${Math.round((Date.now() - cached.timestamp) / 1000)}s)`)
-      closes = cached.data
-    } else {
-      const res = await fetch(
-        `https://api.coingecko.com/api/v3/coins/${getCGId(sym)}/market_chart` +
-        `?vs_currency=usd&days=3&interval=hourly`,
-        { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(8000) }
-      )
-      if (!res.ok) throw new Error(`CG ${res.status}`)
+    // Fetch 1h candles from Binance (free, no rate limit)
+    const res = await fetch(
+      `https://api.binance.com/api/v3/klines?symbol=${pair}&interval=1h&limit=52`,
+      { headers: { 'User-Agent': 'KYMIA/1.0' }, signal: AbortSignal.timeout(8000) }
+    )
 
-      const data = await res.json()
-      closes = data.prices?.slice(-50)?.map((p: any[]) => p[1]) || []
-      if (closes.length < 30) throw new Error('Not enough data')
-
-      cgCache.set(sym, { data: closes, timestamp: Date.now() })
-      console.log(`[${sym}] Fetched fresh chart data (${closes.length} candles)`)
+    if (!res.ok) {
+      console.log(`[${sym}] Binance error: ${res.status}`)
+      return { ...NONE, reason: `Binance ${res.status}` }
     }
 
-    // ── Indicators ───────────────────────────────────────────────────────────
+    const candles = await res.json()
+    if (!Array.isArray(candles) || candles.length < 30) {
+      return { ...NONE, reason: 'insufficient candles' }
+    }
+
+    const closes = candles.map((c: any) => parseFloat(c[4]))
+    const highs  = candles.map((c: any) => parseFloat(c[2]))
+    const lows   = candles.map((c: any) => parseFloat(c[3]))
+    const vols   = candles.map((c: any) => parseFloat(c[5]))
+
+    // Indicators
     const ema9  = calcEMA(closes, 9)
     const ema21 = calcEMA(closes, 21)
     const ema50 = calcEMA(closes, 50)
     const rsi   = calcRSI(closes.slice(-15))
-    const last3 = closes.slice(-3)
-    const momentum  = (last3[2] - last3[0]) / last3[0] * 100
-    const change24h = prices[sym]?.change || 0
-    const atr = closes.slice(1)
-      .map((c, i) => Math.abs(c - closes[i]))
-      .slice(-14)
-      .reduce((a, b) => a + b, 0) / 14
 
-    // Regime detection
-    const adx        = calcADX(closes)
-    const isTrending = adx > 22
-    const isRanging  = adx < 18
+    const last3    = closes.slice(-3)
+    const momentum = (last3[2] - last3[0]) / last3[0] * 100
+    const change24h = prices[sym]?.change || 0
+
+    // ATR from real high/low/close
+    const trs = candles.slice(1).map((c: any, i: number) => {
+      const h  = parseFloat(c[2])
+      const l  = parseFloat(c[3])
+      const pc = parseFloat(candles[i][4])
+      return Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc))
+    })
+    const atr = trs.slice(-14).reduce((a: number, b: number) => a + b, 0) / 14
+
+    // ADX (inline, uses real highs/lows)
+    let plusDM = 0, minusDM = 0, tr = 0
+    for (let i = 1; i < Math.min(15, candles.length); i++) {
+      const upMove   = highs[i] - highs[i - 1]
+      const downMove = lows[i - 1] - lows[i]
+      plusDM  += upMove > downMove && upMove > 0 ? upMove : 0
+      minusDM += downMove > upMove && downMove > 0 ? downMove : 0
+      tr += Math.max(
+        highs[i] - lows[i],
+        Math.abs(highs[i] - closes[i - 1]),
+        Math.abs(lows[i]  - closes[i - 1])
+      )
+    }
+    const plusDI  = tr > 0 ? (plusDM / tr) * 100 : 0
+    const minusDI = tr > 0 ? (minusDM / tr) * 100 : 0
+    const adx = (plusDI + minusDI) > 0
+      ? Math.abs(plusDI - minusDI) / (plusDI + minusDI) * 100
+      : 0
+
+    // Volume ratio (current vs average)
+    const avgVol  = vols.slice(0, -1).reduce((a: number, b: number) => a + b, 0) / (vols.length - 1)
+    const volRatio = vols[vols.length - 1] / avgVol
 
     console.log(
-      `[strategy] ${sym}:` +
-      ` ema9=${ema9.toFixed(2)} ema21=${ema21.toFixed(2)} ema50=${ema50.toFixed(2)}` +
-      ` rsi=${rsi.toFixed(1)} mom=${momentum.toFixed(2)}% 24h=${change24h.toFixed(2)}% atr=${atr.toFixed(4)}`
+      `[${sym}] ema9=${ema9.toFixed(2)} ema21=${ema21.toFixed(2)} ema50=${ema50.toFixed(2)}` +
+      ` rsi=${rsi.toFixed(1)} mom=${momentum.toFixed(2)}%` +
+      ` adx=${adx.toFixed(1)} vol=${volRatio.toFixed(2)}x`
     )
-    console.log(`[${sym}] ADX=${adx.toFixed(1)} regime=${isTrending ? 'TREND' : isRanging ? 'RANGE' : 'MIXED'}`)
 
-    // ── TRENDING MARKET → EMA trend following ────────────────────────────────
+    const isTrending = adx > 20
+    const isRanging  = adx < 18
+
+    console.log(`[${sym}] regime=${isTrending ? 'TREND' : isRanging ? 'RANGE' : 'MIXED'}`)
+
+    // SL/TP distances with ATR floor + minimum 1.2%
+    const minSlDist = price * 0.012
+    const slDist    = Math.max(atr * 2.0, minSlDist)
+    const tpDist    = Math.max(slDist * 2.5, price * 0.03)
+
+    // ── TRENDING → EMA trend following ──────────────────────────────────────
     if (isTrending) {
       const bullTrend = ema9 > ema21 && ema21 > ema50
       const bearTrend = ema9 < ema21 && ema21 < ema50
 
       if (bullTrend && price > ema9 && rsi > 45 && rsi < 72 && momentum > 0.1 && change24h > -1) {
-        const sl   = Math.max(price - (atr * 2), price * 0.985)
-        const tp   = Math.max(price + (atr * 4), price * 1.03)
+        const sl   = price - slDist
+        const tp   = price + tpDist
         const conf = Math.min(95,
           65 + (adx > 30 ? 20 : 10) +
           (momentum > 0.3 ? 8 : 3) +
-          (change24h > 2  ? 7 : 0)
+          (change24h > 2  ? 7 : 0) +
+          (volRatio > 1.2 ? 5 : 0)
         )
-        console.log(`[${sym}] ATR=${atr.toFixed(2)} SL_dist=${(price - sl).toFixed(2)} (${((price - sl) / price * 100).toFixed(2)}%) TP_dist=${(tp - price).toFixed(2)} (${((tp - price) / price * 100).toFixed(2)}%)`)
+        console.log(
+          `[${sym}] ATR=${atr.toFixed(2)} SL_dist=${slDist.toFixed(2)}` +
+          ` (${(slDist / price * 100).toFixed(2)}%) TP_dist=${tpDist.toFixed(2)}` +
+          ` (${(tpDist / price * 100).toFixed(2)}%)`
+        )
         return {
           signal: 'BUY', confidence: conf,
           reason: `TREND Bull EMA ADX:${adx.toFixed(0)} RSI:${rsi.toFixed(0)}`,
@@ -237,14 +241,19 @@ async function findTradingOpportunity(
       }
 
       if (bearTrend && price < ema9 && rsi > 28 && rsi < 55 && momentum < -0.1 && change24h < 1) {
-        const sl   = Math.min(price + (atr * 2), price * 1.015)
-        const tp   = Math.min(price - (atr * 4), price * 0.97)
+        const sl   = price + slDist
+        const tp   = price - tpDist
         const conf = Math.min(95,
           65 + (adx > 30 ? 20 : 10) +
           (momentum < -0.3 ? 8 : 3) +
-          (change24h < -2  ? 7 : 0)
+          (change24h < -2  ? 7 : 0) +
+          (volRatio > 1.2  ? 5 : 0)
         )
-        console.log(`[${sym}] ATR=${atr.toFixed(2)} SL_dist=${(sl - price).toFixed(2)} (${((sl - price) / price * 100).toFixed(2)}%) TP_dist=${(price - tp).toFixed(2)} (${((price - tp) / price * 100).toFixed(2)}%)`)
+        console.log(
+          `[${sym}] ATR=${atr.toFixed(2)} SL_dist=${slDist.toFixed(2)}` +
+          ` (${(slDist / price * 100).toFixed(2)}%) TP_dist=${tpDist.toFixed(2)}` +
+          ` (${(tpDist / price * 100).toFixed(2)}%)`
+        )
         return {
           signal: 'SELL', confidence: conf,
           reason: `TREND Bear EMA ADX:${adx.toFixed(0)} RSI:${rsi.toFixed(0)}`,
@@ -254,13 +263,13 @@ async function findTradingOpportunity(
       }
     }
 
-    // ── RANGING MARKET → RSI mean reversion ──────────────────────────────────
+    // ── RANGING → RSI mean reversion ────────────────────────────────────────
     if (isRanging) {
       if (rsi < 32 && momentum > -0.5) {
-        const sl   = price * 0.985
-        const tp   = price * 1.035
+        const sl   = price - Math.max(price * 0.015, slDist)
+        const tp   = price + Math.max(price * 0.035, tpDist)
         const conf = Math.min(90, 60 + (rsi < 25 ? 20 : 10) + (momentum > 0 ? 5 : 0))
-        console.log(`[${sym}] ATR=${atr.toFixed(2)} SL_dist=${(price - sl).toFixed(2)} (1.50%) TP_dist=${(tp - price).toFixed(2)} (3.50%)`)
+        console.log(`[${sym}] RANGE Oversold: sl=${sl.toFixed(2)} tp=${tp.toFixed(2)}`)
         return {
           signal: 'BUY', confidence: conf,
           reason: `RANGE Oversold RSI:${rsi.toFixed(0)} ADX:${adx.toFixed(0)}`,
@@ -270,10 +279,10 @@ async function findTradingOpportunity(
       }
 
       if (rsi > 68 && momentum < 0.5) {
-        const sl   = price * 1.015
-        const tp   = price * 0.965
+        const sl   = price + Math.max(price * 0.015, slDist)
+        const tp   = price - Math.max(price * 0.035, tpDist)
         const conf = Math.min(90, 60 + (rsi > 75 ? 20 : 10) + (momentum < 0 ? 5 : 0))
-        console.log(`[${sym}] ATR=${atr.toFixed(2)} SL_dist=${(sl - price).toFixed(2)} (1.50%) TP_dist=${(price - tp).toFixed(2)} (3.50%)`)
+        console.log(`[${sym}] RANGE Overbought: sl=${sl.toFixed(2)} tp=${tp.toFixed(2)}`)
         return {
           signal: 'SELL', confidence: conf,
           reason: `RANGE Overbought RSI:${rsi.toFixed(0)} ADX:${adx.toFixed(0)}`,
@@ -283,7 +292,7 @@ async function findTradingOpportunity(
       }
     }
 
-    // ── MIXED MARKET → only very high confidence ──────────────────────────────
+    // ── MIXED → only very strong setups ─────────────────────────────────────
     const veryBull = ema9 > ema21 && rsi > 50 && momentum > 0.2
     const veryBear = ema9 < ema21 && rsi < 50 && momentum < -0.2
 
@@ -291,7 +300,10 @@ async function findTradingOpportunity(
       return {
         signal: 'BUY', confidence: 72,
         reason: `MIXED Bull RSI:${rsi.toFixed(0)} mom:${momentum.toFixed(2)}%`,
-        entry: price, sl: price * 0.982, tp: price * 1.045, size_pct: 0.05,
+        entry: price,
+        sl: price - Math.max(price * 0.018, slDist),
+        tp: price + Math.max(price * 0.045, tpDist),
+        size_pct: 0.05,
       }
     }
 
@@ -299,18 +311,21 @@ async function findTradingOpportunity(
       return {
         signal: 'SELL', confidence: 72,
         reason: `MIXED Bear RSI:${rsi.toFixed(0)} mom:${momentum.toFixed(2)}%`,
-        entry: price, sl: price * 1.018, tp: price * 0.955, size_pct: 0.05,
+        entry: price,
+        sl: price + Math.max(price * 0.018, slDist),
+        tp: price - Math.max(price * 0.045, tpDist),
+        size_pct: 0.05,
       }
     }
 
     console.log(`[${sym}] NO SIGNAL:`, {
-      bullTrend:  ema9 > ema21 && ema21 > ema50,
-      bearTrend:  ema9 < ema21 && ema21 < ema50,
+      bullTrend:   ema9 > ema21 && ema21 > ema50,
+      bearTrend:   ema9 < ema21 && ema21 < ema50,
       priceVsEMA9: ((price - ema9) / ema9 * 100).toFixed(2) + '%',
-      rsi:        rsi.toFixed(1),
-      momentum:   momentum.toFixed(3),
-      change24h:  change24h.toFixed(2),
-      adx:        adx.toFixed(1),
+      rsi:         rsi.toFixed(1),
+      momentum:    momentum.toFixed(3),
+      change24h:   change24h.toFixed(2),
+      adx:         adx.toFixed(1),
     })
     return {
       ...NONE,
@@ -322,23 +337,8 @@ async function findTradingOpportunity(
   }
 }
 
-// ── Price feed ─────────────────────────────────────────────────────────────────
-const CG_IDS = 'solana,bitcoin,ethereum,binancecoin,ripple,avalanche-2,chainlink,jupiter-ag,dogwifcoin,bonk,jito-governance-token,pyth-network,raydium'
-const CG_MAPPING: Record<string, string> = {
-  'solana':                'SOL',
-  'bitcoin':               'BTC',
-  'ethereum':              'ETH',
-  'binancecoin':           'BNB',
-  'ripple':                'XRP',
-  'avalanche-2':           'AVAX',
-  'chainlink':             'LINK',
-  'jupiter-ag':            'JUP',
-  'dogwifcoin':            'WIF',
-  'bonk':                  'BONK',
-  'jito-governance-token': 'JTO',
-  'pyth-network':          'PYTH',
-  'raydium':               'RAY',
-}
+// ── Price feed (Binance 24hr ticker — free, no rate limit) ────────────────────
+const BINANCE_SYMBOLS = Object.values(BINANCE_PAIRS) // all 13 USDT pairs
 
 async function fetchRealPrices(): Promise<Record<string, any>> {
   const now = Date.now()
@@ -348,42 +348,39 @@ async function fetchRealPrices(): Promise<Record<string, any>> {
   }
 
   const prices: Record<string, any> = {}
-  const url  = `https://api.coingecko.com/api/v3/simple/price?ids=${CG_IDS}&vs_currencies=usd&include_24hr_change=true&include_24hr_vol=true`
-  const opts = { headers: { Accept: 'application/json', 'User-Agent': 'KYMIA/1.0' }, signal: AbortSignal.timeout(8000) }
 
   try {
-    const res = await fetch(url, opts)
+    const symbolsParam = encodeURIComponent(JSON.stringify(BINANCE_SYMBOLS))
+    const res = await fetch(
+      `https://api.binance.com/api/v3/ticker/24hr?symbols=${symbolsParam}`,
+      { headers: { 'User-Agent': 'KYMIA/1.0' }, signal: AbortSignal.timeout(8000) }
+    )
 
-    let priceRes = res
-    if (res.status === 429) {
-      console.log('[prices] CoinGecko rate limited — waiting 30s')
-      await new Promise(r => setTimeout(r, 30000))
-      const retry = await fetch(url, opts)
-      console.log('[prices] CoinGecko retry status:', retry.status)
-      priceRes = retry
-    }
-
-    if (priceRes.ok) {
-      const data = await priceRes.json()
-      for (const [id, sym] of Object.entries(CG_MAPPING)) {
-        if (data[id]) {
-          prices[sym] = {
-            price:  data[id].usd,
-            change: data[id].usd_24h_change || 0,
-            volume: data[id].usd_24h_vol    || 0,
-          }
-          console.log(`[prices] ${sym}: $${prices[sym].price} (${prices[sym].change?.toFixed(1)}%)`)
-        }
-      }
+    if (!res.ok) {
+      console.log('[prices] Binance ticker error:', res.status)
     } else {
-      console.log('[prices] CoinGecko error:', priceRes.status)
+      const tickers = await res.json()
+      const reverseMap = Object.fromEntries(
+        Object.entries(BINANCE_PAIRS).map(([sym, pair]) => [pair, sym])
+      )
+
+      for (const t of tickers) {
+        const sym = reverseMap[t.symbol]
+        if (!sym) continue
+        prices[sym] = {
+          price:  parseFloat(t.lastPrice),
+          change: parseFloat(t.priceChangePercent),
+          volume: parseFloat(t.volume) * parseFloat(t.lastPrice), // volume in USD
+        }
+        console.log(`[prices] ${sym}: $${prices[sym].price} (${prices[sym].change?.toFixed(1)}%)`)
+      }
     }
   } catch (e: any) {
-    console.log('[prices] CoinGecko failed:', e.message)
+    console.log('[prices] Binance failed:', e.message)
   }
 
   if (Object.keys(prices).length === 0) {
-    console.log('[prices] CoinGecko unavailable — using fallback prices (trades blocked)')
+    console.log('[prices] Binance unavailable — using fallback prices (trades blocked)')
     prices['SOL'] = { price: 80,    change: 0, volume: 0, fallback: true }
     prices['BTC'] = { price: 62000, change: 0, volume: 0, fallback: true }
     prices['ETH'] = { price: 1760,  change: 0, volume: 0, fallback: true }
@@ -476,7 +473,6 @@ async function runUserCycle(supabase: SupabaseClient, state: any) {
   const userId = state.user_id
   const config = state.swarm_config || { profile: 'balanced', leverage: 1 }
 
-  // Increment rotation counter
   cycleCountRef.current++
   const cycleNum = cycleCountRef.current
 
@@ -521,8 +517,7 @@ async function runUserCycle(supabase: SupabaseClient, state: any) {
     return
   }
 
-  // Pair rotation: 3-4 symbols per cycle to stay well under CoinGecko rate limits
-  // Cycle N%5===0 → Tier B  |  N%2===0 → Tier A[4-7]  |  else → Tier A[0-3]
+  // Pair rotation: 3-4 symbols per cycle
   let pairsToAnalyze: string[]
   if (cycleNum % 5 === 0) {
     pairsToAnalyze = TIER_B
@@ -540,9 +535,6 @@ async function runUserCycle(supabase: SupabaseClient, state: any) {
 
   for (const sym of pairsToAnalyze) {
     if (tradedThisCycle >= MAX_TRADES_PER_CYCLE) break
-
-    // 500ms between calls to avoid burst rate-limiting
-    await new Promise(r => setTimeout(r, 500))
 
     if (currentPositions[sym]) {
       console.log(`[cycle] ${sym} already open`)
@@ -620,7 +612,7 @@ async function runUserCycle(supabase: SupabaseClient, state: any) {
   if (tradedThisCycle === 0 && Object.keys(signalResults).length > 0) {
     const hasSignal = Object.values(signalResults).some(r => r.signal !== 'NONE' && r.signal !== 'OPEN' && r.signal !== 'SKIP')
     if (!hasSignal) {
-      console.log('[cycle] No opportunities found — market ranging or APIs limited')
+      console.log('[cycle] No opportunities found — market ranging or conditions not met')
     }
   }
 
