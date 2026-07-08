@@ -2444,9 +2444,6 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
       winning_trades:wins.length,
       total_pnl:closed.reduce((s:number,t:Trade)=>s+t.pnl,0),
       best_trade:Math.max(0,...closed.map((t:Trade)=>t.pnl)),
-      equity:portRef.current.equity,
-      cash:portRef.current.cash,
-      open_positions:portRef.current.pos,
       swarm_config:swarmConfig,
       last_session:new Date().toISOString()
     },{onConflict:'user_id'});
@@ -2454,15 +2451,7 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
 
   // saveTrade removed — trades written exclusively by /api/agents/cycle (server-side)
 
-  const saveOpenPositions=useCallback(async()=>{
-    if(!user)return;
-    await supabase.from('kymia_sessions').update({
-      open_positions:portRef.current.pos,
-      equity:portRef.current.equity,
-      cash:portRef.current.cash,
-      last_session:new Date().toISOString(),
-    }).eq('user_id',user.id);
-  },[user]);
+  // saveOpenPositions removed — positions/equity/cash owned exclusively by kymia_agent_state
 
   useEffect(()=>{
     // FIX 1: handle OAuth redirect — Supabase puts access_token in URL hash
@@ -2493,12 +2482,12 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[]);
 
-  // ── Save session every 60s while running (positions + equity + trades) ──
+  // ── Save trade stats to kymia_sessions every 60s while running ──────────
   useEffect(()=>{
     if(!user||!running)return;
-    const iv=setInterval(()=>{saveSession();saveOpenPositions();},60000);
+    const iv=setInterval(()=>{saveSession();},60000);
     return()=>clearInterval(iv);
-  },[user,running,saveSession,saveOpenPositions]);
+  },[user,running,saveSession]);
 
   // ── Server-side agent state: initial load from kymia_agent_state ────────
   useEffect(()=>{
