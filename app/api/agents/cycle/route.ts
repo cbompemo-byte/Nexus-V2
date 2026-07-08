@@ -658,6 +658,16 @@ async function runUserCycle(supabase: SupabaseClient, state: any) {
 
   await supabase
     .from('kymia_agent_state')
-    .update({ last_cycle: new Date().toISOString(), cycle_count: (state.cycle_count || 0) + 1 })
+    .update({
+      last_cycle:     new Date().toISOString(),
+      cycle_count:    (state.cycle_count || 0) + 1,
+      last_cycle_log: {
+        timestamp:       new Date().toISOString(),
+        prices_loaded:   Object.keys(prices).length,
+        pairs_analyzed:  pairsToAnalyze || [],
+        trade_opened:    tradedThisCycle > 0,
+        positions_count: Object.keys(state.positions || {}).length,
+      },
+    })
     .eq('user_id', userId)
 }
