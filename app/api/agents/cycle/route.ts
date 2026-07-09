@@ -522,10 +522,17 @@ async function runUserCycle(supabase: SupabaseClient, state: any) {
 
   const cycleNum = (globalState?.cycle_counter || 0) + 1
 
-  await supabase
+  const { error: counterError, data: counterData } = await supabase
     .from('kymia_global_state')
     .update({ cycle_counter: cycleNum })
     .eq('id', 'singleton')
+    .select()
+
+  if (counterError) {
+    console.log('[cycle] COUNTER UPDATE ERROR:', counterError.message, counterError.code, counterError.details)
+  } else {
+    console.log('[cycle] COUNTER UPDATE SUCCESS:', JSON.stringify(counterData))
+  }
 
   console.log(`[cycle] Global cycle number: ${cycleNum}`)
 
