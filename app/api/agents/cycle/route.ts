@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server'
 
 // ── Module-level state ─────────────────────────────────────────────────────────
 let priceCache: { data: Record<string, any>; timestamp: number } = { data: {}, timestamp: 0 }
-const cycleCountRef = { current: 0 }
+// cycleCountRef removed — cycle counter persisted in kymia_global_state to survive cold starts
 
 export async function GET() {
   console.log('[cycle] Starting agent cycle...')
@@ -513,8 +513,21 @@ async function runUserCycle(supabase: SupabaseClient, state: any) {
   const userId = state.user_id
   const config = state.swarm_config || { profile: 'balanced', leverage: 1 }
 
-  cycleCountRef.current++
-  const cycleNum = cycleCountRef.current
+  // Fetch and increment persistent cycle counter from Supabase
+  const { data: globalState } = await supabase
+    .from('kymia_global_state')
+    .select('cycle_counter')
+    .eq('id', 'singleton')
+    .single()
+
+  const cycleNum = (globalState?.cycle_counter || 0) + 1
+
+  await supabase
+    .from('kymia_global_state')
+    .update({ cycle_counter: cycleNum })
+    .eq('id', 'singleton')
+
+  console.log(`[cycle] Global cycle number: ${cycleNum}`)
 
   console.log('[cycle] User state:', {
     running:       state.running,
