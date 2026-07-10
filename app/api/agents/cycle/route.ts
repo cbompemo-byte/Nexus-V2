@@ -513,28 +513,10 @@ async function runUserCycle(supabase: SupabaseClient, state: any) {
   const userId = state.user_id
   const config = state.swarm_config || { profile: 'balanced', leverage: 1 }
 
-  // Fetch and increment persistent cycle counter from Supabase
-  const { data: globalState } = await supabase
-    .from('kymia_global_state')
-    .select('cycle_counter')
-    .eq('id', 'singleton')
-    .single()
+  // Time-based rotation — changes every minute, no persistence needed
+  const cycleNum = Math.floor(Date.now() / 60000)
 
-  const cycleNum = (globalState?.cycle_counter || 0) + 1
-
-  const { error: counterError, data: counterData } = await supabase
-    .from('kymia_global_state')
-    .update({ cycle_counter: cycleNum })
-    .eq('id', 'singleton')
-    .select()
-
-  if (counterError) {
-    console.log('[cycle] COUNTER UPDATE ERROR:', counterError.message, counterError.code, counterError.details)
-  } else {
-    console.log('[cycle] COUNTER UPDATE SUCCESS:', JSON.stringify(counterData))
-  }
-
-  console.log(`[cycle] Global cycle number: ${cycleNum}`)
+  console.log(`[cycle] Time-based cycle number: ${cycleNum}`)
 
   console.log('[cycle] User state:', {
     running:       state.running,
