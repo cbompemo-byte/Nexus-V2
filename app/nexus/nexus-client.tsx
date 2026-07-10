@@ -621,7 +621,7 @@ function TradingViewChart({sym,entryPrice,sl,tp,trailPrice,interval}:{sym:string
   // Suppress uncaught errors originating from TradingView's widget scripts
   useEffect(()=>{
     const handler=(event:ErrorEvent)=>{
-      if(event.filename?.includes('tradingview')||event.filename?.includes('embed_advanced_chart')){
+      if(event.filename?.includes('tradingview')||event.filename?.includes('embed_advanced_chart')||event.filename?.includes('runtime-embed')){
         console.log('[TradingView] Suppressed external widget error:',event.message);
         event.preventDefault();
         return true;
