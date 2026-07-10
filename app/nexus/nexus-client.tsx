@@ -826,7 +826,7 @@ function AgentAnalysisPanel({agentSignals,entryPrice}:{agentSignals?:AgentSignal
 }
 
 function TradeModal({trade,position,agentSignals,onClose,onClosePosition}:{trade:Trade|null,position:Position|null,agentSignals?:AgentSignals,onClose:()=>void,onClosePosition?:()=>void}){
-  const sym=trade?.sym||position&&Object.keys(position).length?"SOL":"SOL";
+  const sym=trade?.sym||"SOL";
   const [chartInterval,setChartInterval]=useState("5");
   const entry=trade?.price||position?.avg||0;
   const sl=entry*0.975;
@@ -3917,7 +3917,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
                   const pct2=p.size>0?pnl/p.size*100:((cur-pos.avg)/pos.avg*100*(isLong?1:-1));
                   const col=pnl>=0?K.g:K.r;
                   return(
-                    <div key={sym} onClick={()=>setChartTrade({trade:null,position:pos as any,agentSignals:undefined})} style={{padding:'12px 16px',background:'rgba(6,10,18,0.9)',border:`1px solid ${col}30`,borderLeft:`3px solid ${col}`,borderRadius:8,marginBottom:8,cursor:'pointer'}}>
+                    <div key={sym} onClick={()=>setChartTrade({trade:{sym,side:'BUY',price:(pos as any)?.avg||0,pnl:0,conf:0,t:'',ms:Date.now(),qty:0,id:'',agent:'HYBRID'} as any,position:pos as any,agentSignals:undefined})} style={{padding:'12px 16px',background:'rgba(6,10,18,0.9)',border:`1px solid ${col}30`,borderLeft:`3px solid ${col}`,borderRadius:8,marginBottom:8,cursor:'pointer'}}>
                       {/* Header */}
                       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
                         <div style={{display:'flex',gap:8,alignItems:'center'}}>
