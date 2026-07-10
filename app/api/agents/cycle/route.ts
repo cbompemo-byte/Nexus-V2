@@ -5,6 +5,14 @@ import { NextResponse } from 'next/server'
 let priceCache: { data: Record<string, any>; timestamp: number } = { data: {}, timestamp: 0 }
 // cycleCountRef removed — cycle counter persisted in kymia_global_state to survive cold starts
 
+// Rounds to N significant digits — preserves precision for low-value tokens like BONK ($0.0000042)
+function roundToSignificant(value: number, sigDigits = 6): number {
+  if (value === 0) return 0
+  const magnitude = Math.floor(Math.log10(Math.abs(value)))
+  const decimals = Math.max(0, sigDigits - magnitude - 1)
+  return parseFloat(value.toFixed(Math.min(decimals, 15)))
+}
+
 export async function GET() {
   console.log('[cycle] Starting agent cycle...')
   console.log('[cycle] ENV check:', {
@@ -623,8 +631,8 @@ async function runUserCycle(supabase: SupabaseClient, state: any) {
             qty:      parseFloat(qty.toFixed(6)),
             side:     opp.signal === 'BUY' ? 'LONG' : 'SHORT',
             size:     parseFloat(size.toFixed(2)),
-            sl:       parseFloat(opp.sl.toFixed(6)),
-            tp:       parseFloat(opp.tp.toFixed(6)),
+            sl:       roundToSignificant(opp.sl),
+            tp:       roundToSignificant(opp.tp),
             openedAt: new Date().toISOString(),
             conf:     opp.confidence,
             agent:    'HYBRID',
