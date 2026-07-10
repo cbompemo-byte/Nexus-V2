@@ -4463,7 +4463,29 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
       />}
 
       {/* Confirm Close Modal */}
-      {confirmClose&&<ConfirmCloseModal sym={confirmClose} onCancel={()=>setConfirmClose(null)} onConfirm={()=>setConfirmClose(null)}/>}
+      {confirmClose&&<ConfirmCloseModal
+        sym={confirmClose}
+        onCancel={()=>setConfirmClose(null)}
+        onConfirm={async()=>{
+          const symToClose=confirmClose;
+          setConfirmClose(null);
+          try{
+            const res=await fetch('/api/agents/manual-close',{
+              method:'POST',
+              headers:{'Content-Type':'application/json'},
+              body:JSON.stringify({userId:user?.id,sym:symToClose})
+            });
+            const result=await res.json();
+            if(result.ok){
+              log('KYMIA',`◈ ${symToClose} manually closed @ $${result.exitPrice} | PnL: ${result.pnl>=0?'+':''}$${result.pnl} (${result.pct}%)`,result.pnl>=0?K.g:K.r);
+            }else{
+              log('KYMIA',`⚠ Failed to close ${symToClose}: ${result.error}`,K.r);
+            }
+          }catch(e){
+            log('KYMIA',`⚠ Error closing position`,K.r);
+          }
+        }}
+      />}
 
       {/* Cinematic chart on new trade */}
       {cinematicTrade&&<CinematicChart trade={cinematicTrade} onComplete={()=>setCinematicTrade(null)}/>}
