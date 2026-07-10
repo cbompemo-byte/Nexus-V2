@@ -618,6 +618,19 @@ function TradingViewChart({sym,entryPrice,sl,tp,trailPrice,interval}:{sym:string
   const containerRef=useRef<HTMLDivElement>(null);
   const tvSym=TV_SYMBOLS[sym]||`BINANCE:${sym}USDT`;
 
+  // Suppress uncaught errors originating from TradingView's widget scripts
+  useEffect(()=>{
+    const handler=(event:ErrorEvent)=>{
+      if(event.filename?.includes('tradingview')||event.filename?.includes('embed_advanced_chart')){
+        console.log('[TradingView] Suppressed external widget error:',event.message);
+        event.preventDefault();
+        return true;
+      }
+    };
+    window.addEventListener('error',handler);
+    return()=>window.removeEventListener('error',handler);
+  },[]);
+
   useEffect(()=>{
     if(!containerRef.current)return;
     containerRef.current.innerHTML="";
@@ -625,6 +638,7 @@ function TradingViewChart({sym,entryPrice,sl,tp,trailPrice,interval}:{sym:string
     script.src="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js";
     script.type="text/javascript";
     script.async=true;
+    script.onerror=(e)=>{console.log('[TradingView] Script failed to load:',e);};
     script.innerHTML=JSON.stringify({
       autosize:true,
       symbol:tvSym,
