@@ -3693,7 +3693,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
                     const rsiCol=rsi>70?K.r:rsi<30?K.g:K.gold;
                     const isShortPos=pos?.side==="SHORT";
                     return(
-                      <div key={sym} className="tr" style={{display:"grid",gridTemplateColumns:"8px 36px 1fr 38px 26px",alignItems:"center",gap:4,padding:"0 8px",height:32,borderBottom:"1px solid #050810",borderLeft:"2px solid "+(pos?(isShortPos?K.r:K.c):mktTab==="RADAR"?K.gold+"60":"transparent"),cursor:"pointer"}} onClick={()=>{if(pos)setChartTrade({trade:null,position:pos,agentSignals:undefined});}}>
+                      <div key={sym} className="tr" style={{display:"grid",gridTemplateColumns:"8px 36px 1fr 38px 26px",alignItems:"center",gap:4,padding:"0 8px",height:32,borderBottom:"1px solid #050810",borderLeft:"2px solid "+(pos?(isShortPos?K.r:K.c):mktTab==="RADAR"?K.gold+"60":"transparent"),cursor:"pointer"}} onClick={()=>{if(pos)setChartTrade({trade:{sym,side:pos.side==='SHORT'?'SELL':'BUY',price:pos.avg||0,pnl:0,conf:0,t:'',ms:Date.now(),qty:0,id:'',agent:'HYBRID'} as any,position:pos,agentSignals:undefined});}}>
                         <div style={{width:6,height:6,borderRadius:"50%",background:up?K.g:K.r,flexShrink:0,boxShadow:"0 0 4px "+(up?K.g:K.r)}}/>
                         <div style={{fontSize:9,fontWeight:700,color:K.hi,letterSpacing:".03em",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{sym}</div>
                         <div style={{minWidth:0}}>
