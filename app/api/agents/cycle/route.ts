@@ -571,6 +571,18 @@ async function runUserCycle(supabase: SupabaseClient, state: any) {
 
   console.log(`[cycle] Analyzing (cycle #${cycleNum}): ${pairsToAnalyze.join(', ')}`)
 
+  await supabase
+    .from('kymia_agent_state')
+    .update({
+      last_cycle_log: {
+        timestamp:      new Date().toISOString(),
+        cycleNum,
+        pairsToAnalyze,
+        dateNowMinute:  Math.floor(Date.now() / 60000),
+      },
+    })
+    .eq('user_id', userId)
+
   let tradedThisCycle        = 0
   const MAX_TRADES_PER_CYCLE = 2
   const signalResults: Record<string, { signal: string; confidence: number }> = {}
