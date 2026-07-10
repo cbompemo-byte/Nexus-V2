@@ -3903,7 +3903,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
                   const pct2=p.size>0?pnl/p.size*100:((cur-pos.avg)/pos.avg*100*(isLong?1:-1));
                   const col=pnl>=0?K.g:K.r;
                   return(
-                    <div key={sym} onClick={()=>{console.log('[DEBUG] Card clicked for',sym,'pos:',pos);alert('Card clicked: '+sym);setChartTrade({trade:null,position:pos as any,agentSignals:undefined});}} style={{padding:'12px 16px',background:'rgba(6,10,18,0.9)',border:`1px solid ${col}30`,borderLeft:`3px solid ${col}`,borderRadius:8,marginBottom:8,cursor:'pointer'}}>
+                    <div key={sym} onClick={()=>{console.log('[DEBUG] About to call setChartTrade with:',{trade:null,position:pos,agentSignals:undefined});setChartTrade({trade:null,position:pos as any,agentSignals:undefined});console.log('[DEBUG] setChartTrade called');}} style={{padding:'12px 16px',background:'rgba(6,10,18,0.9)',border:`1px solid ${col}30`,borderLeft:`3px solid ${col}`,borderRadius:8,marginBottom:8,cursor:'pointer'}}>
                       {/* Header */}
                       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
                         <div style={{display:'flex',gap:8,alignItems:'center'}}>
@@ -4478,6 +4478,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
       {/* Trade Chart Modal */}
       {missionCelebration&&<MissionComplete mission={missionCelebration} onDismiss={()=>setMissionCelebration(null)}/>}
 
+      {(() => { console.log('[DEBUG] Rendering check, chartTrade is:', chartTrade); return null })()}
       {chartTrade&&<TradeModal
         trade={chartTrade.trade}
         position={chartTrade.position}
