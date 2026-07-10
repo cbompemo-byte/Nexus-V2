@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useRef, useCallback, useLayoutEffect } from "react";
+import React, { useState, useEffect, useRef, useCallback, useLayoutEffect } from "react";
 import { closeLiveTrade } from "../../lib/closeLiveTrade";
 import { openLiveTrade } from "../../lib/openLiveTrade";
 import { supabase } from "../../lib/supabase";
@@ -588,6 +588,32 @@ const TV_SYMBOLS:{[k:string]:string}={
   PEPE:"BINANCE:PEPEUSDT",POPCAT:"BINANCE:POPCATUSDT",DRIFT:"BINANCE:DRIFTUSDT",
 };
 
+class ChartErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean }
+> {
+  constructor(props: any) {
+    super(props)
+    this.state = { hasError: false }
+  }
+  static getDerivedStateFromError() {
+    return { hasError: true }
+  }
+  componentDidCatch(error: any) {
+    console.log('[ChartErrorBoundary] TradingView widget failed:', error?.message)
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{padding:40,textAlign:'center',color:'#2A5070',fontFamily:'monospace',fontSize:12}}>
+          ⚠ Chart temporarily unavailable
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
+
 function TradingViewChart({sym,entryPrice,sl,tp,trailPrice,interval}:{sym:string,entryPrice:number,sl:number,tp:number,trailPrice:number|null,interval:string}){
   const containerRef=useRef<HTMLDivElement>(null);
   const tvSym=TV_SYMBOLS[sym]||`BINANCE:${sym}USDT`;
@@ -822,7 +848,9 @@ function TradeModal({trade,position,agentSignals,onClose,onClosePosition}:{trade
         <AgentAnalysisPanel agentSignals={agentSignals} entryPrice={entry}/>
 
         {/* TradingView chart */}
-        <TradingViewChart sym={sym} entryPrice={entry} sl={sl} tp={tp} trailPrice={trailPrice} interval={chartInterval}/>
+        <ChartErrorBoundary>
+          <TradingViewChart sym={sym} entryPrice={entry} sl={sl} tp={tp} trailPrice={trailPrice} interval={chartInterval}/>
+        </ChartErrorBoundary>
 
         {/* Footer */}
         <div style={{padding:"10px 16px",borderTop:"1px solid #0A1D33",background:"rgba(6,10,18,0.8)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
