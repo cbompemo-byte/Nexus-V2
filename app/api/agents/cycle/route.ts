@@ -320,6 +320,14 @@ async function findTradingOpportunity(
     const slDist = Math.max(atr * 2, price * 0.012)
     const tpDist = Math.max(slDist * 2.5, price * 0.03)
 
+    // Absolute minimum distance floors — prevents instant-close on low-ATR / tiny-price tokens
+    const MIN_SL_PCT = 0.008  // SL never closer than 0.8% from entry
+    const MIN_TP_PCT = 0.020  // TP never closer than 2.0% from entry
+    const floorSl = (sl: number, isBuy: boolean) =>
+      isBuy ? Math.min(sl, price * (1 - MIN_SL_PCT)) : Math.max(sl, price * (1 + MIN_SL_PCT))
+    const floorTp = (tp: number, isBuy: boolean) =>
+      isBuy ? Math.max(tp, price * (1 + MIN_TP_PCT)) : Math.min(tp, price * (1 - MIN_TP_PCT))
+
     console.log(
       `[${sym}] price=${price.toFixed(4)}` +
       ` ema9=${ema9.toFixed(4)} ema21=${ema21.toFixed(4)}` +
@@ -340,11 +348,12 @@ async function findTradingOpportunity(
           (momentum > 0.3 ? 8 : 3) +
           (change24h > 2  ? 7 : 0)
         )
-        console.log(`[${sym}] TREND BUY: sl=${sl.toFixed(4)} tp=${tp.toFixed(4)} conf=${conf}`)
+        const fsl = floorSl(sl, true), ftp = floorTp(tp, true)
+        console.log(`[${sym}] TREND BUY: sl=${fsl.toFixed(4)} tp=${ftp.toFixed(4)} conf=${conf}`)
         return {
           signal: 'BUY', confidence: conf,
           reason: `TREND Bull EMA trend=${adx.toFixed(0)}% RSI:${rsi.toFixed(0)}`,
-          entry: price, sl, tp,
+          entry: price, sl: fsl, tp: ftp,
           size_pct: conf >= 85 ? 0.10 : 0.07,
         }
       }
@@ -357,11 +366,12 @@ async function findTradingOpportunity(
           (momentum < -0.3 ? 8 : 3) +
           (change24h < -2  ? 7 : 0)
         )
-        console.log(`[${sym}] TREND SELL: sl=${sl.toFixed(4)} tp=${tp.toFixed(4)} conf=${conf}`)
+        const fsl = floorSl(sl, false), ftp = floorTp(tp, false)
+        console.log(`[${sym}] TREND SELL: sl=${fsl.toFixed(4)} tp=${ftp.toFixed(4)} conf=${conf}`)
         return {
           signal: 'SELL', confidence: conf,
           reason: `TREND Bear EMA trend=${adx.toFixed(0)}% RSI:${rsi.toFixed(0)}`,
-          entry: price, sl, tp,
+          entry: price, sl: fsl, tp: ftp,
           size_pct: conf >= 85 ? 0.10 : 0.07,
         }
       }
@@ -373,11 +383,12 @@ async function findTradingOpportunity(
         const sl   = price - Math.max(price * 0.015, slDist)
         const tp   = price + Math.max(price * 0.035, tpDist)
         const conf = Math.min(90, 60 + (rsi < 25 ? 20 : 10) + (momentum > 0 ? 5 : 0))
-        console.log(`[${sym}] RANGE BUY: rsi=${rsi.toFixed(1)} sl=${sl.toFixed(4)} tp=${tp.toFixed(4)} conf=${conf}`)
+        const fsl = floorSl(sl, true), ftp = floorTp(tp, true)
+        console.log(`[${sym}] RANGE BUY: rsi=${rsi.toFixed(1)} sl=${fsl.toFixed(4)} tp=${ftp.toFixed(4)} conf=${conf}`)
         return {
           signal: 'BUY', confidence: conf,
           reason: `RANGE Oversold RSI:${rsi.toFixed(0)} trend=${adx.toFixed(0)}%`,
-          entry: price, sl, tp,
+          entry: price, sl: fsl, tp: ftp,
           size_pct: 0.06,
         }
       }
@@ -386,11 +397,12 @@ async function findTradingOpportunity(
         const sl   = price + Math.max(price * 0.015, slDist)
         const tp   = price - Math.max(price * 0.035, tpDist)
         const conf = Math.min(90, 60 + (rsi > 75 ? 20 : 10) + (momentum < 0 ? 5 : 0))
-        console.log(`[${sym}] RANGE SELL: rsi=${rsi.toFixed(1)} sl=${sl.toFixed(4)} tp=${tp.toFixed(4)} conf=${conf}`)
+        const fsl = floorSl(sl, false), ftp = floorTp(tp, false)
+        console.log(`[${sym}] RANGE SELL: rsi=${rsi.toFixed(1)} sl=${fsl.toFixed(4)} tp=${ftp.toFixed(4)} conf=${conf}`)
         return {
           signal: 'SELL', confidence: conf,
           reason: `RANGE Overbought RSI:${rsi.toFixed(0)} trend=${adx.toFixed(0)}%`,
-          entry: price, sl, tp,
+          entry: price, sl: fsl, tp: ftp,
           size_pct: 0.06,
         }
       }
@@ -405,8 +417,8 @@ async function findTradingOpportunity(
         signal: 'BUY', confidence: 72,
         reason: `MIXED Bull RSI:${rsi.toFixed(0)} mom:${momentum.toFixed(2)}%`,
         entry: price,
-        sl: price - Math.max(price * 0.018, slDist),
-        tp: price + Math.max(price * 0.045, tpDist),
+        sl: floorSl(price - Math.max(price * 0.018, slDist), true),
+        tp: floorTp(price + Math.max(price * 0.045, tpDist), true),
         size_pct: 0.05,
       }
     }
@@ -416,8 +428,8 @@ async function findTradingOpportunity(
         signal: 'SELL', confidence: 72,
         reason: `MIXED Bear RSI:${rsi.toFixed(0)} mom:${momentum.toFixed(2)}%`,
         entry: price,
-        sl: price + Math.max(price * 0.018, slDist),
-        tp: price - Math.max(price * 0.045, tpDist),
+        sl: floorSl(price + Math.max(price * 0.018, slDist), false),
+        tp: floorTp(price - Math.max(price * 0.045, tpDist), false),
         size_pct: 0.05,
       }
     }
