@@ -461,22 +461,97 @@ async function checkPositions(
     if (!cur) continue
 
     const isLong = pos.side === 'LONG' || pos.side === 'BUY'
-    const pnl = isLong ? (cur - pos.avg) * pos.qty : (pos.avg - cur) * pos.qty
-    const pct = (pnl / (pos.avg * pos.qty)) * 100
 
     const sl: number = pos.sl || (isLong ? pos.avg * 0.982 : pos.avg * 1.018)
     const tp: number = pos.tp || (isLong ? pos.avg * 1.055 : pos.avg * 0.95)
 
-    const hardStop    = isLong ? pos.avg * 0.95 : pos.avg * 1.05
-    const effectiveSL = isLong ? Math.max(sl, hardStop) : Math.min(sl, hardStop)
+    // ── Trailing stop + partial TP ────────────────────────────────────────────
+    const distanceToTp  = Math.abs(tp - pos.avg)
+    const currentProfit = isLong ? cur - pos.avg : pos.avg - cur
+    const profitRatio   = distanceToTp > 0 ? currentProfit / distanceToTp : 0
 
-    console.log(`[SL check] ${sym}: cur=${cur.toFixed(4)} sl=${effectiveSL.toFixed(4)} tp=${tp.toFixed(4)} hit=${isLong ? cur <= effectiveSL : cur >= effectiveSL}`)
+    if (profitRatio > 0) {
+      // 50% to TP → move SL to break-even
+      if (profitRatio >= 0.5 && (pos.trailingSl == null || (isLong ? pos.trailingSl < pos.avg : pos.trailingSl > pos.avg))) {
+        updates[sym] = { ...updates[sym], trailingSl: pos.avg }
+        console.log(`[TRAIL] ${sym} reached 50% to TP — SL moved to breakeven $${pos.avg}`)
+      }
+
+      // 75% to TP → tighten SL to lock in 50% of current profit
+      if (profitRatio >= 0.75) {
+        const lockedProfit = currentProfit * 0.5
+        const newSl = isLong ? pos.avg + lockedProfit : pos.avg - lockedProfit
+        // Only move the trailing SL in the profitable direction
+        const shouldUpdate = pos.trailingSl == null ||
+          (isLong ? newSl > (pos.trailingSl ?? -Infinity) : newSl < (pos.trailingSl ?? Infinity))
+        if (shouldUpdate) {
+          updates[sym] = { ...updates[sym], trailingSl: roundToSignificant(newSl) }
+          console.log(`[TRAIL] ${sym} reached 75% to TP — SL tightened to $${newSl.toFixed(6)}`)
+        }
+      }
+
+      // 60% to TP → close half the position
+      if (profitRatio >= 0.6 && !pos.halfClosed) {
+        const halfQty    = pos.qty / 2
+        const partialPnl = isLong
+          ? (cur - pos.avg) * halfQty
+          : (pos.avg - cur) * halfQty
+
+        await supabase.from('kymia_trades').insert({
+          user_id:   userId,
+          sym,
+          side:      pos.side,
+          entry:     pos.avg,
+          exit:      cur,
+          pnl:       parseFloat(partialPnl.toFixed(2)),
+          pct:       parseFloat((profitRatio * 100).toFixed(2)),
+          agent:     (pos.agent || 'HYBRID') + '_PARTIAL',
+          opened_at: pos.openedAt,
+          closed_at: new Date().toISOString(),
+        })
+
+        updates[sym] = {
+          ...updates[sym],
+          qty:        parseFloat((pos.qty - halfQty).toFixed(6)),
+          halfClosed: true,
+        }
+
+        cash += partialPnl
+        console.log(
+          `[PARTIAL TP] ${sym} closed 50% @ $${cur} for +$${partialPnl.toFixed(2)},` +
+          ` remaining qty ${(pos.qty - halfQty).toFixed(6)} riding trailing stop`
+        )
+      }
+    }
+
+    // Use trailing SL if it exists, otherwise fall back to hard SL
+    // For LONG: trailing SL must be >= original SL (only tightens, never loosens)
+    // For SHORT: trailing SL must be <= original SL
+    const currentPos = updates[sym] ?? pos
+    const rawSl = currentPos.trailingSl ?? sl
+
+    const hardStop    = isLong ? pos.avg * 0.95 : pos.avg * 1.05
+    const effectiveSL = isLong
+      ? Math.max(rawSl, hardStop)
+      : Math.min(rawSl, hardStop)
+
+    console.log(
+      `[SL check] ${sym}: cur=${cur.toFixed(4)} sl=${effectiveSL.toFixed(4)}` +
+      ` tp=${tp.toFixed(4)} trail=${currentPos.trailingSl?.toFixed(4) ?? 'none'}` +
+      ` halfClosed=${!!currentPos.halfClosed}` +
+      ` hit=${isLong ? cur <= effectiveSL : cur >= effectiveSL}`
+    )
 
     const slHit = isLong ? cur <= effectiveSL : cur >= effectiveSL
     const tpHit = isLong ? cur >= tp : cur <= tp
 
     if (slHit || tpHit) {
-      cash += pos.qty * cur
+      // Use the (possibly halved) qty from updates
+      const closeQty = (updates[sym]?.qty ?? pos.qty)
+      const closePnl = isLong ? (cur - pos.avg) * closeQty : (pos.avg - cur) * closeQty
+      const closePct = (closePnl / (pos.avg * closeQty)) * 100
+
+      cash += closeQty * cur
       delete updates[sym]
 
       await supabase.from('kymia_trades').insert({
@@ -485,8 +560,8 @@ async function checkPositions(
         side:      pos.side,
         entry:     pos.avg,
         exit:      cur,
-        pnl:       parseFloat(pnl.toFixed(2)),
-        pct:       parseFloat(pct.toFixed(2)),
+        pnl:       parseFloat(closePnl.toFixed(2)),
+        pct:       parseFloat(closePct.toFixed(2)),
         agent:     pos.agent || 'HYBRID',
         opened_at: pos.openedAt,
         closed_at: new Date().toISOString(),
@@ -494,7 +569,8 @@ async function checkPositions(
 
       console.log(
         `[KYMIA] CLOSED: ${sym} ${pos.side} @ $${cur.toFixed(4)} | ` +
-        `PnL: $${pnl.toFixed(2)} (${pct.toFixed(2)}%) | ${slHit ? 'SL' : 'TP'}`
+        `PnL: $${closePnl.toFixed(2)} (${closePct.toFixed(2)}%) | ${slHit ? 'SL' : 'TP'}` +
+        `${pos.halfClosed ? ' (remainder after partial TP)' : ''}`
       )
     }
   }
@@ -627,16 +703,18 @@ async function runUserCycle(supabase: SupabaseClient, state: any) {
         positions: {
           ...currentPositions,
           [sym]: {
-            avg:      opp.entry,
-            qty:      parseFloat(qty.toFixed(6)),
-            side:     opp.signal === 'BUY' ? 'LONG' : 'SHORT',
-            size:     parseFloat(size.toFixed(2)),
-            sl:       roundToSignificant(opp.sl),
-            tp:       roundToSignificant(opp.tp),
-            openedAt: new Date().toISOString(),
-            conf:     opp.confidence,
-            agent:    'HYBRID',
-            reason:   opp.reason,
+            avg:        opp.entry,
+            qty:        parseFloat(qty.toFixed(6)),
+            side:       opp.signal === 'BUY' ? 'LONG' : 'SHORT',
+            size:       parseFloat(size.toFixed(2)),
+            sl:         roundToSignificant(opp.sl),
+            tp:         roundToSignificant(opp.tp),
+            openedAt:   new Date().toISOString(),
+            conf:       opp.confidence,
+            agent:      'HYBRID',
+            reason:     opp.reason,
+            trailingSl: null,
+            halfClosed: false,
           },
         },
         cash:       parseFloat((currentCash - size).toFixed(2)),
