@@ -450,6 +450,7 @@ async function checkPositions(
   const positions = state.positions || {}
   const updates: any = { ...positions }
   let cash: number = state.cash || 10000
+  const partiallyClosedThisCycle = new Set<string>()
 
   for (const [sym, pos] of Object.entries(positions) as [string, any][]) {
     const priceEntry = prices[sym]
@@ -522,11 +523,17 @@ async function checkPositions(
             `[PARTIAL TP] ${sym} closed 50% @ $${cur} for +$${partialPnl.toFixed(2)},` +
             ` remaining qty ${(pos.qty - halfQty).toFixed(6)} riding trailing stop`
           )
+          partiallyClosedThisCycle.add(sym)
         }
       }
     } catch (trailError: any) {
       console.log(`[TRAIL ERROR] ${sym} failed: ${trailError.message}`, trailError.stack)
     }
+
+    // If we just partially closed this symbol this cycle, skip the final close
+    // check — the remaining half will be re-evaluated on the next cycle with
+    // its updated qty and trailingSl already written to updates.
+    if (partiallyClosedThisCycle.has(sym)) continue
 
     // Use trailing SL if it exists, otherwise fall back to hard SL
     // For LONG: trailing SL must be >= original SL (only tightens, never loosens)
