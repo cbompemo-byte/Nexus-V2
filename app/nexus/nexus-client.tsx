@@ -319,7 +319,7 @@ const REGIME_CONFIG:Record<MarketRegime,{col:string;agentWeightBoosts:Record<str
 const DECAY_RATE=2.5;
 const SIGNAL_EXPIRY=15*60*1000;
 
-type PriceData={price:number,prev:number,trend:string,change:number,rsi:number,hist:number[],source?:string};
+type PriceData={price:number,prev:number,trend:string,change:number,rsi:number,hist:number[],source?:string,isRealPrice?:boolean};
 type AgentState={on:boolean,conf:number|null,sig:string|null,th:string,real?:boolean};
 type NewToken={address:string,name:string,price:string,change1h:number,volume24h:number,liquidity:number,rugScore:number,buys:number,sells:number};
 type DataStatus={jupiter:"ok"|"err"|"loading",binance:"ok"|"err"|"loading",coingecko:"ok"|"err"|"loading",lastUpdate:number};
@@ -420,7 +420,7 @@ function usePrices(){
   const [px,setPx]=useState<{[k:string]:PriceData}>(()=>
     Object.fromEntries(Object.entries(SYMS).map(([k,v])=>[k,{
       price:v.base,prev:v.base,trend:"up" as const,change:0,rsi:50,
-      hist:Array.from({length:60},()=>v.base),
+      hist:Array.from({length:60},()=>v.base),isRealPrice:false,
     }]))
   );
   // real Jupiter prices every 5 s
@@ -441,7 +441,7 @@ function usePrices(){
             const cur=n[sym];if(!cur)continue;
             const np=jd.price;
             n[sym]={...cur,price:np,prev:cur.price,trend:np>cur.price?"up":"dn",
-              hist:[...cur.hist.slice(1),np],source:"JUP"};
+              hist:[...cur.hist.slice(1),np],source:"JUP",isRealPrice:true};
           }
           return n;
         });
@@ -465,7 +465,7 @@ function usePrices(){
             if(!np||!n[sym])continue;
             const cur=n[sym];
             n[sym]={...cur,price:np,prev:cur.price,trend:np>cur.price?"up":"dn",
-              hist:[...cur.hist.slice(1),np],source:"KRKN"};
+              hist:[...cur.hist.slice(1),np],source:"KRKN",isRealPrice:true};
           }
           return n;
         });
@@ -3911,7 +3911,10 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
                 </div>
                 :Object.entries(port.pos).map(([sym,pos])=>{
                   const p=pos as any;
-                  const cur=prices[sym]?.price||pos.avg;
+                  const priceEntry=prices[sym];
+                  const hasRealPrice=!!priceEntry?.isRealPrice;
+                  // For PnL calc: use real price if available, else fall back to entry (shows 0 PnL rather than garbage)
+                  const cur=hasRealPrice?priceEntry!.price:pos.avg;
                   const isLong=pos.side!=="SHORT";
                   const pnl=isLong?(cur-pos.avg)*pos.qty:(pos.avg-cur)*pos.qty;
                   const pct2=p.size>0?pnl/p.size*100:((cur-pos.avg)/pos.avg*100*(isLong?1:-1));
@@ -3932,7 +3935,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
                       </div>
                       {/* Trade levels */}
                       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr',gap:6,marginBottom:8}}>
-                        {([{l:'ENTRY',v:`$${pos.avg?.toFixed(2)}`,c:K.c},{l:'CURRENT',v:`$${cur?.toFixed(2)}`,c:'white'},{l:'TP',v:p.tp?`$${p.tp.toFixed(2)}`:'—',c:K.g},{l:'SL',v:p.sl?`$${p.sl.toFixed(2)}`:'—',c:K.r}] as {l:string,v:string,c:string}[]).map((item,i)=>(
+                        {([{l:'ENTRY',v:`$${pos.avg?.toFixed(2)}`,c:K.c},{l:'CURRENT',v:hasRealPrice?`$${cur?.toFixed(2)}`:'—',c:'white'},{l:'TP',v:p.tp?`$${p.tp.toFixed(2)}`:'—',c:K.g},{l:'SL',v:p.sl?`$${p.sl.toFixed(2)}`:'—',c:K.r}] as {l:string,v:string,c:string}[]).map((item,i)=>(
                           <div key={i} style={{padding:'6px 8px',background:'rgba(4,6,13,0.8)',borderRadius:4,textAlign:'center'}}>
                             <div style={{fontSize:8,color:K.dim,fontFamily:'monospace'}}>{item.l}</div>
                             <div style={{fontSize:11,color:item.c,fontWeight:700,fontFamily:'monospace',marginTop:2}}>{item.v}</div>
