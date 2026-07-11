@@ -466,62 +466,66 @@ async function checkPositions(
     const tp: number = pos.tp || (isLong ? pos.avg * 1.055 : pos.avg * 0.95)
 
     // ── Trailing stop + partial TP ────────────────────────────────────────────
-    const distanceToTp  = Math.abs(tp - pos.avg)
-    const currentProfit = isLong ? cur - pos.avg : pos.avg - cur
-    const profitRatio   = distanceToTp > 0 ? currentProfit / distanceToTp : 0
+    try {
+      const distanceToTp  = Math.abs(tp - pos.avg)
+      const currentProfit = isLong ? cur - pos.avg : pos.avg - cur
+      const profitRatio   = distanceToTp > 0 ? currentProfit / distanceToTp : 0
 
-    if (profitRatio > 0) {
-      // 50% to TP → move SL to break-even
-      if (profitRatio >= 0.5 && (pos.trailingSl == null || (isLong ? pos.trailingSl < pos.avg : pos.trailingSl > pos.avg))) {
-        updates[sym] = { ...updates[sym], trailingSl: pos.avg }
-        console.log(`[TRAIL] ${sym} reached 50% to TP — SL moved to breakeven $${pos.avg}`)
-      }
-
-      // 75% to TP → tighten SL to lock in 50% of current profit
-      if (profitRatio >= 0.75) {
-        const lockedProfit = currentProfit * 0.5
-        const newSl = isLong ? pos.avg + lockedProfit : pos.avg - lockedProfit
-        // Only move the trailing SL in the profitable direction
-        const shouldUpdate = pos.trailingSl == null ||
-          (isLong ? newSl > (pos.trailingSl ?? -Infinity) : newSl < (pos.trailingSl ?? Infinity))
-        if (shouldUpdate) {
-          updates[sym] = { ...updates[sym], trailingSl: roundToSignificant(newSl) }
-          console.log(`[TRAIL] ${sym} reached 75% to TP — SL tightened to $${newSl.toFixed(6)}`)
-        }
-      }
-
-      // 60% to TP → close half the position
-      if (profitRatio >= 0.6 && !pos.halfClosed) {
-        const halfQty    = pos.qty / 2
-        const partialPnl = isLong
-          ? (cur - pos.avg) * halfQty
-          : (pos.avg - cur) * halfQty
-
-        await supabase.from('kymia_trades').insert({
-          user_id:   userId,
-          sym,
-          side:      pos.side,
-          entry:     pos.avg,
-          exit:      cur,
-          pnl:       parseFloat(partialPnl.toFixed(2)),
-          pct:       parseFloat((profitRatio * 100).toFixed(2)),
-          agent:     (pos.agent || 'HYBRID') + '_PARTIAL',
-          opened_at: pos.openedAt,
-          closed_at: new Date().toISOString(),
-        })
-
-        updates[sym] = {
-          ...updates[sym],
-          qty:        parseFloat((pos.qty - halfQty).toFixed(6)),
-          halfClosed: true,
+      if (profitRatio > 0) {
+        // 50% to TP → move SL to break-even
+        if (profitRatio >= 0.5 && (pos.trailingSl == null || (isLong ? pos.trailingSl < pos.avg : pos.trailingSl > pos.avg))) {
+          updates[sym] = { ...updates[sym], trailingSl: pos.avg }
+          console.log(`[TRAIL] ${sym} reached 50% to TP — SL moved to breakeven $${pos.avg}`)
         }
 
-        cash += partialPnl
-        console.log(
-          `[PARTIAL TP] ${sym} closed 50% @ $${cur} for +$${partialPnl.toFixed(2)},` +
-          ` remaining qty ${(pos.qty - halfQty).toFixed(6)} riding trailing stop`
-        )
+        // 75% to TP → tighten SL to lock in 50% of current profit
+        if (profitRatio >= 0.75) {
+          const lockedProfit = currentProfit * 0.5
+          const newSl = isLong ? pos.avg + lockedProfit : pos.avg - lockedProfit
+          // Only move the trailing SL in the profitable direction
+          const shouldUpdate = pos.trailingSl == null ||
+            (isLong ? newSl > (pos.trailingSl ?? -Infinity) : newSl < (pos.trailingSl ?? Infinity))
+          if (shouldUpdate) {
+            updates[sym] = { ...updates[sym], trailingSl: roundToSignificant(newSl) }
+            console.log(`[TRAIL] ${sym} reached 75% to TP — SL tightened to $${newSl.toFixed(6)}`)
+          }
+        }
+
+        // 60% to TP → close half the position
+        if (profitRatio >= 0.6 && !pos.halfClosed) {
+          const halfQty    = pos.qty / 2
+          const partialPnl = isLong
+            ? (cur - pos.avg) * halfQty
+            : (pos.avg - cur) * halfQty
+
+          await supabase.from('kymia_trades').insert({
+            user_id:   userId,
+            sym,
+            side:      pos.side,
+            entry:     pos.avg,
+            exit:      cur,
+            pnl:       parseFloat(partialPnl.toFixed(2)),
+            pct:       parseFloat((profitRatio * 100).toFixed(2)),
+            agent:     (pos.agent || 'HYBRID') + '_PARTIAL',
+            opened_at: pos.openedAt,
+            closed_at: new Date().toISOString(),
+          })
+
+          updates[sym] = {
+            ...updates[sym],
+            qty:        parseFloat((pos.qty - halfQty).toFixed(6)),
+            halfClosed: true,
+          }
+
+          cash += partialPnl
+          console.log(
+            `[PARTIAL TP] ${sym} closed 50% @ $${cur} for +$${partialPnl.toFixed(2)},` +
+            ` remaining qty ${(pos.qty - halfQty).toFixed(6)} riding trailing stop`
+          )
+        }
       }
+    } catch (trailError: any) {
+      console.log(`[TRAIL ERROR] ${sym} failed: ${trailError.message}`, trailError.stack)
     }
 
     // Use trailing SL if it exists, otherwise fall back to hard SL
