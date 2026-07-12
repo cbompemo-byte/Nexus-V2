@@ -320,6 +320,51 @@ export async function GET(req: Request) {
       return NextResponse.json({ type: "adx", adx, plusDI, minusDI, sma20, currentPrice, trendDir, trendStrength });
     }
 
+    // ALL — Unified price feed for all traded symbols (Kraken + KuCoin, mirrors cycle/route.ts)
+    if (type === "all") {
+      const KRAKEN_PAIRS: Record<string, string> = {
+        SOL: 'SOLUSD', BTC: 'XBTUSD', ETH: 'ETHUSD',
+        BNB: 'BNBUSD', XRP: 'XRPUSD', AVAX: 'AVAXUSD', LINK: 'LINKUSD',
+      }
+      const KUCOIN_SYMS = ['JUP', 'WIF', 'BONK', 'JTO', 'PYTH', 'RAY']
+      const result: Record<string, { price: number; change: number }> = {}
+
+      // Kraken — all 7 pairs in one request
+      try {
+        const krakenPairStr = Object.values(KRAKEN_PAIRS).join(',')
+        const res = await fetch(
+          `https://api.kraken.com/0/public/Ticker?pair=${krakenPairStr}`,
+          { headers: { 'User-Agent': 'KYMIA/1.0' }, signal: AbortSignal.timeout(8000) }
+        )
+        if (res.ok) {
+          const d = await res.json()
+          const KRAKEN_REVERSE: Record<string, string> = Object.fromEntries(
+            Object.entries(KRAKEN_PAIRS).map(([sym, pair]) => [pair, sym])
+          )
+          for (const [pair, data] of Object.entries(d.result as Record<string, any>)) {
+            const sym = KRAKEN_REVERSE[pair]
+            if (sym) result[sym] = { price: parseFloat(data.c[0]), change: parseFloat(data.P[1]) }
+          }
+        }
+      } catch {}
+
+      // KuCoin — all 6 tokens in one request
+      try {
+        const res = await fetch(
+          `https://api.kucoin.com/api/v1/prices?currencies=${KUCOIN_SYMS.join(',')}`,
+          { headers: { 'User-Agent': 'KYMIA/1.0' }, signal: AbortSignal.timeout(8000) }
+        )
+        if (res.ok) {
+          const d = await res.json()
+          for (const [sym, price] of Object.entries(d.data as Record<string, string>)) {
+            if (!result[sym]) result[sym] = { price: parseFloat(price), change: 0 }
+          }
+        }
+      } catch {}
+
+      return NextResponse.json(result)
+    }
+
     // TICKER — Kraken live spot prices for BTC/ETH/SOL (for price source badges)
     if (type === "ticker") {
       const parseKraken = async (pair: string): Promise<number | null> => {

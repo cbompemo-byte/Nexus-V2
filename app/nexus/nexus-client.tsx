@@ -186,6 +186,10 @@ const SYMS:{[k:string]:SymInfo}={
   SOL:{base:178.4,vol:.0028,col:K.c,icon:"◎",mint:"So11111111111111111111111111111111111111112",cat:"L1"},
   BTC:{base:67420,vol:.0012,col:K.gold,icon:"₿",mint:"3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh",cat:"L1"},
   ETH:{base:3540,vol:.0016,col:"#627EEA",icon:"Ξ",mint:"7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs",cat:"L1"},
+  BNB:{base:0,vol:.006,col:"#F0B90B",icon:"◆",mint:"",cat:"L1"},
+  XRP:{base:0,vol:.008,col:"#23292F",icon:"✕",mint:"",cat:"L1"},
+  AVAX:{base:0,vol:.008,col:"#E84142",icon:"▲",mint:"",cat:"L1"},
+  LINK:{base:0,vol:.006,col:"#2A5ADA",icon:"⬡",mint:"",cat:"DEFI"},
   // Solana DeFi
   JUP:{base:1.24,vol:.004,col:K.g,icon:"◆",mint:"JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",cat:"DEFI"},
   RAY:{base:2.8,vol:.005,col:"#4D95FF",icon:"◈",mint:"4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R",cat:"DEFI"},
@@ -423,56 +427,28 @@ function usePrices(){
       hist:Array.from({length:60},()=>v.base),isRealPrice:false,
     }]))
   );
-  // real Jupiter prices every 5 s
+  // Unified price feed — all traded symbols via Kraken+KuCoin, same source as the trading engine
   useEffect(()=>{
-    const mintMap:Record<string,string>=Object.fromEntries(Object.entries(SYMS).map(([sym,info])=>[info.mint,sym]));
-    const fetchPrices=async()=>{
+    const fetchAllPrices=async()=>{
       try{
-        const ids=Object.values(SYMS).map(s=>s.mint).join(",");
-        const res=await fetch(`/api/jupiter?ids=${ids}`);
+        const res=await fetch("/api/market?type=all");
         if(!res.ok)return;
         const data=await res.json();
-        if(!data?.data)return;
         setPx(p=>{
           const n={...p};
-          for(const[mint,jd] of Object.entries(data.data as Record<string,{price:number}>)){
-            const sym=mintMap[mint];
-            if(!sym||!jd?.price)continue;
-            const cur=n[sym];if(!cur)continue;
-            const np=jd.price;
-            n[sym]={...cur,price:np,prev:cur.price,trend:np>cur.price?"up":"dn",
-              hist:[...cur.hist.slice(1),np],source:"JUP",isRealPrice:true};
-          }
-          return n;
-        });
-      }catch{}
-    };
-    fetchPrices();
-    const iv=setInterval(fetchPrices,5000);
-    return()=>clearInterval(iv);
-  },[]);
-  // Kraken spot prices for BTC/ETH/SOL every 8s (more authoritative, shows KRKN badge)
-  useEffect(()=>{
-    const fetchKraken=async()=>{
-      try{
-        const res=await fetch("/api/market?type=ticker");
-        if(!res.ok)return;
-        const d=await res.json();
-        setPx(p=>{
-          const n={...p};
-          const map:{[k:string]:number|null}={SOL:d.SOL,BTC:d.BTC,ETH:d.ETH};
-          for(const[sym,np] of Object.entries(map)){
-            if(!np||!n[sym])continue;
+          for(const[sym,info] of Object.entries(data) as [string,{price:number,change:number}][]){
+            if(!n[sym]||!info?.price)continue;
             const cur=n[sym];
-            n[sym]={...cur,price:np,prev:cur.price,trend:np>cur.price?"up":"dn",
-              hist:[...cur.hist.slice(1),np],source:"KRKN",isRealPrice:true};
+            n[sym]={...cur,price:info.price,prev:cur.price,
+              trend:info.price>cur.price?"up":"dn",change:info.change||0,
+              hist:[...cur.hist.slice(1),info.price],source:"MARKET",isRealPrice:true};
           }
           return n;
         });
       }catch{}
     };
-    fetchKraken();
-    const iv=setInterval(fetchKraken,8000);
+    fetchAllPrices();
+    const iv=setInterval(fetchAllPrices,5000);
     return()=>clearInterval(iv);
   },[]);
   return px;
