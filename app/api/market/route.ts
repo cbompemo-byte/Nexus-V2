@@ -73,6 +73,8 @@ async function krakenOHLC(interval: number, count: number): Promise<number[][]> 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const type = (await searchParams).get("type") || "";
+  console.log(`[market] Received type param: "${type}" (length: ${type.length})`)
+  console.log(`[market] Full URL: ${req.url}`)
 
   try {
     // ── Existing endpoints ────────────────────────────────────────────────────
@@ -384,6 +386,7 @@ export async function GET(req: Request) {
       return NextResponse.json({ SOL: sol, BTC: btc, ETH: eth, source: "kraken" });
     }
 
+    console.log(`[market] No handler matched for type: "${type}"`)
     return NextResponse.json({ error: "Unknown type" }, { status: 400 });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : "fetch failed";
