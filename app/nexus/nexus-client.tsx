@@ -3646,7 +3646,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
         const convDom=swarmBP>swarmSP?"BUY":"SELL";
         const convCol=convDom==="BUY"?K.g:K.r;
         return(
-        <div style={{flex:1,display:"grid",gridTemplateColumns:focusMode?"0px 1fr 0px":"220px 1fr 260px",gridTemplateRows:"1fr 240px",gap:focusMode?0:6,padding:8,overflow:"hidden",minHeight:0,transition:"grid-template-columns .4s ease"}}>
+        <div style={{flex:1,display:"grid",gridTemplateColumns:isMobile?"1fr":focusMode?"0px 1fr 0px":"220px 1fr 260px",gridTemplateRows:isMobile?"auto auto auto":"1fr 240px",gap:isMobile?8:focusMode?0:6,padding:isMobile?4:8,overflowY:isMobile?"auto":"hidden",height:isMobile?"auto":undefined,minHeight:0,transition:"grid-template-columns .4s ease"}}>
           {/* LEFT */}
           <div style={{gridRow:"1/3",display:"flex",flexDirection:"column",gap:6,overflow:"hidden"}}>
             <div className="panel" style={{display:"flex",flexDirection:"column",alignItems:"center",padding:"8px 4px 6px"}}>
