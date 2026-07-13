@@ -420,6 +420,17 @@ const get1H4HTrend=async(sym:string):Promise<{trend1h:'BULL'|'BEAR'|'NEUTRAL',tr
   }catch{return{trend1h:'NEUTRAL',trend4h:'NEUTRAL',aligned:true};}
 };
 
+function useIsMobile(){
+  const [isMobile,setIsMobile]=useState(false);
+  useEffect(()=>{
+    const check=()=>setIsMobile(window.innerWidth<768);
+    check();
+    window.addEventListener('resize',check);
+    return()=>window.removeEventListener('resize',check);
+  },[]);
+  return isMobile;
+}
+
 function usePrices(){
   const [px,setPx]=useState<{[k:string]:PriceData}>(()=>
     Object.fromEntries(Object.entries(SYMS).map(([k,v])=>[k,{
@@ -2282,6 +2293,7 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   const [chartTrade,setChartTrade]=useState<{trade:Trade|null,position:Position|null,agentSignals?:AgentSignals}|null>(null);
   const [confirmClose,setConfirmClose]=useState<string|null>(null);
   const [focusMode,setFocusMode]=useState(false);
+  const isMobile=useIsMobile();
   const [flashingAgent,setFlashingAgent]=useState<string|null>(null);
   const [cinematicTrade,setCinematicTrade]=useState<{sym:string,pos:any}|null>(null);
   const prevPositionSyms=useRef<Set<string>>(new Set());
