@@ -423,7 +423,7 @@ const get1H4HTrend=async(sym:string):Promise<{trend1h:'BULL'|'BEAR'|'NEUTRAL',tr
 function useIsMobile(){
   const [isMobile,setIsMobile]=useState(false);
   useEffect(()=>{
-    const check=()=>setIsMobile(window.innerWidth<768);
+    const check=()=>setIsMobile(window.innerWidth<768||window.innerHeight<500);
     check();
     window.addEventListener('resize',check);
     return()=>window.removeEventListener('resize',check);
