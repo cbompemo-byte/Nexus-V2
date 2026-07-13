@@ -3770,7 +3770,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
           </div>
 
           {/* CENTER */}
-          <div style={{gridRow:isMobile?"2":"1/2",display:"flex",flexDirection:"column",gap:6,overflow:"hidden"}}>
+          <div style={{gridRow:isMobile?"1":"1/2",display:"flex",flexDirection:"column",gap:6,overflow:"hidden"}}>
             <div className="panel" style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",position:"relative"}}>
               {/* Neural grid background */}
               <svg style={{position:"absolute",inset:0,width:"100%",height:"100%",opacity:.09,pointerEvents:"none"}} aria-hidden>
@@ -3811,7 +3811,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
           </div>
 
           {/* RIGHT */}
-          <div style={{gridRow:isMobile?"1":"1/3",display:"flex",flexDirection:"column",gap:6,overflow:"hidden"}}>
+          <div style={{gridRow:isMobile?"2":"1/3",display:"flex",flexDirection:"column",gap:6,overflow:"hidden"}}>
             <div className="panel" style={{overflow:"hidden",display:"flex",flexDirection:"column",maxHeight:190}}>
               <div style={{fontSize:11,color:K.dim,padding:"6px 10px 4px",borderBottom:"1px solid #060A14",letterSpacing:".12em"}}>◉ SIGNAL STREAM</div>
               <div style={{overflow:"auto",flex:1}}>
