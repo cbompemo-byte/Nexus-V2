@@ -3648,7 +3648,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
         return(
         <div style={{flex:1,display:"grid",gridTemplateColumns:isMobile?"1fr":focusMode?"0px 1fr 0px":"220px 1fr 260px",gridTemplateRows:isMobile?"auto auto auto":"1fr 240px",gap:isMobile?8:focusMode?0:6,padding:isMobile?4:8,overflowY:isMobile?"auto":"hidden",height:isMobile?"auto":undefined,minHeight:0,transition:"grid-template-columns .4s ease"}}>
           {/* LEFT */}
-          <div style={{gridRow:"1/3",display:"flex",flexDirection:"column",gap:6,overflow:"hidden"}}>
+          <div style={{gridRow:isMobile?"3":"1/3",display:"flex",flexDirection:"column",gap:6,overflow:"hidden"}}>
             <div className="panel" style={{display:"flex",flexDirection:"column",alignItems:"center",padding:"8px 4px 6px"}}>
               <div style={{fontSize:8,color:K.dim,letterSpacing:".12em",marginBottom:4,alignSelf:"flex-start",paddingLeft:6}}>◉ GLOBAL MACRO SPHERE</div>
               <Globe3D trades={trades} blackSwan={blackSwan} whaleAlert={whaleAlert} totalPnL={totalPnL} tradeCount={trades.length} agSt={agSt} running={running}/>
@@ -3770,7 +3770,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
           </div>
 
           {/* CENTER */}
-          <div style={{gridRow:"1/2",display:"flex",flexDirection:"column",gap:6,overflow:"hidden"}}>
+          <div style={{gridRow:isMobile?"2":"1/2",display:"flex",flexDirection:"column",gap:6,overflow:"hidden"}}>
             <div className="panel" style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",position:"relative"}}>
               {/* Neural grid background */}
               <svg style={{position:"absolute",inset:0,width:"100%",height:"100%",opacity:.09,pointerEvents:"none"}} aria-hidden>
@@ -3811,7 +3811,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
           </div>
 
           {/* RIGHT */}
-          <div style={{gridRow:"1/3",display:"flex",flexDirection:"column",gap:6,overflow:"hidden"}}>
+          <div style={{gridRow:isMobile?"1":"1/3",display:"flex",flexDirection:"column",gap:6,overflow:"hidden"}}>
             <div className="panel" style={{overflow:"hidden",display:"flex",flexDirection:"column",maxHeight:190}}>
               <div style={{fontSize:11,color:K.dim,padding:"6px 10px 4px",borderBottom:"1px solid #060A14",letterSpacing:".12em"}}>◉ SIGNAL STREAM</div>
               <div style={{overflow:"auto",flex:1}}>
