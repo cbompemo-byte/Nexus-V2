@@ -1872,11 +1872,6 @@ export default function LandingPage() {
       {/* Vignette */}
       <div style={{position:"fixed",inset:0,pointerEvents:"none",zIndex:1,background:"radial-gradient(ellipse at center,transparent 60%,rgba(2,4,10,0.65) 100%)"}}/>
 
-      {/* ── TEMP DEPLOY MARKER ── remove after confirming deploys work ── */}
-      <div style={{background:'red',color:'white',padding:'20px',textAlign:'center',fontSize:'24px',fontWeight:'bold',position:'relative',zIndex:10}}>
-        TEST DEPLOY MARKER — VERSION 001
-      </div>
-
       {/* ── HERO ─────────────────────────────────────────────────────────── */}
       <section className="kymia-section kymia-hero-grid" style={{minHeight:"100vh",display:"grid",gridTemplateColumns:"1fr 1fr",alignItems:"center",position:"relative",padding:"80px 48px 80px",maxWidth:1280,margin:"0 auto",gap:40}}>
         <motion.div initial={{opacity:0,x:-28}} animate={{opacity:1,x:0}} transition={{duration:.8,delay:.1}} style={{flex:"1 1 440px",minWidth:0}}>
