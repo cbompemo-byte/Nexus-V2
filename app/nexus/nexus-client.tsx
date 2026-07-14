@@ -3771,7 +3771,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
 
           {/* CENTER */}
           <div style={{gridRow:isMobile?"1":"1/2",display:"flex",flexDirection:"column",gap:6,overflow:"hidden"}}>
-            <div className="panel" style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",position:"relative"}}>
+            <div className="panel" style={{flex:isMobile?"none":1,height:isMobile?"50vh":undefined,display:"flex",flexDirection:"column",overflow:"hidden",position:"relative"}}>
               {/* Neural grid background */}
               <svg style={{position:"absolute",inset:0,width:"100%",height:"100%",opacity:.09,pointerEvents:"none"}} aria-hidden>
                 <defs>
