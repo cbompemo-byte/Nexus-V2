@@ -1344,14 +1344,14 @@ function ElectricArc({x1,y1,x2,y2,col,active}:{x1:number,y1:number,x2:number,y2:
   );
 }
 
-function SwarmGraph({st,debate,disabled,swarmRef,flashingAgent,highConviction,convCol}:{st:{[k:string]:AgentState},debate:string[],disabled:Set<string>,swarmRef?:React.RefObject<HTMLDivElement|null>,flashingAgent?:string|null,highConviction?:boolean,convCol?:string}){
+function SwarmGraph({st,debate,disabled,swarmRef,flashingAgent,highConviction,convCol,isMobile}:{st:{[k:string]:AgentState},debate:string[],disabled:Set<string>,swarmRef?:React.RefObject<HTMLDivElement|null>,flashingAgent?:string|null,highConviction?:boolean,convCol?:string,isMobile?:boolean}){
   const [hov,setHov]=useState<string|null>(null);
   const nm:{[k:string]:{pos:{x:number,y:number},id:string,name:string,s:string,lv:number,ag:number}}={};
   for(const a of AGENTS)nm[a.id]={...a,pos:gpos(a)};
   const glowCol=convCol||K.c;
   return(
     <div ref={swarmRef} style={{position:"relative",display:"inline-block",transition:"filter .5s",filter:highConviction?`drop-shadow(0 0 18px ${glowCol}60)`:undefined}}>
-      <svg width="480" height="468" style={{display:"block"}}>
+      <svg width={isMobile?320:480} height={isMobile?312:468} viewBox="0 0 480 468" style={{display:"block",maxWidth:"100%",height:"auto"}}>
         <defs>
           <filter id="agf"><feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
           <filter id="arcglow"><feGaussianBlur stdDeviation="2" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
@@ -3794,7 +3794,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
               </div>
               <div style={{flex:1,display:"flex",flexDirection:"column",justifyContent:"center",alignItems:"center",padding:4,position:"relative",zIndex:1,boxShadow:"inset 0 0 60px rgba(0,0,0,0.55)"}}>
                 {!running&&<ActivateScreen onActivate={handleStart} swarmConfig={swarmConfig} user={user}/>}
-                <SwarmGraph st={agSt} debate={debate} disabled={disabled} swarmRef={swarmRef} flashingAgent={flashingAgent} highConviction={highConviction} convCol={convCol}/>
+                <SwarmGraph st={agSt} debate={debate} disabled={disabled} swarmRef={swarmRef} flashingAgent={flashingAgent} highConviction={highConviction} convCol={convCol} isMobile={isMobile}/>
                 {/* Part 13: Layer legend */}
                 <div style={{display:'flex',gap:12,justifyContent:'center',marginTop:6}}>
                   {[{l:'L1 CORE',col:LAYER_RING_COLORS[1]},{l:'L2 TOP50',col:LAYER_RING_COLORS[2]},{l:'L3 HUNTER',col:LAYER_RING_COLORS[3]}].map((ly,i)=>(
