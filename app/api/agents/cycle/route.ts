@@ -700,6 +700,7 @@ async function runUserCycle(supabase: SupabaseClient, state: any) {
 
   console.log(`[cycle] Analyzing (cycle #${cycleNum}): ${pairsToAnalyze.join(', ')}`)
 
+  let runningCash = freshState?.cash || state.cash || 10000
   let tradedThisCycle        = 0
   const MAX_TRADES_PER_CYCLE = 2
   const signalResults: Record<string, { signal: string; confidence: number }> = {}
@@ -731,7 +732,7 @@ async function runUserCycle(supabase: SupabaseClient, state: any) {
     }
 
     const currentEquity = freshState?.equity || state.equity || 10000
-    const currentCash   = freshState?.cash   || state.cash   || 10000
+    const currentCash   = runningCash
     const rawSize = currentEquity * opp.size_pct * (config.leverage || 1)
     const size    = Math.min(rawSize, currentEquity * 0.20, currentCash * 0.80)
 
@@ -767,9 +768,12 @@ async function runUserCycle(supabase: SupabaseClient, state: any) {
       })
       .eq('user_id', userId)
 
+    runningCash = parseFloat((currentCash - size).toFixed(2))
+
     console.log(
       `[KYMIA] OPENED: ${sym} ${opp.signal} @ $${opp.entry.toFixed(4)}` +
-      ` size=$${size.toFixed(0)} sl=$${opp.sl.toFixed(4)} tp=$${opp.tp.toFixed(4)} conf=${opp.confidence}%`
+      ` size=$${size.toFixed(0)} sl=$${opp.sl.toFixed(4)} tp=$${opp.tp.toFixed(4)} conf=${opp.confidence}%` +
+      ` runningCash=$${runningCash.toFixed(2)}`
     )
 
     tradedThisCycle++
