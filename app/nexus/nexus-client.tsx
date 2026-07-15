@@ -3497,8 +3497,8 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
         </div>
       )}
 
-      <header style={{background:blackSwan?"#090203":"#040810",borderBottom:"1px solid "+(blackSwan?K.r+"40":K.brd),padding:"4px 12px",display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,zIndex:100}}>
-        <div style={{display:"flex",alignItems:"center",gap:8}}>
+      <header style={{background:blackSwan?"#090203":"#040810",borderBottom:"1px solid "+(blackSwan?K.r+"40":K.brd),padding:"4px 12px",display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,zIndex:100,maxWidth:"100vw",overflowX:"hidden"}}>
+        <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:1,minWidth:0,overflow:"hidden"}}>
           <div style={{display:"flex",alignItems:"center",gap:9}}>
             <svg width="30" height="30" viewBox="0 0 30 30" style={{flexShrink:0,filter:"drop-shadow(0 0 6px "+(blackSwan?K.r:K.c)+")"}}>
               <polygon points="15,1 27,8 27,22 15,29 3,22 3,8" fill="none" stroke={blackSwan?K.r:K.c} strokeWidth="1.5"/>
@@ -3509,6 +3509,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
             </svg>
             <span style={{fontSize:17,fontWeight:900,color:blackSwan?K.r:K.c,letterSpacing:".25em",textShadow:"0 0 20px "+(blackSwan?K.r:K.c),animation:"glow 2.5s ease-in-out infinite",fontFamily:"'JetBrains Mono','Courier New',monospace"}}>KYMIA</span>
           </div>
+          {!isMobile&&<>
           <span style={{fontSize:9,color:"#102030",letterSpacing:".1em"}}>QUANT AI · v2.0</span>
           {!isLive?(
             <div style={{padding:"3px 10px",background:"rgba(0,255,136,0.12)",border:"1px solid rgba(0,255,136,0.3)",borderRadius:3,fontSize:9,color:K.g,letterSpacing:".1em"}}>◈ DEMO · $10K VIRTUAL</div>
@@ -3564,9 +3565,10 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
           {isDemoMode&&(
             <div style={{padding:'2px 7px',background:'rgba(0,255,136,0.1)',border:'1px solid rgba(0,255,136,0.25)',borderRadius:3,fontSize:8,color:'#00FF88',fontFamily:'monospace'}}>⚡ DEMO SPEED</div>
           )}
+          </>}
         </div>
-        <div style={{display:"flex",alignItems:"center",gap:8}}>
-          {([{l:"EQUITY",v:"$"+f2(port.equity),col:totalPnL>=0?K.g:K.r},{l:"P&L",v:fU(totalPnL)+" ("+fP(pct)+")",col:totalPnL>=0?K.g:K.r},{l:"DD",v:"-"+f2(dd)+"%",col:dd>5?K.r:K.gold}]).map((x,i)=>(
+        <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
+          {!isMobile&&([{l:"EQUITY",v:"$"+f2(port.equity),col:totalPnL>=0?K.g:K.r},{l:"P&L",v:fU(totalPnL)+" ("+fP(pct)+")",col:totalPnL>=0?K.g:K.r},{l:"DD",v:"-"+f2(dd)+"%",col:dd>5?K.r:K.gold}]).map((x,i)=>(
             <div key={i} style={{textAlign:"right"}}>
               <div style={{fontSize:8,color:"#102030"}}>{x.l}</div>
               <div style={{fontSize:12,fontWeight:600,display:"flex",justifyContent:"flex-end"}}>
@@ -3574,11 +3576,11 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
               </div>
             </div>
           ))}
-          <div style={{display:"flex",alignItems:"center",gap:5,padding:"2px 8px",background:"#060A12",border:"1px solid #0A1D33",borderRadius:2}}>
+          {!isMobile&&<div style={{display:"flex",alignItems:"center",gap:5,padding:"2px 8px",background:"#060A12",border:"1px solid #0A1D33",borderRadius:2}}>
             <span style={{fontSize:9,fontWeight:700,color:K.gold}}>{trades.filter(t=>t.pnl!==0).length}</span>
             <span style={{fontSize:7,color:K.dim,letterSpacing:".06em"}}>TRADES</span>
-          </div>
-          {!user?(
+          </div>}
+          {!isMobile&&(!user?(
             <button onClick={()=>setShowAuthModal(true)} style={{padding:'5px 12px',background:'rgba(0,242,254,0.08)',border:'1px solid rgba(0,242,254,0.2)',borderRadius:4,color:'#00F2FE',fontFamily:'monospace',fontSize:10,cursor:'pointer',fontWeight:700}}>◈ SAVE PROGRESS</button>
           ):(
             <div style={{display:'flex',alignItems:'center',gap:6}}>
@@ -3587,16 +3589,16 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
               <span style={{fontSize:8,color:'#00FF88',fontFamily:'monospace',padding:'2px 5px',border:'1px solid #00FF8840',borderRadius:3,animation:'pulse 2s ease-in-out infinite',opacity:.8}}>SESSION SAVED</span>
               <button onClick={()=>{setSwarmConfig(null);setRunning(false);setShowOnboarding(true);}} style={{background:'none',border:'none',color:'#2A5070',cursor:'pointer',fontSize:9,fontFamily:'monospace',textDecoration:'underline'}}>⚙ Reconfigure</button>
             </div>
-          )}
-          <button onClick={async()=>{if(user){await supabase.from('kymia_sessions').update({swarm_config:null}).eq('user_id',user.id);}setSwarmConfig(null);setRunning(false);setShowOnboarding(true);}} style={{padding:'3px 8px',background:'rgba(255,215,0,0.15)',border:'1px solid rgba(255,215,0,0.4)',borderRadius:3,color:'#FFD700',fontSize:9,cursor:'pointer',fontFamily:'monospace'}}>⚙ RESET ONBOARDING (TEST)</button>
+          ))}
+          {!isMobile&&<button onClick={async()=>{if(user){await supabase.from('kymia_sessions').update({swarm_config:null}).eq('user_id',user.id);}setSwarmConfig(null);setRunning(false);setShowOnboarding(true);}} style={{padding:'3px 8px',background:'rgba(255,215,0,0.15)',border:'1px solid rgba(255,215,0,0.4)',borderRadius:3,color:'#FFD700',fontSize:9,cursor:'pointer',fontFamily:'monospace'}}>⚙ RESET ONBOARDING (TEST)</button>}
           <div style={{display:"flex",gap:5}}>
-            <button className="btn" onClick={()=>setShowTransparency(true)} style={{background:"rgba(0,242,254,0.06)",color:"#00F2FE",border:"1px solid rgba(0,242,254,0.2)"}}>ℹ HOW IT WORKS</button>
-            <button className="btn" onClick={()=>setModal("share")} style={{background:"#0A1428",color:K.gold,border:"1px solid "+K.gold+"50"}}>◈ SHARE</button>
-            <button className="btn" onClick={()=>setFocusMode(f=>!f)} style={{background:focusMode?K.c+"20":"#040810",color:focusMode?K.c:K.dim,border:"1px solid "+(focusMode?K.c+"50":K.brd)}}>{focusMode?"◈ EXIT FOCUS":"◈ FOCUS"}</button>
-            <button className="btn" onClick={runAI} disabled={analyzing} style={{background:analyzing?"#06111E":"#001428",color:analyzing?"#1A4A6A":K.c,border:"1px solid "+(analyzing?"#0A2040":K.c+"60")}}>{analyzing?"⟳":"⚡ DEBATE"}</button>
-            <button className="btn" onClick={runDNA} disabled={dnaLoading} style={{background:"#100020",color:K.pu,border:"1px solid "+K.pu+"50"}}>{dnaLoading?"⟳":"🧬 DNA"}</button>
-            <button className="btn" onClick={()=>setModal("beat")} style={{background:"#001820",color:K.gold,border:"1px solid "+K.gold+"50"}}>🎮 BEAT AI</button>
-            <button className="btn" onClick={()=>setShowKill(s=>!s)} style={{background:"#000F28",color:K.co,border:"1px solid "+K.co+"50"}}>⚙ AGENTS</button>
+            {!isMobile&&<button className="btn" onClick={()=>setShowTransparency(true)} style={{background:"rgba(0,242,254,0.06)",color:"#00F2FE",border:"1px solid rgba(0,242,254,0.2)"}}>ℹ HOW IT WORKS</button>}
+            {!isMobile&&<button className="btn" onClick={()=>setModal("share")} style={{background:"#0A1428",color:K.gold,border:"1px solid "+K.gold+"50"}}>◈ SHARE</button>}
+            {!isMobile&&<button className="btn" onClick={()=>setFocusMode(f=>!f)} style={{background:focusMode?K.c+"20":"#040810",color:focusMode?K.c:K.dim,border:"1px solid "+(focusMode?K.c+"50":K.brd)}}>{focusMode?"◈ EXIT FOCUS":"◈ FOCUS"}</button>}
+            {!isMobile&&<button className="btn" onClick={runAI} disabled={analyzing} style={{background:analyzing?"#06111E":"#001428",color:analyzing?"#1A4A6A":K.c,border:"1px solid "+(analyzing?"#0A2040":K.c+"60")}}>{analyzing?"⟳":"⚡ DEBATE"}</button>}
+            {!isMobile&&<button className="btn" onClick={runDNA} disabled={dnaLoading} style={{background:"#100020",color:K.pu,border:"1px solid "+K.pu+"50"}}>{dnaLoading?"⟳":"🧬 DNA"}</button>}
+            {!isMobile&&<button className="btn" onClick={()=>setModal("beat")} style={{background:"#001820",color:K.gold,border:"1px solid "+K.gold+"50"}}>🎮 BEAT AI</button>}
+            {!isMobile&&<button className="btn" onClick={()=>setShowKill(s=>!s)} style={{background:"#000F28",color:K.co,border:"1px solid "+K.co+"50"}}>⚙ AGENTS</button>}
             <button className="btn" onClick={handleStart} style={{background:running?"#180610":"#001808",color:running?K.r:K.g,border:"1px solid "+(running?K.r+"40":K.g+"40")}}>{running?"⏹ HALT":"▶ START"}</button>
             <button className="btn" onClick={()=>{setCircuit(c=>!c);log("CIRCUIT",circuit?"Released":"⚡ LOCKED",K.gold);}} style={{background:circuit?"#180A00":"#080808",color:circuit?K.gold:K.tx,border:"1px solid "+(circuit?K.gold+"40":K.brd)}}>{circuit?"🔓":"⚡"}</button>
           </div>
