@@ -4028,7 +4028,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
           </div>
 
           {/* BOTTOM CENTER — Decision Zone + Log, always visible */}
-          <div style={{gridColumn:"2/3",overflow:"hidden",display:"flex",flexDirection:"column",gap:4}}>
+          <div style={{gridColumn:"2/3",overflow:"hidden",display:"flex",flexDirection:"column",gap:4,maxHeight:isMobile?"45vh":undefined}}>
             {/* Decision Zone */}
             <div style={{flexShrink:0}}>
               <DecisionZone agSt={agSt} running={running} onExecute={()=>{}}/>
@@ -4045,7 +4045,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
               </div>
             )}
             {/* Log — fills remaining space, always visible */}
-            <div className="panel" style={{flex:1,overflow:"hidden",display:"flex",flexDirection:"column",minHeight:0}}>
+            <div className="panel" style={{flex:isMobile?"none":1,overflow:"hidden",display:"flex",flexDirection:"column",minHeight:0,maxHeight:isMobile?"28vh":undefined}}>
               <div style={{padding:"3px 10px",borderBottom:"1px solid #060A14",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
                 <div style={{display:"flex",alignItems:"center",gap:6}}>
                   {running&&<div style={{width:4,height:4,borderRadius:"50%",background:K.c,animation:"pu 1s infinite"}}/>}
@@ -4054,7 +4054,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
                 <button className="btn" onClick={()=>setLogs([{t:ts(),ag:"SYS",msg:"Log cleared",col:K.tx}])} style={{background:"#040810",color:K.dim,border:"1px solid "+K.brd,padding:"2px 8px",fontSize:8}}>CLR</button>
               </div>
               <div ref={logRef} style={{flex:1,overflowY:"auto",padding:"2px 0",scrollBehavior:"smooth"}}>
-                {logs.map((e,i)=>(
+                {(isMobile?logs.slice(-5):logs).map((e,i)=>(
                   <div key={i} className="log-entry" style={{display:"flex",gap:7,padding:"2px 10px",borderBottom:"1px solid #030810"}}>
                     <span style={{color:K.dim,minWidth:46,fontSize:11,whiteSpace:"nowrap"}}>{e.t}</span>
                     <span style={{color:"#0D1E30",minWidth:52,fontSize:11,fontWeight:600}}>[{e.ag}]</span>
