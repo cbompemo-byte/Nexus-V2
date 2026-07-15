@@ -4028,7 +4028,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
           </div>
 
           {/* BOTTOM CENTER — Decision Zone + Log, always visible */}
-          <div style={{gridColumn:"2/3",overflow:"hidden",display:"flex",flexDirection:"column",gap:4,maxHeight:isMobile?"45vh":undefined}}>
+          <div style={{gridColumn:isMobile?"1":"2/3",overflow:"hidden",display:"flex",flexDirection:"column",gap:4,maxHeight:isMobile?"45vh":undefined}}>
             {/* Decision Zone */}
             <div style={{flexShrink:0}}>
               <DecisionZone agSt={agSt} running={running} onExecute={()=>{}}/>
