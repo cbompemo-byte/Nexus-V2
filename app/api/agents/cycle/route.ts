@@ -124,6 +124,12 @@ const KUCOIN_PAIRS: Record<string, string> = {
   'RAY':  'RAY-USDT',
 }
 
+// Kraken returns legacy pairs with X/Z prefixes (e.g. XXBTZUSD, XETHZUSD).
+// Strip the double-prefix pattern so it matches our KRAKEN_MAP keys.
+function normalizeKrakenPair(pair: string): string {
+  return pair.replace(/^X(XBT|ETH)/, '$1').replace(/Z(USD|EUR)$/, '$1')
+}
+
 // ── Price feed (Kraken + KuCoin) ───────────────────────────────────────────────
 async function fetchRealPrices(): Promise<Record<string, any>> {
   const now = Date.now()
@@ -156,7 +162,8 @@ async function fetchRealPrices(): Promise<Record<string, any>> {
       }
 
       Object.entries(r).forEach(([pair, data]: any) => {
-        const sym = KRAKEN_MAP[pair]
+        const normalizedPair = normalizeKrakenPair(pair)
+        const sym = KRAKEN_MAP[normalizedPair] || KRAKEN_MAP[pair]
         if (sym) {
           prices[sym] = {
             price:    parseFloat(data.c[0]),
@@ -167,6 +174,7 @@ async function fetchRealPrices(): Promise<Record<string, any>> {
         }
       })
       console.log(`[prices] Kraken OK: ${Object.keys(prices).length} pairs`)
+      console.log(`[prices] BTC price: ${prices['BTC']?.price ?? 'MISSING'}, ETH price: ${prices['ETH']?.price ?? 'MISSING'}`)
     }
   } catch (e: any) {
     console.log(`[prices] Kraken error: ${e.message}`)
