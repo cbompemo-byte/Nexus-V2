@@ -1350,8 +1350,8 @@ function SwarmGraph({st,debate,disabled,swarmRef,flashingAgent,highConviction,co
   for(const a of AGENTS)nm[a.id]={...a,pos:gpos(a)};
   const glowCol=convCol||K.c;
   return(
-    <div ref={swarmRef} style={{position:"relative",display:"inline-block",transition:"filter .5s",filter:highConviction?`drop-shadow(0 0 18px ${glowCol}60)`:undefined}}>
-      <svg width={isMobile?320:480} height={isMobile?312:468} viewBox="0 0 480 468" style={{display:"block",maxWidth:"100%",height:"auto"}}>
+    <div ref={swarmRef} style={{position:"relative",display:"inline-block",transition:"filter .5s",filter:highConviction?`drop-shadow(0 0 18px ${glowCol}60)`:undefined,maxHeight:isMobile?"38vh":undefined,overflow:isMobile?"hidden":"visible"}}>
+      <svg width={isMobile?260:480} height={isMobile?254:468} viewBox="0 0 480 468" style={{display:"block",maxWidth:"100%",maxHeight:isMobile?"36vh":undefined,height:"auto"}}>
         <defs>
           <filter id="agf"><feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
           <filter id="arcglow"><feGaussianBlur stdDeviation="2" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
