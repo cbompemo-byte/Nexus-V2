@@ -506,6 +506,17 @@ async function checkPositions(
 
         // 60% to TP → close half the position
         if (profitRatio >= 0.6 && !pos.halfClosed) {
+          // Idempotency guard: re-fetch live positions before touching cash or inserting a trade
+          const { data: liveState1 } = await supabase
+            .from('kymia_agent_state')
+            .select('positions')
+            .eq('user_id', userId)
+            .single()
+          if (!liveState1?.positions?.[sym]) {
+            console.log(`[DEDUP] ${sym} already closed by concurrent request — skipping cash debit and insert`)
+            continue
+          }
+
           const halfQty    = pos.qty / 2
           const partialPnl = isLong
             ? (cur - pos.avg) * halfQty
@@ -569,6 +580,17 @@ async function checkPositions(
     const tpHit = isLong ? cur >= tp : cur <= tp
 
     if (slHit || tpHit) {
+      // Idempotency guard: re-fetch live positions before touching cash or inserting a trade
+      const { data: liveState2 } = await supabase
+        .from('kymia_agent_state')
+        .select('positions')
+        .eq('user_id', userId)
+        .single()
+      if (!liveState2?.positions?.[sym]) {
+        console.log(`[DEDUP] ${sym} already closed by concurrent request — skipping cash debit and insert`)
+        continue
+      }
+
       // Use the (possibly halved) qty from updates
       const closeQty = (updates[sym]?.qty ?? pos.qty)
       const closePnl = isLong ? (cur - pos.avg) * closeQty : (pos.avg - cur) * closeQty
