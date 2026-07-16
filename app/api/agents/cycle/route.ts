@@ -514,45 +514,44 @@ async function checkPositions(
 
         // 60% to TP → close half the position
         if (profitRatio >= 0.6 && !pos.halfClosed) {
-          // Idempotency guard: re-fetch live positions before touching cash or inserting a trade
-          const { data: liveState1 } = await supabase
-            .from('kymia_agent_state')
-            .select('positions')
-            .eq('user_id', userId)
-            .single()
-          if (!liveState1?.positions?.[sym]) {
-            console.log(`[DEDUP] ${sym} already closed by concurrent request — skipping cash debit and insert`)
+          // Atomic DB claim: SELECT FOR UPDATE marks halfClosed=true, returns pos or null if already claimed
+          const { data: claimedPos1, error: claimErr1 } = await supabase
+            .rpc('claim_partial_close', { p_user_id: userId, p_sym: sym })
+          if (!claimedPos1 || claimErr1) {
+            console.log(`[ATOMIC] ${sym} partial close already claimed by concurrent request — skipping`)
+            delete updates[sym]  // exclude from final bulk write to avoid overwriting winner's DB state
             continue
           }
 
-          const halfQty    = pos.qty / 2
+          const livePos1 = claimedPos1 as any
+          const halfQty    = livePos1.qty / 2
           const partialPnl = isLong
-            ? (cur - pos.avg) * halfQty
-            : (pos.avg - cur) * halfQty
+            ? (cur - livePos1.avg) * halfQty
+            : (livePos1.avg - cur) * halfQty
 
           await supabase.from('kymia_trades').insert({
             user_id:   userId,
             sym,
-            side:      pos.side,
-            entry:     pos.avg,
+            side:      livePos1.side,
+            entry:     livePos1.avg,
             exit:      cur,
             pnl:       parseFloat(partialPnl.toFixed(2)),
             pct:       parseFloat((profitRatio * 100).toFixed(2)),
-            agent:     (pos.agent || 'HYBRID') + '_PARTIAL',
-            opened_at: pos.openedAt,
+            agent:     (livePos1.agent || 'HYBRID') + '_PARTIAL',
+            opened_at: livePos1.openedAt,
             closed_at: new Date().toISOString(),
           })
 
           updates[sym] = {
             ...updates[sym],
-            qty:        parseFloat((pos.qty - halfQty).toFixed(6)),
+            qty:        parseFloat((livePos1.qty - halfQty).toFixed(6)),
             halfClosed: true,
           }
 
           cash += partialPnl
           console.log(
             `[PARTIAL TP] ${sym} closed 50% @ $${cur} for +$${partialPnl.toFixed(2)},` +
-            ` remaining qty ${(pos.qty - halfQty).toFixed(6)} riding trailing stop`
+            ` remaining qty ${(livePos1.qty - halfQty).toFixed(6)} riding trailing stop`
           )
           partiallyClosedThisCycle.add(sym)
         }
@@ -588,56 +587,80 @@ async function checkPositions(
     const tpHit = isLong ? cur >= tp : cur <= tp
 
     if (slHit || tpHit) {
-      // Idempotency guard: re-fetch live positions before touching cash or inserting a trade
-      const { data: liveState2 } = await supabase
-        .from('kymia_agent_state')
-        .select('positions')
-        .eq('user_id', userId)
-        .single()
-      if (!liveState2?.positions?.[sym]) {
-        console.log(`[DEDUP] ${sym} already closed by concurrent request — skipping cash debit and insert`)
+      // Atomic DB claim: SELECT FOR UPDATE removes position, returns pos data or null if already claimed
+      const { data: claimedPos2, error: claimErr2 } = await supabase
+        .rpc('claim_position_close', { p_user_id: userId, p_sym: sym })
+      if (!claimedPos2 || claimErr2) {
+        console.log(`[ATOMIC] ${sym} already claimed by concurrent request — skipping`)
+        delete updates[sym]  // exclude from final bulk write
         continue
       }
 
-      // Use the (possibly halved) qty from updates
-      const closeQty = (updates[sym]?.qty ?? pos.qty)
-      const closePnl = isLong ? (cur - pos.avg) * closeQty : (pos.avg - cur) * closeQty
-      const closePct = (closePnl / (pos.avg * closeQty)) * 100
+      const livePos2 = claimedPos2 as any
+      // Use DB-authoritative qty — correctly reflects any prior partial close written to DB
+      const closeQty = livePos2.qty
+      const closePnl = isLong ? (cur - livePos2.avg) * closeQty : (livePos2.avg - cur) * closeQty
+      const closePct = (closePnl / (livePos2.avg * closeQty)) * 100
 
       cash += closeQty * cur
-      delete updates[sym]
+      delete updates[sym]  // RPC already removed from DB; exclude from final bulk write too
 
       await supabase.from('kymia_trades').insert({
         user_id:   userId,
         sym,
-        side:      pos.side,
-        entry:     pos.avg,
+        side:      livePos2.side,
+        entry:     livePos2.avg,
         exit:      cur,
         pnl:       parseFloat(closePnl.toFixed(2)),
         pct:       parseFloat(closePct.toFixed(2)),
-        agent:     pos.agent || 'HYBRID',
-        opened_at: pos.openedAt,
+        agent:     livePos2.agent || 'HYBRID',
+        opened_at: livePos2.openedAt,
         closed_at: new Date().toISOString(),
       })
 
       console.log(
-        `[KYMIA] CLOSED: ${sym} ${pos.side} @ $${cur.toFixed(4)} | ` +
+        `[KYMIA] CLOSED: ${sym} ${livePos2.side} @ $${cur.toFixed(4)} | ` +
         `PnL: $${closePnl.toFixed(2)} (${closePct.toFixed(2)}%) | ${slHit ? 'SL' : 'TP'}` +
-        `${pos.halfClosed ? ' (remainder after partial TP)' : ''}`
+        `${livePos2.halfClosed ? ' (remainder after partial TP)' : ''}`
       )
     }
   }
 
+  // Delta this request contributed to cash (0 if we won no RPC claims this cycle)
+  const cashDelta = cash - (state.cash || 10000)
+
+  // Re-fetch authoritative DB state — RPC calls may have already modified positions
+  const { data: latestState } = await supabase
+    .from('kymia_agent_state')
+    .select('positions, cash')
+    .eq('user_id', userId)
+    .single()
+
+  const latestPositions: any = latestState?.positions || {}
+  const latestCash = latestState?.cash ?? (state.cash || 10000)
+
+  // Merge only trailing-stop / halfClosed-qty updates for positions still present in DB.
+  // Positions removed by a winning RPC won't appear in latestPositions — don't re-add them.
+  const mergedPositions: any = { ...latestPositions }
+  for (const [s, upd] of Object.entries(updates) as [string, any][]) {
+    if (latestPositions[s]) {
+      mergedPositions[s] = { ...latestPositions[s], ...upd }
+    }
+  }
+
+  // Apply cash delta on top of current DB cash, not stale state.cash
+  const finalCash = parseFloat((latestCash + cashDelta).toFixed(2))
+
   const equity =
-    cash +
-    Object.entries(updates).reduce((sum: number, [sym, p]: any) => {
-      const price = prices[sym]?.price || p.avg
+    finalCash +
+    Object.entries(mergedPositions).reduce((sum: number, [s, p]: any) => {
+      const price = prices[s]?.price || p.avg
       return sum + p.qty * price
     }, 0)
 
   await supabase
     .from('kymia_agent_state')
-    .update({ positions: updates, equity: parseFloat(equity.toFixed(2)), cash: parseFloat(cash.toFixed(2)) })
+    .update({ positions: mergedPositions, equity: parseFloat(equity.toFixed(2)), cash: finalCash })
     .eq('user_id', userId)
 }
 
