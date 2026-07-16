@@ -1718,7 +1718,7 @@ function EdgeToastEl({toast,onDone}:{toast:EdgeToast,onDone:()=>void}){
   );
 }
 
-function PerformanceCard({trades,totalPnL,onClose}:{trades:Trade[],totalPnL:number,onClose:()=>void}){
+function PerformanceCard({trades,totalPnL,allTimeStats,onClose}:{trades:Trade[],totalPnL:number,allTimeStats:{totalTrades:number,wins:number,totalPnl:number},onClose:()=>void}){
   const cardRef=useRef<HTMLDivElement>(null);
   const [period,setPeriod]=useState<"1H"|"3H"|"24H"|"7D"|"ALL">("24H");
   const [downloading,setDownloading]=useState(false);
@@ -1796,12 +1796,19 @@ function PerformanceCard({trades,totalPnL,onClose}:{trades:Trade[],totalPnL:numb
             ))}
           </div>
           {/* Stats grid */}
+          {(()=>{
+            // For the ALL period, use DB-aggregated all-time stats (not limited 20-trade array)
+            const displayTotal=period==="ALL"?allTimeStats.totalTrades:closed.length;
+            const displayWins=period==="ALL"?allTimeStats.wins:wins.length;
+            const displayLosses=period==="ALL"?allTimeStats.totalTrades-allTimeStats.wins:losses.length;
+            const displayWinRate=displayTotal?displayWins/displayTotal*100:0;
+            return(
           <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6,marginBottom:14}}>
             {([
-              {l:"TOTAL TRADES",v:String(closed.length),c:K.c},
-              {l:"WINS",v:String(wins.length),c:K.g},
-              {l:"LOSSES",v:String(losses.length),c:K.r},
-              {l:"WIN RATE",v:f2(pct,0)+"%",c:K.gold},
+              {l:"TOTAL TRADES",v:String(displayTotal),c:K.c},
+              {l:"WINS",v:String(displayWins),c:K.g},
+              {l:"LOSSES",v:String(displayLosses),c:K.r},
+              {l:"WIN RATE",v:f2(displayWinRate,0)+"%",c:K.gold},
               {l:"BEST TRADE",v:bestTrade>0?"+$"+f2(bestTrade):"—",c:K.g},
               {l:"WORST TRADE",v:worstTrade<0?"-$"+f2(Math.abs(worstTrade)):"—",c:K.r},
             ] as Array<{l:string,v:string,c:string}>).map((s,i)=>(
@@ -1811,6 +1818,7 @@ function PerformanceCard({trades,totalPnL,onClose}:{trades:Trade[],totalPnL:numb
               </div>
             ))}
           </div>
+          );})()}
           {/* P&L banner */}
           <div style={{padding:"10px 14px",background:(periodPnL>=0?K.g:K.r)+"10",border:"1px solid "+(periodPnL>=0?K.g:K.r)+"30",borderRadius:8,display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
             <div><div style={{fontSize:7,color:K.dim,marginBottom:2}}>TOTAL P&L ({period})</div><div style={{fontSize:7,color:K.dim}}>{closed.length} closed trades</div></div>
@@ -2332,6 +2340,7 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   // Performance fee state (live mode only)
   const [feePercent,setFeePercent]=useState(10);
   const [totalFeesPaid,setTotalFeesPaid]=useState(0);
+  const [allTimeStats,setAllTimeStats]=useState<{totalTrades:number,wins:number,totalPnl:number}>({totalTrades:0,wins:0,totalPnl:0});
   const [highWaterMark,setHighWaterMark]=useState(CAP);
   const entropyRef=useRef(entropy);
   useEffect(()=>{entropyRef.current=entropy;},[entropy]);
@@ -2543,6 +2552,9 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
         ms:t.closed_at?new Date(t.closed_at).getTime():Date.now(),
         agent:t.agent||'KYMIA',
       })));
+      // Fetch all-time aggregate stats via SQL — avoids loading every row into state
+      const{data:statsData}=await supabase.rpc('get_trade_stats',{p_user_id:user.id});
+      if(statsData)setAllTimeStats({totalTrades:statsData.total_trades||0,wins:statsData.wins||0,totalPnl:statsData.total_pnl||0});
     };
     loadState();
   },[user]);
@@ -2575,6 +2587,10 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
           agent:raw.agent||'KYMIA',
         };
         setTrades(prev=>[trade,...prev.slice(0,99)]);
+        // Refresh all-time stats so TOTAL TRADES / WIN RATE stay accurate after each close
+        supabase.rpc('get_trade_stats',{p_user_id:user.id}).then(({data})=>{
+          if(data)setAllTimeStats({totalTrades:data.total_trades||0,wins:data.wins||0,totalPnl:data.total_pnl||0});
+        });
         // Show win/loss popup card
         const card:WinCard={id:Math.random().toString(36).slice(2),sym:trade.sym,pnl:trade.pnl,pct:trade.pct||0,price:trade.price,agent:trade.agent||'KYMIA',t:trade.t};
         setWinCards(prev=>[...prev.slice(-1),card]);
@@ -4480,7 +4496,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
       )}
 
       {/* Performance Card Modal */}
-      {modal==="share"&&<PerformanceCard trades={trades} totalPnL={totalPnL} onClose={()=>setModal(null)}/>}
+      {modal==="share"&&<PerformanceCard trades={trades} totalPnL={totalPnL} allTimeStats={allTimeStats} onClose={()=>setModal(null)}/>}
 
       {/* Trade Chart Modal */}
       {missionCelebration&&<MissionComplete mission={missionCelebration} onDismiss={()=>setMissionCelebration(null)}/>}
