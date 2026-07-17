@@ -1,5 +1,5 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { getQuote, toRawAmount } from '@/lib/solana/jupiter'
 import { MINTS as SOL_MINTS, getTokenBalance } from '@/lib/solana/wallet'
 import { runAllGuards } from '@/lib/solana/risk-guards'
@@ -16,7 +16,18 @@ function roundToSignificant(value: number, sigDigits = 6): number {
   return parseFloat(value.toFixed(Math.min(decimals, 15)))
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  // Auth — accepte le cron natif Vercel OU un secret explicite
+  const cronSecret = process.env.CRON_SECRET
+  const isVercelCron = req.headers.get('x-vercel-cron') === '1'
+  const hasSecret = cronSecret && (
+    req.headers.get('x-cron-secret') === cronSecret ||
+    req.headers.get('authorization') === `Bearer ${cronSecret}`
+  )
+  if (!isVercelCron && !hasSecret) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
   console.log('[cycle] Starting agent cycle...')
   console.log('[cycle] ENV check:', {
     hasSupabaseUrl: !!process.env.NEXT_PUBLIC_SUPABASE_URL,
