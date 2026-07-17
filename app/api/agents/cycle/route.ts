@@ -1,5 +1,8 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
+import { getQuote, toRawAmount } from '@/lib/solana/jupiter'
+import { MINTS as SOL_MINTS, getTokenBalance } from '@/lib/solana/wallet'
+import { runAllGuards } from '@/lib/solana/risk-guards'
 
 // ── Module-level state ─────────────────────────────────────────────────────────
 let priceCache: { data: Record<string, any>; timestamp: number } = { data: {}, timestamp: 0 }
@@ -62,6 +65,11 @@ export async function GET() {
     const failed = results.filter(r => r.status === 'rejected').length
     console.log(`[cycle] Done — ${results.length - failed} ok, ${failed} failed`)
 
+    // Dry-run Solana — couche séparée, stats séparées (jamais mélangées avec paper sim)
+    await runDryRunCycle(supabase).catch(e =>
+      console.error('[dryrun] Fatal error:', e.message)
+    )
+
     return NextResponse.json({
       ok: true,
       active: activeUsers.length,
@@ -102,6 +110,12 @@ function calcRSI(closes: number[], period = 14): number {
   const avgLoss = losses / period
   if (avgLoss === 0) return 100
   return 100 - 100 / (1 + avgGain / avgLoss)
+}
+
+function calcATR(closes: number[], period = 14): number {
+  if (closes.length < period + 1) return closes[closes.length - 1] * 0.02
+  const trs = closes.slice(1).map((c, i) => Math.abs(c - closes[i]))
+  return trs.slice(-period).reduce((a: number, b: number) => a + b, 0) / period
 }
 
 // ── Exchange pair maps ─────────────────────────────────────────────────────────
@@ -275,6 +289,59 @@ async function getCandles(sym: string): Promise<number[] | null> {
       }
     } catch (e: any) {
       console.log(`[${sym}] KuCoin error: ${e.message}`)
+    }
+  }
+
+  return null
+}
+
+// ── 4h candles (EMA200 requires 200+ candles) ─────────────────────────────────
+async function getCandles4h(sym: string): Promise<number[] | null> {
+  // Kraken: interval=240 (4h), count=220
+  if (KRAKEN_PAIRS[sym]) {
+    try {
+      const res = await fetch(
+        `https://api.kraken.com/0/public/OHLC` +
+        `?pair=${KRAKEN_PAIRS[sym]}&interval=240&count=220`,
+        { headers: { 'User-Agent': 'KYMIA/1.0' }, signal: AbortSignal.timeout(8000) }
+      )
+      if (res.ok) {
+        const data = await res.json()
+        const pairKey = Object.keys(data.result || {}).find(k => k !== 'last')
+        if (pairKey) {
+          const closes = data.result[pairKey].map((c: any) => parseFloat(c[4]))
+          if (closes.length >= 200) {
+            console.log(`[dryrun] ${sym} Kraken 4h OK (${closes.length} candles)`)
+            return closes
+          }
+        }
+      }
+    } catch (e: any) {
+      console.log(`[dryrun] ${sym} Kraken 4h error: ${e.message}`)
+    }
+  }
+
+  // KuCoin: type=4hour
+  if (KUCOIN_PAIRS[sym]) {
+    try {
+      const endTime   = Math.floor(Date.now() / 1000)
+      const startTime = endTime - 220 * 4 * 3600
+      const res = await fetch(
+        `https://api.kucoin.com/api/v1/market/candles` +
+        `?symbol=${KUCOIN_PAIRS[sym]}&type=4hour&startAt=${startTime}&endAt=${endTime}`,
+        { headers: { 'User-Agent': 'KYMIA/1.0' }, signal: AbortSignal.timeout(8000) }
+      )
+      if (res.ok) {
+        const data = await res.json()
+        const candles = data.data || []
+        const closes = candles.reverse().map((c: any) => parseFloat(c[2]))
+        if (closes.length >= 200) {
+          console.log(`[dryrun] ${sym} KuCoin 4h OK (${closes.length} candles)`)
+          return closes
+        }
+      }
+    } catch (e: any) {
+      console.log(`[dryrun] ${sym} KuCoin 4h error: ${e.message}`)
     }
   }
 
@@ -458,6 +525,209 @@ async function findTradingOpportunity(
     console.log(`[strategy] ${sym} error: ${e.message}`)
     return { ...NONE, reason: e.message }
   }
+}
+
+// ── Dry-run constants (R6 — Whitelist Phase 1) ────────────────────────────────
+const WHITELIST_CORE = ['SOL', 'JUP', 'JTO', 'PYTH', 'RAY'] as const
+type CoreSymbol = typeof WHITELIST_CORE[number]
+
+// SPL token mints (mainnet) for Jupiter quotes
+const WHITELIST_MINTS: Record<CoreSymbol, string> = {
+  SOL:  SOL_MINTS.SOL,   // wrapped SOL: So11111111111111111111111111111111111111112
+  JUP:  'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN',
+  JTO:  'jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL',
+  PYTH: 'HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3',
+  RAY:  '4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R',
+}
+
+// Capital de référence pour le sizing indicatif en dry-run (R4)
+const REFERENCE_CAPITAL_USDC = 200
+
+// Garde-fou global : executeSwap() ne sera JAMAIS appelé tant que cette var est false
+const LIVE_TRADING = process.env.LIVE_TRADING === 'true'
+
+// ── logDryRun ─────────────────────────────────────────────────────────────────
+async function logDryRun(supabase: SupabaseClient, entry: {
+  symbol:        string
+  regime:        string | null
+  signal:        string | null
+  decision:      string
+  reason?:       string
+  size_calculee?: number | null
+  quote_jupiter?: any
+  size_basis?:   string
+}) {
+  const { error } = await supabase.from('kymia_dryrun_decisions').insert({
+    timestamp:     new Date().toISOString(),
+    symbol:        entry.symbol,
+    regime:        entry.regime ?? null,
+    signal:        entry.signal ?? null,
+    decision:      entry.decision,
+    reason:        entry.reason ?? null,
+    size_calculee: entry.size_calculee ?? null,
+    quote_jupiter: entry.quote_jupiter ?? null,
+    size_basis:    entry.size_basis ?? null,
+  })
+  if (error) console.error('[dryrun] logDryRun insert error:', error.message)
+}
+
+// ── runDryRunCycle ─────────────────────────────────────────────────────────────
+// Tourne en parallèle du paper sim. Stats SÉPARÉES — jamais mélangées.
+// LIVE_TRADING=false → getQuote() OK, executeSwap() interdit.
+async function runDryRunCycle(supabase: SupabaseClient) {
+  console.log('[dryrun] Starting dry-run cycle (R1–R4, R6)')
+
+  for (const sym of WHITELIST_CORE) {
+    try {
+      // ── Prix courant (depuis le cache module-level) ────────────────────────
+      const price = priceCache.data[sym]?.price as number | undefined
+      if (!price) {
+        console.log(`[dryrun] ${sym} prix absent du cache — skip`)
+        await logDryRun(supabase, { symbol: sym, regime: null, signal: null, decision: 'CANDLES_UNAVAILABLE', reason: 'no price in cache' })
+        continue
+      }
+
+      // ── R1 — Filtre de régime (EMA50 / EMA200 sur 4h) ────────────────────
+      const candles4h = await getCandles4h(sym)
+      if (!candles4h || candles4h.length < 200) {
+        console.log(`[dryrun] ${sym} bougies 4h indisponibles (${candles4h?.length ?? 0}) — skip safe`)
+        await logDryRun(supabase, {
+          symbol: sym, regime: null, signal: null,
+          decision: 'CANDLES_UNAVAILABLE',
+          reason:   `4h candles: ${candles4h?.length ?? 0} < 200`,
+        })
+        continue
+      }
+
+      const ema50_4h  = calcEMA(candles4h, 50)
+      const ema200_4h = calcEMA(candles4h, 200)
+      const regime: 'BULL' | 'BEAR' = (price > ema200_4h && ema50_4h > ema200_4h) ? 'BULL' : 'BEAR'
+      console.log(
+        `[dryrun] ${sym} regime=${regime}  price=${price.toFixed(4)}` +
+        `  EMA50=${ema50_4h.toFixed(4)}  EMA200=${ema200_4h.toFixed(4)}`
+      )
+
+      if (regime === 'BEAR') {
+        await logDryRun(supabase, {
+          symbol:   sym,
+          regime,
+          signal:   null,
+          decision: 'BEAR_REGIME_SKIP',
+          reason:   `price ${price.toFixed(4)} below EMA200 ${ema200_4h.toFixed(4)} or EMA50 < EMA200`,
+        })
+        continue
+      }
+
+      // ── Signal (stratégie EMA/RSI identique au paper sim) ─────────────────
+      const opp = await findTradingOpportunity(sym, priceCache.data)
+
+      // ── R2 — Remapping des signaux SHORT ──────────────────────────────────
+      if (opp.signal === 'SELL') {
+        console.log(`[dryrun] ${sym} SHORT_SIGNAL_IGNORED_SPOT`)
+        await logDryRun(supabase, {
+          symbol: sym, regime, signal: 'SELL',
+          decision: 'SHORT_SIGNAL_IGNORED_SPOT',
+          reason:   opp.reason,
+        })
+        continue
+      }
+
+      if (opp.signal !== 'BUY') {
+        await logDryRun(supabase, {
+          symbol: sym, regime, signal: opp.signal,
+          decision: 'NO_SIGNAL',
+          reason:   opp.reason,
+        })
+        continue
+      }
+
+      // ── Signal BUY confirmé — R3 + R4 ────────────────────────────────────
+
+      // R4 — Sizing par volatilité (ATR14 sur bougies 1h)
+      const candles1h  = await getCandles(sym)
+      const atr14      = candles1h ? calcATR(candles1h, 14) : price * 0.02
+      const sizeRaw    = (REFERENCE_CAPITAL_USDC * 0.01) / (atr14 / price)
+      const sizeCalculee = parseFloat(
+        Math.min(sizeRaw, REFERENCE_CAPITAL_USDC * 0.10).toFixed(2)
+      )
+
+      // R3 — Seuil de rentabilité + guards via quote Jupiter
+      let quoteJupiter: any = null
+      let decision     = 'WOULD_EXECUTE'
+      let rejectReason = ''
+
+      const mintOut = WHITELIST_MINTS[sym]
+      try {
+        const amountRaw = toRawAmount(sizeCalculee, 6)  // USDC = 6 décimales
+        const quote = await getQuote(SOL_MINTS.USDC, mintOut, amountRaw, 50)
+
+        quoteJupiter = {
+          inAmount:       quote.inAmount,
+          outAmount:      quote.outAmount,
+          priceImpactPct: quote.priceImpactPct,
+        }
+
+        // Coût aller-retour estimé : fee Jupiter ~0.3% × 2 + price impact × 2
+        const priceImpact     = Math.abs(parseFloat(quote.priceImpactPct))
+        const costEstimatePct = 2 * (0.003 + priceImpact / 100)
+        const gainExpectedPct = opp.tp > 0 ? (opp.tp - price) / price : 0
+
+        if (gainExpectedPct < 3 * costEstimatePct) {
+          decision     = 'REJECTED_LOW_EDGE'
+          rejectReason = (
+            `gain ${(gainExpectedPct * 100).toFixed(2)}% < 3×cost ${(costEstimatePct * 100).toFixed(2)}%` +
+            ` (impact=${priceImpact.toFixed(3)}%)`
+          )
+        } else {
+          // R3 passé → guards de risque (equity on-chain réelle, pas la référence 200)
+          let onchainEquity = 0
+          try {
+            onchainEquity = await getTokenBalance(SOL_MINTS.USDC)
+          } catch {
+            // Wallet non configuré / RPC absent → equity=0
+            // checkPositionSize refusera → GUARD_REFUSED attendu
+          }
+
+          const guard = await runAllGuards(
+            supabase,
+            sizeCalculee,
+            quote.priceImpactPct,
+            onchainEquity
+          )
+          if (!guard.allowed) {
+            decision     = 'GUARD_REFUSED'
+            rejectReason = guard.reason ?? 'guard failed'
+          }
+        }
+
+        console.log(
+          `[dryrun] ${sym} BUY | regime=${regime} | size=$${sizeCalculee}` +
+          ` | ATR=${atr14.toFixed(4)} | impact=${priceImpact.toFixed(3)}%` +
+          ` | gain=${(gainExpectedPct * 100).toFixed(2)}% | decision=${decision}`
+        )
+      } catch (e: any) {
+        decision     = 'JUPITER_QUOTE_FAILED'
+        rejectReason = e.message
+        console.log(`[dryrun] ${sym} Jupiter quote error: ${e.message}`)
+      }
+
+      await logDryRun(supabase, {
+        symbol:        sym,
+        regime,
+        signal:        'BUY',
+        decision,
+        reason:        rejectReason || opp.reason,
+        size_calculee: sizeCalculee,
+        quote_jupiter: quoteJupiter,
+        size_basis:    'reference_200',
+      })
+
+    } catch (e: any) {
+      console.error(`[dryrun] ${sym} erreur inattendue: ${e.message}`)
+    }
+  }
+
+  console.log('[dryrun] Dry-run cycle terminé')
 }
 
 // ── SL/TP checker ──────────────────────────────────────────────────────────────
