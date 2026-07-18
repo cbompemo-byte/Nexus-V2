@@ -209,7 +209,7 @@ async function fetchRealPrices(): Promise<Record<string, any>> {
   try {
     const kuRes = await fetch(
       'https://api.kucoin.com/api/v1/prices' +
-      '?currencies=JUP,WIF,BONK,JTO,PYTH,RAY,BNB',
+      '?currencies=SOL,JUP,WIF,BONK,JTO,PYTH,RAY,BNB',
       { headers: { 'User-Agent': 'KYMIA/1.0' }, signal: AbortSignal.timeout(8000) }
     )
 
@@ -593,8 +593,12 @@ async function runDryRunCycle(supabase: SupabaseClient) {
       // ── Prix courant (depuis le cache module-level) ────────────────────────
       const price = priceCache.data[sym]?.price as number | undefined
       if (!price) {
-        console.log(`[dryrun] ${sym} prix absent du cache — skip`)
-        await logDryRun(supabase, { symbol: sym, regime: null, signal: null, decision: 'CANDLES_UNAVAILABLE', reason: 'no price in cache' })
+        const cacheSize = Object.keys(priceCache.data).length
+        const reason = cacheSize === 0
+          ? 'price cache empty — Kraken + KuCoin both failed'
+          : `${sym} absent from price cache — Kraken failed and KuCoin returned no data for this symbol`
+        console.log(`[dryrun] ${sym} ${reason} — skip`)
+        await logDryRun(supabase, { symbol: sym, regime: null, signal: null, decision: 'CANDLES_UNAVAILABLE', reason })
         continue
       }
 
