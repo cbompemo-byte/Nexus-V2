@@ -60,54 +60,74 @@ export interface DexPair {
 export async function discoverCandidates(
   supabase: SupabaseClient
 ): Promise<Array<{ mint: string; pair: DexPair }>> {
-  const profilesUrl = `${DEXSCREENER}/token-profiles/latest/v1`
-
-  // 1. Fetch latest token profiles from DexScreener
-  let profiles: Array<{ chainId: string; tokenAddress: string }> = []
+  // 1a. Fetch token-profiles/latest/v1 (tokens récents avec profil)
+  let profileMints: string[] = []
   try {
-    const res = await fetch(profilesUrl, {
+    const res = await fetch(`${DEXSCREENER}/token-profiles/latest/v1`, {
       headers: { 'User-Agent': 'KYMIA/1.0' },
       signal:  AbortSignal.timeout(8000),
     })
     if (res.ok) {
-      profiles = await res.json()
+      const profiles: Array<{ chainId: string; tokenAddress: string }> = await res.json()
+      profileMints = profiles.filter(p => p.chainId === 'solana').map(p => p.tokenAddress)
     } else {
-      console.log(`[memecoin] DexScreener profiles HTTP ${res.status} — ${profilesUrl}`)
-      return []
+      console.log(`[memecoin] DexScreener profiles HTTP ${res.status}`)
     }
   } catch (e: any) {
-    console.log(`[memecoin] DexScreener profiles fetch error: ${e.message} — ${profilesUrl}`)
-    return []
+    console.log(`[memecoin] DexScreener profiles fetch error: ${e.message}`)
   }
 
-  const allCount    = profiles.length
-  const solanaMints = profiles
-    .filter(p => p.chainId === 'solana')
-    .map(p => p.tokenAddress)
-    .slice(0, 30)
+  // 1b. Fetch token-boosts/top/v1 (tokens boostés = traction, souvent > 24h)
+  let boostMints: string[] = []
+  try {
+    const res = await fetch(`${DEXSCREENER}/token-boosts/top/v1`, {
+      headers: { 'User-Agent': 'KYMIA/1.0' },
+      signal:  AbortSignal.timeout(8000),
+    })
+    if (res.ok) {
+      const boosts: Array<{ chainId: string; tokenAddress: string }> = await res.json()
+      boostMints = boosts.filter(b => b.chainId === 'solana').map(b => b.tokenAddress)
+    } else {
+      console.log(`[memecoin] DexScreener boosts HTTP ${res.status}`)
+    }
+  } catch (e: any) {
+    console.log(`[memecoin] DexScreener boosts fetch error: ${e.message}`)
+  }
 
-  console.log(`[memecoin] discovery: ${allCount} profils reçus, ${solanaMints.length} solana`)
+  // 2. Merge & deduplicate (Set préserve l'ordre d'insertion)
+  const merged = [...new Set([...profileMints, ...boostMints])]
+  console.log(
+    `[memecoin] discovery: ${profileMints.length} profils + ${boostMints.length} boosts` +
+    ` → ${merged.length} uniques solana`
+  )
 
-  if (!solanaMints.length) return []
+  if (!merged.length) return []
 
-  // 2. Deduplicate: skip mints already screened in the last 6h
+  // 3. DB dedup: skip mints déjà vus dans les 6h (passed, failed, ou PREFILTER)
   const since = new Date(Date.now() - 6 * 3600_000).toISOString()
   const { data: recent } = await supabase
     .from('kymia_memecoin_screens')
     .select('mint')
     .gt('screened_at', since)
   const seen  = new Set(((recent as any[]) || []).map(r => r.mint as string))
-  const fresh = solanaMints.filter(m => !seen.has(m))
+  const fresh = merged.filter(m => !seen.has(m)).slice(0, 40)  // max 40 fetches pair-data
 
-  console.log(`[memecoin] discovery: ${solanaMints.length} solana, ${solanaMints.length - fresh.length} déjà vus, ${fresh.length} à évaluer`)
+  console.log(
+    `[memecoin] discovery: ${merged.length} uniques, ${merged.length - fresh.length} déjà vus (6h),` +
+    ` ${fresh.length} à évaluer`
+  )
 
   if (!fresh.length) return []
 
-  // 3. Per-token pair data + pre-filter (age > 24h AND vol > 500k)
+  // 4. Per-token pair data + pré-filtre (age > 24h AND vol > 500k)
+  //    Budget temps : max 25 candidats retenus pour les 7 checks.
+  //    Les rejetés sont insérés en base (PREFILTER) pour la dédup 6h.
   const candidates: Array<{ mint: string; pair: DexPair }> = []
-  let rejectedPrefilter = 0
+  const now = new Date().toISOString()
 
   for (const mint of fresh) {
+    if (candidates.length >= 25) break  // plafond : 25 tokens à screener
+
     const tokenUrl = `${DEXSCREENER}/latest/dex/tokens/${mint}`
     try {
       const res = await fetch(tokenUrl, {
@@ -119,20 +139,44 @@ export async function discoverCandidates(
         continue
       }
 
-      const data   = await res.json()
-      const pairs  = (data.pairs || []) as DexPair[]
-      const pair   = pairs
+      const data  = await res.json()
+      const pairs = (data.pairs || []) as DexPair[]
+      const pair  = pairs
         .filter(p => p.quoteToken?.symbol === 'USDC' || p.quoteToken?.symbol === 'SOL')
         .sort((a, b) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0))[0]
       if (!pair?.pairCreatedAt) continue
 
       const ageHours = (Date.now() - pair.pairCreatedAt) / 3_600_000
       const vol24h   = pair.volume?.h24 ?? 0
+      const liqUsd   = pair.liquidity?.usd ?? 0
+      const priceUsd = parseFloat(pair.priceUsd || '0')
 
       if (ageHours < 24 || vol24h < 500_000) {
-        rejectedPrefilter++
+        const failReason = ageHours < 24
+          ? `age ${ageHours.toFixed(1)}h < 24h`
+          : `vol $${Math.round(vol24h / 1000)}k < $500k`
+
+        // Insère le rejet PREFILTER en base — bloque le re-log pendant 6h via dédup
+        await supabase.from('kymia_memecoin_screens').insert({
+          mint,
+          symbol:             pair.baseToken.symbol,
+          name:               pair.baseToken.name,
+          age_hours:          parseFloat(ageHours.toFixed(1)),
+          volume_24h:         vol24h,
+          liquidity_usd:      liqUsd,
+          price_usd:          priceUsd,
+          eligible:           false,
+          first_failed_check: 'PREFILTER',
+          fail_reason:        failReason,
+          screened_at:        now,
+        })
+
+        console.log(
+          `[memecoin] PREFILTER: ${pair.baseToken.symbol} (${mint.slice(0, 8)}…) — ${failReason}`
+        )
         continue
       }
+
       candidates.push({ mint, pair })
     } catch (e: any) {
       console.log(`[memecoin] DexScreener tokens fetch error: ${e.message} — ${tokenUrl}`)
@@ -141,7 +185,7 @@ export async function discoverCandidates(
 
   console.log(
     `[memecoin] pré-filtre: ${candidates.length} candidats retenus sur ${fresh.length}` +
-    ` (${rejectedPrefilter} rejetés age<24h ou vol<500k)`
+    ` (${fresh.length - candidates.length} rejetés / sans pair-data)`
   )
 
   return candidates
