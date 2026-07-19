@@ -16,6 +16,7 @@ interface DryRunPosition {
   entryPrice: number
   openedAt:   string
   episodeId:  string
+  virtual:    boolean   // true = ouvert malgré GUARD_REFUSED (fonds insuffisants)
 }
 const dryRunPositions = new Map<string, DryRunPosition>()
 // cycleCountRef removed — cycle counter persisted in kymia_global_state to survive cold starts
@@ -583,24 +584,26 @@ async function logDryRun(supabase: SupabaseClient, entry: {
   reason?:        string
   size_calculee?: number | null
   quote_jupiter?: any
-  size_basis?:    string
-  price_usd?:     number | null
-  episode_id?:    string | null
-  pnl_pct?:       number | null
+  size_basis?:       string
+  price_usd?:        number | null
+  episode_id?:       string | null
+  pnl_pct?:          number | null
+  episode_virtual?:  boolean | null
 }) {
   const { error } = await supabase.from('kymia_dryrun_decisions').insert({
-    timestamp:     new Date().toISOString(),
-    symbol:        entry.symbol,
-    regime:        entry.regime ?? null,
-    signal:        entry.signal ?? null,
-    decision:      entry.decision,
-    reason:        entry.reason ?? null,
-    size_calculee: entry.size_calculee ?? null,
-    quote_jupiter: entry.quote_jupiter ?? null,
-    size_basis:    entry.size_basis ?? null,
-    price_usd:     entry.price_usd ?? null,
-    episode_id:    entry.episode_id ?? null,
-    pnl_pct:       entry.pnl_pct ?? null,
+    timestamp:        new Date().toISOString(),
+    symbol:           entry.symbol,
+    regime:           entry.regime ?? null,
+    signal:           entry.signal ?? null,
+    decision:         entry.decision,
+    reason:           entry.reason ?? null,
+    size_calculee:    entry.size_calculee ?? null,
+    quote_jupiter:    entry.quote_jupiter ?? null,
+    size_basis:       entry.size_basis ?? null,
+    price_usd:        entry.price_usd ?? null,
+    episode_id:       entry.episode_id ?? null,
+    pnl_pct:          entry.pnl_pct ?? null,
+    episode_virtual:  entry.episode_virtual ?? null,
   })
   if (error) console.error('[dryrun] logDryRun insert error:', error.message)
 }
@@ -694,17 +697,18 @@ async function runDryRunCycle(supabase: SupabaseClient) {
         if (pos?.open) {
           // Position ouverte → fermer l'épisode
           const pnlPct = parseFloat((((price - pos.entryPrice) / pos.entryPrice) * 100).toFixed(2))
-          console.log(`[dryrun] ${sym} EPISODE_CLOSED entry=$${pos.entryPrice.toFixed(4)} exit=$${price.toFixed(4)} pnl=${pnlPct}%`)
-          dryRunPositions.set(sym, { open: false, entryPrice: 0, openedAt: '', episodeId: pos.episodeId })
+          console.log(`[dryrun] ${sym} EPISODE_CLOSED entry=$${pos.entryPrice.toFixed(4)} exit=$${price.toFixed(4)} pnl=${pnlPct}%${pos.virtual ? ' [VIRTUAL]' : ''}`)
+          dryRunPositions.set(sym, { open: false, entryPrice: 0, openedAt: '', episodeId: pos.episodeId, virtual: pos.virtual })
           await logDryRun(supabase, {
-            symbol:     sym,
+            symbol:          sym,
             regime,
-            signal:     'SELL',
-            decision:   'EPISODE_CLOSED',
-            reason:     `entry $${pos.entryPrice.toFixed(4)} → exit $${price.toFixed(4)}`,
-            price_usd:  price,
-            episode_id: pos.episodeId,
-            pnl_pct:    pnlPct,
+            signal:          'SELL',
+            decision:        'EPISODE_CLOSED',
+            reason:          `entry $${pos.entryPrice.toFixed(4)} → exit $${price.toFixed(4)}`,
+            price_usd:       price,
+            episode_id:      pos.episodeId,
+            pnl_pct:         pnlPct,
+            episode_virtual: pos.virtual,
           })
         } else {
           // Pas de position → ignorer (spot only)
@@ -737,9 +741,10 @@ async function runDryRunCycle(supabase: SupabaseClient) {
           regime,
           signal:     'BUY',
           decision:   'ALREADY_IN_POSITION',
-          reason:     `episode opened @ $${existingPos.entryPrice.toFixed(4)} on ${existingPos.openedAt}`,
-          price_usd:  price,
-          episode_id: existingPos.episodeId,
+          reason:          `episode opened @ $${existingPos.entryPrice.toFixed(4)} on ${existingPos.openedAt}`,
+          price_usd:       price,
+          episode_id:      existingPos.episodeId,
+          episode_virtual: existingPos.virtual,
         })
         continue
       }
@@ -814,30 +819,40 @@ async function runDryRunCycle(supabase: SupabaseClient) {
         console.log(`[dryrun] ${sym} Jupiter quote error: ${e.message}`)
       }
 
-      // Ouvrir l'épisode uniquement si WOULD_EXECUTE (pas sur GUARD_REFUSED etc.)
+      // Ouvrir l'épisode si WOULD_EXECUTE, ou si GUARD_REFUSED pour raison de fonds.
+      // Les refus kill-switch ou price-impact n'ouvrent PAS d'épisode.
+      const isFundsRefusal = /insuffisant/i.test(rejectReason)
+      const isVirtual      = decision === 'GUARD_REFUSED' && isFundsRefusal
+      const shouldOpen     = decision === 'WOULD_EXECUTE' || isVirtual
+
       let episodeId: string | null = null
-      if (decision === 'WOULD_EXECUTE') {
+      if (shouldOpen) {
         episodeId = crypto.randomUUID()
         dryRunPositions.set(sym, {
           open:       true,
           entryPrice: price,
           openedAt:   new Date().toISOString(),
           episodeId,
+          virtual:    isVirtual,
         })
-        console.log(`[dryrun] ${sym} EPISODE OPENED @ $${price.toFixed(4)} id=${episodeId}`)
+        console.log(
+          `[dryrun] ${sym} EPISODE OPENED @ $${price.toFixed(4)} id=${episodeId}` +
+          (isVirtual ? ' [VIRTUAL — fonds insuffisants]' : '')
+        )
       }
 
       await logDryRun(supabase, {
-        symbol:        sym,
+        symbol:          sym,
         regime,
-        signal:        'BUY',
+        signal:          'BUY',
         decision,
-        reason:        rejectReason || opp.reason,
-        size_calculee: sizeCalculee,
-        quote_jupiter: quoteJupiter,
-        size_basis:    'reference_200',
-        price_usd:     price,
-        episode_id:    episodeId,
+        reason:          rejectReason || opp.reason,
+        size_calculee:   sizeCalculee,
+        quote_jupiter:   quoteJupiter,
+        size_basis:      'reference_200',
+        price_usd:       price,
+        episode_id:      episodeId,
+        episode_virtual: episodeId ? isVirtual : null,
       })
 
     } catch (e: any) {
