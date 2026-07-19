@@ -9,6 +9,15 @@ import { updatePaperTrades, recheckOpenPositions } from '@/lib/memecoin/paper'
 // ── Module-level state ─────────────────────────────────────────────────────────
 let priceCache: { data: Record<string, any>; timestamp: number } = { data: {}, timestamp: 0 }
 let lastMemeScreenAt = 0   // rate-limit: screening max 1× per 15 min
+
+// Simulation d'état de position pour le dry-run (survit aux cycles, pas aux cold starts)
+interface DryRunPosition {
+  open:       boolean
+  entryPrice: number
+  openedAt:   string
+  episodeId:  string
+}
+const dryRunPositions = new Map<string, DryRunPosition>()
 // cycleCountRef removed — cycle counter persisted in kymia_global_state to survive cold starts
 
 // Rounds to N significant digits — preserves precision for low-value tokens like BONK ($0.0000042)
@@ -567,14 +576,17 @@ const LIVE_TRADING = process.env.LIVE_TRADING === 'true'
 
 // ── logDryRun ─────────────────────────────────────────────────────────────────
 async function logDryRun(supabase: SupabaseClient, entry: {
-  symbol:        string
-  regime:        string | null
-  signal:        string | null
-  decision:      string
-  reason?:       string
+  symbol:         string
+  regime:         string | null
+  signal:         string | null
+  decision:       string
+  reason?:        string
   size_calculee?: number | null
   quote_jupiter?: any
-  size_basis?:   string
+  size_basis?:    string
+  price_usd?:     number | null
+  episode_id?:    string | null
+  pnl_pct?:       number | null
 }) {
   const { error } = await supabase.from('kymia_dryrun_decisions').insert({
     timestamp:     new Date().toISOString(),
@@ -586,6 +598,9 @@ async function logDryRun(supabase: SupabaseClient, entry: {
     size_calculee: entry.size_calculee ?? null,
     quote_jupiter: entry.quote_jupiter ?? null,
     size_basis:    entry.size_basis ?? null,
+    price_usd:     entry.price_usd ?? null,
+    episode_id:    entry.episode_id ?? null,
+    pnl_pct:       entry.pnl_pct ?? null,
   })
   if (error) console.error('[dryrun] logDryRun insert error:', error.message)
 }
@@ -633,7 +648,7 @@ async function runDryRunCycle(supabase: SupabaseClient) {
           ? 'price cache empty — Kraken + KuCoin both failed'
           : `${sym} absent from price cache — Kraken failed and KuCoin returned no data for this symbol`
         console.log(`[dryrun] ${sym} ${reason} — skip`)
-        await logDryRun(supabase, { symbol: sym, regime: null, signal: null, decision: 'CANDLES_UNAVAILABLE', reason })
+        await logDryRun(supabase, { symbol: sym, regime: null, signal: null, decision: 'CANDLES_UNAVAILABLE', reason, price_usd: null })
         continue
       }
 
@@ -645,6 +660,7 @@ async function runDryRunCycle(supabase: SupabaseClient) {
           symbol: sym, regime: null, signal: null,
           decision: 'CANDLES_UNAVAILABLE',
           reason:   `4h candles: ${candles4h?.length ?? 0} < 200`,
+          price_usd: price,
         })
         continue
       }
@@ -659,11 +675,12 @@ async function runDryRunCycle(supabase: SupabaseClient) {
 
       if (regime === 'BEAR') {
         await logDryRun(supabase, {
-          symbol:   sym,
+          symbol:    sym,
           regime,
-          signal:   null,
-          decision: 'BEAR_REGIME_SKIP',
-          reason:   `price ${price.toFixed(4)} below EMA200 ${ema200_4h.toFixed(4)} or EMA50 < EMA200`,
+          signal:    null,
+          decision:  'BEAR_REGIME_SKIP',
+          reason:    `price ${price.toFixed(4)} below EMA200 ${ema200_4h.toFixed(4)} or EMA50 < EMA200`,
+          price_usd: price,
         })
         continue
       }
@@ -673,25 +690,61 @@ async function runDryRunCycle(supabase: SupabaseClient) {
 
       // ── R2 — Remapping des signaux SHORT ──────────────────────────────────
       if (opp.signal === 'SELL') {
-        console.log(`[dryrun] ${sym} SHORT_SIGNAL_IGNORED_SPOT`)
-        await logDryRun(supabase, {
-          symbol: sym, regime, signal: 'SELL',
-          decision: 'SHORT_SIGNAL_IGNORED_SPOT',
-          reason:   opp.reason,
-        })
+        const pos = dryRunPositions.get(sym)
+        if (pos?.open) {
+          // Position ouverte → fermer l'épisode
+          const pnlPct = parseFloat((((price - pos.entryPrice) / pos.entryPrice) * 100).toFixed(2))
+          console.log(`[dryrun] ${sym} EPISODE_CLOSED entry=$${pos.entryPrice.toFixed(4)} exit=$${price.toFixed(4)} pnl=${pnlPct}%`)
+          dryRunPositions.set(sym, { open: false, entryPrice: 0, openedAt: '', episodeId: pos.episodeId })
+          await logDryRun(supabase, {
+            symbol:     sym,
+            regime,
+            signal:     'SELL',
+            decision:   'EPISODE_CLOSED',
+            reason:     `entry $${pos.entryPrice.toFixed(4)} → exit $${price.toFixed(4)}`,
+            price_usd:  price,
+            episode_id: pos.episodeId,
+            pnl_pct:    pnlPct,
+          })
+        } else {
+          // Pas de position → ignorer (spot only)
+          console.log(`[dryrun] ${sym} SHORT_SIGNAL_IGNORED_SPOT`)
+          await logDryRun(supabase, {
+            symbol: sym, regime, signal: 'SELL',
+            decision:  'SHORT_SIGNAL_IGNORED_SPOT',
+            reason:    opp.reason,
+            price_usd: price,
+          })
+        }
         continue
       }
 
       if (opp.signal !== 'BUY') {
         await logDryRun(supabase, {
           symbol: sym, regime, signal: opp.signal,
-          decision: 'NO_SIGNAL',
-          reason:   opp.reason,
+          decision:  'NO_SIGNAL',
+          reason:    opp.reason,
+          price_usd: price,
         })
         continue
       }
 
-      // ── Signal BUY confirmé — R3 + R4 ────────────────────────────────────
+      // ── Signal BUY — vérifier si déjà en position ─────────────────────────
+      const existingPos = dryRunPositions.get(sym)
+      if (existingPos?.open) {
+        await logDryRun(supabase, {
+          symbol:     sym,
+          regime,
+          signal:     'BUY',
+          decision:   'ALREADY_IN_POSITION',
+          reason:     `episode opened @ $${existingPos.entryPrice.toFixed(4)} on ${existingPos.openedAt}`,
+          price_usd:  price,
+          episode_id: existingPos.episodeId,
+        })
+        continue
+      }
+
+      // ── Signal BUY sans position — R3 + R4 ───────────────────────────────
 
       // R4 — Sizing par volatilité (ATR14 sur bougies 1h)
       const candles1h  = await getCandles(sym)
@@ -761,6 +814,19 @@ async function runDryRunCycle(supabase: SupabaseClient) {
         console.log(`[dryrun] ${sym} Jupiter quote error: ${e.message}`)
       }
 
+      // Ouvrir l'épisode uniquement si WOULD_EXECUTE (pas sur GUARD_REFUSED etc.)
+      let episodeId: string | null = null
+      if (decision === 'WOULD_EXECUTE') {
+        episodeId = crypto.randomUUID()
+        dryRunPositions.set(sym, {
+          open:       true,
+          entryPrice: price,
+          openedAt:   new Date().toISOString(),
+          episodeId,
+        })
+        console.log(`[dryrun] ${sym} EPISODE OPENED @ $${price.toFixed(4)} id=${episodeId}`)
+      }
+
       await logDryRun(supabase, {
         symbol:        sym,
         regime,
@@ -770,6 +836,8 @@ async function runDryRunCycle(supabase: SupabaseClient) {
         size_calculee: sizeCalculee,
         quote_jupiter: quoteJupiter,
         size_basis:    'reference_200',
+        price_usd:     price,
+        episode_id:    episodeId,
       })
 
     } catch (e: any) {
