@@ -2,6 +2,7 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { motion, AnimatePresence, useInView } from "framer-motion";
 import { supabase } from "../lib/supabase";
+import { EN, translateDecision } from "@/lib/proof-i18n";
 
 const K = { c:"#00F2FE",g:"#00FF88",r:"#FF3366",gold:"#FFD700",pu:"#BD00FF",dim:"#2A5070",hi:"#A8D0EC",bg:"#04060D" };
 const F = "'JetBrains Mono','Courier New',monospace";
@@ -611,7 +612,7 @@ function Nav() {
     <div className="kymia-nav" style={{position:"fixed",top:0,left:0,right:0,zIndex:900,height:52,display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 32px",background:"rgba(4,6,13,0.92)",backdropFilter:"blur(16px)",borderBottom:"1px solid rgba(0,242,254,0.08)",fontFamily:F,transform:show?"translateY(0)":"translateY(-100%)",transition:"transform .3s ease"}}>
       <a href="/" style={{fontSize:15,fontWeight:900,color:K.c,textDecoration:"none",letterSpacing:".2em",textShadow:`0 0 16px ${K.c}`}}>◈ KYMIA</a>
       <div className="kymia-nav-links" style={{display:"flex",gap:28,fontSize:10,color:K.dim,letterSpacing:".1em"}}>
-        {[["HOW IT WORKS","#how"],["DATA","#data"],["PERFORMANCE","#perf"],["PRICING","/pricing"],["CRISIS","#crisis"]].map(([l,h])=>(
+        {[["HOW IT WORKS","#how"],["DATA","#data"],["PERFORMANCE","#perf"],["PROOF","/proof"],["PRICING","/pricing"],["CRISIS","#crisis"]].map(([l,h])=>(
           <a key={l} href={h} style={{color:K.dim,textDecoration:"none",transition:"color .2s"}}
             onMouseEnter={e=>(e.currentTarget.style.color=K.c)} onMouseLeave={e=>(e.currentTarget.style.color=K.dim)}>{l}</a>
         ))}
@@ -1409,6 +1410,130 @@ const LossesPreview = () => {
   );
 };
 
+// ── LiveProofTeaser — real data, feeds from /api/public/proof (cached 60s) ────
+function LiveProofTeaser() {
+  const [decisions, setDecisions] = useState<any[]>([])
+  const [total, setTotal]         = useState(0)
+  const [count, setCount]         = useState(0)
+
+  useEffect(() => {
+    fetch('/api/public/proof')
+      .then(r => r.json())
+      .then(d => {
+        setDecisions((d.core?.decisions ?? []).slice(0, 4))
+        setTotal(d.core?.stats?.total_decisions ?? 0)
+      })
+      .catch(() => {})
+  }, [])
+
+  // Count-up animation
+  useEffect(() => {
+    if (total <= 0) return
+    let current = 0
+    const step = Math.max(1, Math.floor(total / 50))
+    const id = setInterval(() => {
+      current = Math.min(current + step, total)
+      setCount(current)
+      if (current >= total) clearInterval(id)
+    }, 25)
+    return () => clearInterval(id)
+  }, [total])
+
+  const dColor = (d: string) => {
+    if (d === 'WOULD_EXECUTE')    return K.g
+    if (d === 'GUARD_REFUSED')    return K.gold
+    if (d === 'EPISODE_CLOSED')   return K.c
+    if (/SKIP|IGNORE|UNAVAIL|ZERO|WHITELIST|INSUFFICIENT/.test(d)) return K.dim
+    return K.hi
+  }
+
+  return (
+    <section style={{padding:'80px 40px', background:'#04060D', borderTop:'1px solid rgba(0,242,254,0.06)', borderBottom:'1px solid rgba(0,242,254,0.06)'}}>
+      <div style={{maxWidth:860, margin:'0 auto'}}>
+
+        {/* Header */}
+        <div style={{textAlign:'center', marginBottom:40}}>
+          <div style={{display:'inline-flex',alignItems:'center',gap:8,marginBottom:16,
+            padding:'4px 14px',borderRadius:4,background:'rgba(0,242,254,0.06)',
+            border:'1px solid rgba(0,242,254,0.14)',fontSize:9,letterSpacing:'.15em'}}>
+            <motion.span
+              animate={{opacity:[1,0.25,1]}}
+              transition={{repeat:Infinity,duration:2,ease:'easeInOut'}}
+              style={{width:6,height:6,borderRadius:'50%',background:K.c,display:'inline-block'}}
+            />
+            <span style={{color:K.c}}>{EN.mode_badge}</span>
+          </div>
+          <div style={{fontSize:10,color:K.c,letterSpacing:'.4em',marginBottom:12,fontFamily:F}}>
+            ◈ {EN.section_feed.toUpperCase()}
+          </div>
+          <h2 style={{fontSize:32,fontWeight:900,color:'white',margin:'0 0 12px',fontFamily:F}}>
+            {EN.hero_subtitle}
+          </h2>
+          {total > 0 && (
+            <div style={{fontSize:13,color:K.dim,fontFamily:F}}>
+              <span style={{fontSize:22,fontWeight:900,color:K.c}}>{count.toLocaleString()}</span>
+              {' '}decisions evaluated
+            </div>
+          )}
+        </div>
+
+        {/* Terminal feed */}
+        <div style={{...PANEL,padding:0,overflow:'hidden',marginBottom:32}}>
+          <div style={{padding:'10px 16px',borderBottom:'1px solid rgba(0,242,254,0.08)',
+            fontSize:9,color:K.dim,fontFamily:F,letterSpacing:'.15em',display:'flex',gap:6}}>
+            <span style={{color:'#FF5F57'}}>●</span>
+            <span style={{color:'#FFBD2E'}}>●</span>
+            <span style={{color:'#28CA41'}}>●</span>
+            <span style={{marginLeft:8}}>KYMIA · DECISION LOG · LIVE</span>
+          </div>
+          {decisions.length === 0 ? (
+            <div style={{padding:'28px 20px',color:K.dim,fontFamily:F,fontSize:11,textAlign:'center'}}>
+              {'Loading…'}
+            </div>
+          ) : (
+            <div>
+              {decisions.map((d: any, i: number) => (
+                <motion.div key={i}
+                  initial={{opacity:0,x:-10}} animate={{opacity:1,x:0}}
+                  transition={{delay:i*0.14,duration:0.28}}
+                  style={{display:'flex',alignItems:'baseline',gap:12,padding:'10px 16px',
+                    borderBottom:i<decisions.length-1?'1px solid rgba(0,242,254,0.05)':undefined,
+                    fontFamily:F,fontSize:11}}>
+                  <span style={{color:'#1A3050',minWidth:90,fontSize:10}}>
+                    {new Date(d.timestamp).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:false})}
+                  </span>
+                  <span style={{color:K.c,minWidth:52,fontWeight:700}}>{d.symbol ?? '—'}</span>
+                  <span style={{color:d.regime==='BULL'?K.g:d.regime==='BEAR'?K.r:K.dim,minWidth:44,fontSize:10}}>
+                    {d.regime ?? '—'}
+                  </span>
+                  <span style={{color:dColor(d.decision),flex:1}}>
+                    {translateDecision(d.decision, EN)}
+                  </span>
+                </motion.div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* CTA */}
+        <div style={{textAlign:'center'}}>
+          <a href="/proof" style={{
+            display:'inline-block',padding:'11px 28px',
+            background:'rgba(0,242,254,0.08)',border:'1px solid rgba(0,242,254,0.25)',
+            borderRadius:6,color:K.c,fontSize:11,fontFamily:F,fontWeight:700,
+            textDecoration:'none',letterSpacing:'.08em',
+            transition:'background .2s,border-color .2s',
+          }}>
+            {EN.section_feed} — See all proofs →
+          </a>
+        </div>
+
+      </div>
+    </section>
+  )
+}
+
+// ── ProofSection (mock data — kept for reference, not rendered) ───────────────
 function ProofSection() {
   const [activeTab,setActiveTab]=useState('trades');
   const TABS=[
@@ -1996,7 +2121,8 @@ export default function LandingPage() {
 
       <GlobeDebateSection/>
 
-      <ProofSection/>
+      <LiveProofTeaser/>
+      {/* ProofSection — mock data, not rendered; replaced by LiveProofTeaser + /proof */}
       <PerformanceSection/>
       <APISection/>
       <FounderSection/>
