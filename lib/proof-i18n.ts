@@ -46,6 +46,18 @@ export interface ProofDict {
   blocked_badge:     string
   empty:             string
 
+  // Landing-specific (tape + rejected feed)
+  loading:             string
+  tape_badge:          string
+  last_decision:       string
+  mins_ago:            string
+  stat_analyzed:       string
+  stat_approved:       string
+  approved_tagline:    string
+  section_rejected:    string
+  section_rejected_sub:string
+  blocked_card_badge:  string
+
   // Decision code → human sentence
   decisions: Record<string, string>
 
@@ -86,6 +98,17 @@ export const EN: ProofDict = {
   eligible_badge:     'PASSED',
   blocked_badge:      'BLOCKED',
   empty:              '— no data yet —',
+
+  loading:             'Loading…',
+  tape_badge:          'LIVE DECISIONS · OBSERVATION',
+  last_decision:       'Last decision',
+  mins_ago:            'min ago',
+  stat_analyzed:       'ANALYZED',
+  stat_approved:       'APPROVED',
+  approved_tagline:    'High standards. Zero compromise.',
+  section_rejected:    'What the system blocked',
+  section_rejected_sub:'Every token that failed the 7-check security pipeline',
+  blocked_card_badge:  'BLOCKED',
 
   decisions: {
     WOULD_EXECUTE:               'Signal confirmed — would execute',

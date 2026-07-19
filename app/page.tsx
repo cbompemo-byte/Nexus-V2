@@ -2,7 +2,7 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { motion, AnimatePresence, useInView } from "framer-motion";
 import { supabase } from "../lib/supabase";
-import { EN, translateDecision } from "@/lib/proof-i18n";
+import { EN, translateDecision, translateFailReason } from "@/lib/proof-i18n";
 
 const K = { c:"#00F2FE",g:"#00FF88",r:"#FF3366",gold:"#FFD700",pu:"#BD00FF",dim:"#2A5070",hi:"#A8D0EC",bg:"#04060D" };
 const F = "'JetBrains Mono','Courier New',monospace";
@@ -249,7 +249,7 @@ const RIGHT_STEPS = [
 ];
 
 // ── Landing Swarm ─────────────────────────────────────────────────────────────
-function LandingSwarm() {
+function LandingSwarm({swarmMode='CALM'}:{swarmMode?:'BEAR'|'SIGNAL'|'CALM'}) {
   const [signals,   setSignals]   = useState<Record<string,string>>({});
   const [activeIds, setActiveIds] = useState<string[]>([]);
   const [debating,  setDebating]  = useState<string[]>([]);
@@ -421,6 +421,25 @@ function LandingSwarm() {
           );
         })}
         <circle cx={CX} cy={CY} r={W/2} fill="url(#ls-vig)" opacity="0.6"/>
+        {/* SWARM MODE OVERLAY — driven by real last decision */}
+        {swarmMode==='BEAR'&&(
+          <motion.circle cx={CX} cy={CY} r={80} fill="none"
+            stroke="#FF3366" strokeWidth="1.5"
+            animate={{r:[80,260],opacity:[0.35,0]}}
+            transition={{duration:2.5,repeat:Infinity,ease:'easeOut'}}/>
+        )}
+        {swarmMode==='SIGNAL'&&(
+          <motion.circle cx={CX} cy={CY} r={260} fill="none"
+            stroke={K.c} strokeWidth="1.5"
+            animate={{r:[260,80],opacity:[0.25,0]}}
+            transition={{duration:2,repeat:Infinity,ease:'easeIn'}}/>
+        )}
+        {swarmMode==='CALM'&&(
+          <motion.circle cx={CX} cy={CY} r={90} fill="none"
+            stroke={K.c} strokeWidth="0.8"
+            animate={{opacity:[0.06,0.22,0.06]}}
+            transition={{duration:3,repeat:Infinity,ease:'easeInOut'}}/>
+        )}
       </svg>
 
       {/* TOOLTIP */}
@@ -1410,6 +1429,200 @@ const LossesPreview = () => {
   );
 };
 
+// ── DecisionTape — Bloomberg-style scrolling bar (real data, 60s refresh) ─────
+function DecisionTape() {
+  const [items,setItems]=useState<any[]>([]);
+  const [paused,setPaused]=useState(false);
+
+  useEffect(()=>{
+    const load=()=>fetch('/api/public/proof').then(r=>r.json())
+      .then(d=>{if(d.core?.decisions?.length)setItems(d.core.decisions);})
+      .catch(()=>{});
+    load();
+    const id=setInterval(load,60_000);
+    return()=>clearInterval(id);
+  },[]);
+
+  const dColor=(d:string)=>{
+    if(d==='WOULD_EXECUTE'||d==='GUARD_REFUSED') return K.g;
+    if(d==='BEAR_REGIME_SKIP')                   return '#8B2232';
+    if(d==='SHORT_SIGNAL_IGNORED_SPOT')           return '#C07000';
+    if(d==='NO_SIGNAL')                           return K.c;
+    return K.dim;
+  };
+
+  const all=[...items,...items]; // double for seamless marquee
+
+  return (
+    <div style={{position:'relative',background:'rgba(4,6,13,0.98)',
+      borderTop:'1px solid rgba(0,242,254,0.10)',borderBottom:'1px solid rgba(0,242,254,0.10)',
+      height:44,display:'flex',alignItems:'center',overflow:'hidden'}}>
+
+      {/* Fixed badge */}
+      <div style={{position:'absolute',left:0,top:0,bottom:0,zIndex:2,display:'flex',
+        alignItems:'center',gap:8,paddingLeft:16,paddingRight:48,
+        background:'linear-gradient(90deg,#04060D 75%,transparent)'}}>
+        <motion.span animate={{opacity:[1,0.25,1]}} transition={{repeat:Infinity,duration:2,ease:'easeInOut'}}
+          style={{width:6,height:6,borderRadius:'50%',background:K.c,display:'inline-block',flexShrink:0}}/>
+        <span style={{fontSize:9,color:K.c,fontFamily:F,letterSpacing:'.14em',whiteSpace:'nowrap'}}>
+          {EN.tape_badge}
+        </span>
+      </div>
+
+      {/* Scrolling area */}
+      <div style={{paddingLeft:240,overflow:'hidden',width:'100%',height:'100%',display:'flex',alignItems:'center'}}>
+        {items.length===0
+          ? <span style={{fontSize:11,color:K.dim,fontFamily:F}}>{EN.loading}</span>
+          : (
+            <div className="tape-inner"
+              style={{display:'flex',alignItems:'center',whiteSpace:'nowrap',
+                animation:`ticker 80s linear infinite`,
+                animationPlayState:paused?'paused':'running'}}
+              onMouseEnter={()=>setPaused(true)} onMouseLeave={()=>setPaused(false)}>
+              {all.map((d:any,i:number)=>(
+                <span key={i} style={{display:'inline-flex',alignItems:'center',gap:6}}>
+                  <span style={{color:'#1A3050',fontFamily:F,fontSize:10}}>
+                    {new Date(d.timestamp).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:false})}
+                  </span>
+                  <span style={{color:K.c,fontFamily:F,fontSize:11,fontWeight:700,marginLeft:4}}>{d.symbol??'—'}</span>
+                  <span style={{color:d.regime==='BULL'?K.g:d.regime==='BEAR'?'#8B2232':K.dim,fontFamily:F,fontSize:10}}>
+                    {d.regime??'—'}
+                  </span>
+                  <span style={{color:dColor(d.decision),fontFamily:F,fontSize:11}}>
+                    {translateDecision(d.decision,EN)}
+                  </span>
+                  <span style={{color:'#1A3050',fontFamily:F,fontSize:16,margin:'0 14px',lineHeight:1}}>│</span>
+                </span>
+              ))}
+            </div>
+          )
+        }
+      </div>
+
+      {/* Right fade mask */}
+      <div style={{position:'absolute',right:0,top:0,bottom:0,width:60,
+        background:'linear-gradient(270deg,#04060D,transparent)',pointerEvents:'none',zIndex:1}}/>
+    </div>
+  );
+}
+
+// ── RejectedCard — single memecoin rejection card ─────────────────────────────
+function RejectedCard({screen,index}:{screen:any;index:number}) {
+  const [hovered,setHovered]=useState(false);
+  const fmtVol=(n:number)=>n>=1_000_000?`$${(n/1_000_000).toFixed(1)}M`:n>=1_000?`$${(n/1_000).toFixed(0)}K`:`$${n}`;
+  return (
+    <motion.div initial={{opacity:0,y:10}} animate={{opacity:1,y:0}}
+      transition={{delay:index*0.05,duration:0.22}}
+      onMouseEnter={()=>setHovered(true)} onMouseLeave={()=>setHovered(false)}
+      style={{display:'flex',alignItems:'center',gap:14,padding:'9px 14px',flexWrap:'wrap',
+        background:hovered?'rgba(255,51,102,0.06)':'rgba(6,10,18,0.8)',
+        border:`1px solid ${hovered?'rgba(255,51,102,0.25)':'rgba(0,242,254,0.06)'}`,
+        borderRadius:6,boxShadow:hovered?'0 0 16px rgba(255,51,102,0.12)':'none',
+        transition:'all .2s',cursor:'default'}}>
+      <span style={{minWidth:58,fontFamily:F,fontSize:13,fontWeight:700,color:'white'}}>{screen.symbol??'—'}</span>
+      <span style={{minWidth:48,fontSize:10,color:K.dim,fontFamily:F}}>
+        {screen.age_hours!=null?`${screen.age_hours}h`:'—'}
+      </span>
+      <span style={{minWidth:68,fontSize:10,color:K.dim,fontFamily:F}}>
+        {screen.volume_24h!=null?fmtVol(screen.volume_24h):'—'}
+      </span>
+      <span style={{padding:'2px 8px',borderRadius:3,background:'rgba(255,51,102,0.1)',
+        border:'1px solid rgba(255,51,102,0.3)',fontSize:8,color:K.r,fontFamily:F,
+        letterSpacing:'.12em',fontWeight:700,whiteSpace:'nowrap'}}>
+        {screen.first_failed_check??EN.blocked_card_badge}
+      </span>
+      <span style={{flex:1,fontSize:11,color:hovered?K.hi:K.dim,fontFamily:F,
+        overflow:'hidden',textOverflow:'ellipsis',whiteSpace:hovered?'normal':'nowrap',
+        transition:'color .2s',minWidth:0}}>
+        {translateFailReason(screen.fail_reason,EN)}
+      </span>
+    </motion.div>
+  );
+}
+
+// ── RejectedTokensFeed — "What the system blocked" section ────────────────────
+function RejectedTokensFeed() {
+  const [screens,setScreens]=useState<any[]>([]);
+  const [stats,setStats]=useState<{total_analyses?:number;bloques?:number;eligibles?:number}>({});
+  const [cA,setCA]=useState(0); // count-up: analyzed
+  const [cB,setCB]=useState(0); // count-up: blocked
+  const [cE,setCE]=useState(0); // count-up: eligible
+
+  useEffect(()=>{
+    const load=()=>fetch('/api/public/proof').then(r=>r.json()).then(d=>{
+      setScreens(d.memecoin?.screens??[]);
+      setStats(d.memecoin?.stats??{});
+    }).catch(()=>{});
+    load();
+    const id=setInterval(load,60_000);
+    return()=>clearInterval(id);
+  },[]);
+
+  useEffect(()=>{
+    const anim=(target:number,set:(n:number)=>void)=>{
+      if(!target){set(0);return()=>{};}
+      let n=0; const step=Math.max(1,Math.floor(target/40));
+      const id=setInterval(()=>{n=Math.min(n+step,target);set(n);if(n>=target)clearInterval(id);},25);
+      return()=>clearInterval(id);
+    };
+    const c1=anim(stats.total_analyses??0,setCA);
+    const c2=anim(stats.bloques??0,setCB);
+    const c3=anim(stats.eligibles??0,setCE);
+    return()=>{c1();c2();c3();};
+  },[stats.total_analyses,stats.bloques,stats.eligibles]);
+
+  return (
+    <section style={{padding:'72px 40px',background:'#04060D',borderTop:'1px solid rgba(0,242,254,0.06)'}}>
+      <div style={{maxWidth:960,margin:'0 auto'}}>
+
+        {/* Header */}
+        <div style={{textAlign:'center',marginBottom:44}}>
+          <div style={{fontSize:10,color:K.c,letterSpacing:'.4em',marginBottom:12,fontFamily:F}}>
+            ◈ {EN.section_rejected.toUpperCase()}
+          </div>
+          <h2 style={{fontSize:30,fontWeight:900,color:'white',margin:'0 0 8px'}}>{EN.section_rejected}</h2>
+          <p style={{fontSize:13,color:K.dim,margin:0,lineHeight:1.7}}>{EN.section_rejected_sub}</p>
+        </div>
+
+        {/* Counters */}
+        <div style={{display:'flex',justifyContent:'center',gap:48,marginBottom:48,flexWrap:'wrap'}}>
+          {([
+            {v:cA,l:EN.stat_analyzed,col:K.c},
+            {v:cB,l:EN.stat_blocked, col:K.r},
+            {v:cE,l:EN.stat_approved,col:K.g,tag:EN.approved_tagline},
+          ] as {v:number;l:string;col:string;tag?:string}[]).map((s,i)=>(
+            <div key={i} style={{textAlign:'center'}}>
+              <div style={{fontSize:34,fontWeight:900,color:s.col,fontFamily:F,textShadow:`0 0 20px ${s.col}55`}}>
+                {s.v.toLocaleString()}
+              </div>
+              <div style={{fontSize:9,color:K.dim,letterSpacing:'.18em',marginTop:4}}>{s.l}</div>
+              {s.tag&&<div style={{fontSize:9,color:s.col,marginTop:3,opacity:.8}}>{s.tag}</div>}
+            </div>
+          ))}
+        </div>
+
+        {/* Cards */}
+        <div style={{display:'flex',flexDirection:'column',gap:6}}>
+          {screens.length===0
+            ? <div style={{textAlign:'center',color:K.dim,fontFamily:F,fontSize:11,padding:28}}>{EN.loading}</div>
+            : screens.map((s:any,i:number)=><RejectedCard key={i} screen={s} index={i}/>)
+          }
+        </div>
+
+        {/* CTA */}
+        <div style={{textAlign:'center',marginTop:28}}>
+          <a href="/proof" style={{display:'inline-block',padding:'10px 24px',
+            background:'rgba(0,242,254,0.06)',border:'1px solid rgba(0,242,254,0.18)',
+            borderRadius:6,color:K.c,fontSize:11,fontFamily:F,textDecoration:'none',letterSpacing:'.08em'}}>
+            Full analysis → {EN.section_blocks}
+          </a>
+        </div>
+
+      </div>
+    </section>
+  );
+}
+
 // ── LiveProofTeaser — real data, feeds from /api/public/proof (cached 60s) ────
 function LiveProofTeaser() {
   const [decisions, setDecisions] = useState<any[]>([])
@@ -1958,6 +2171,24 @@ export default function LandingPage() {
   const [consensus,setConsensus]=useState(false);
   const [wordIdx,setWordIdx]=useState(0);
   const words=["Stop","Thinking","Bots.","Think","Swarm","Intelligence."];
+  const [swarmMode,setSwarmMode]=useState<'BEAR'|'SIGNAL'|'CALM'>('CALM');
+  const [lastDecision,setLastDecision]=useState<{symbol:string;decision:string;timestamp:string}|null>(null);
+
+  useEffect(()=>{
+    const load=()=>fetch('/api/public/proof').then(r=>r.json()).then(d=>{
+      const first=d.core?.decisions?.[0];
+      if(first){
+        setLastDecision(first);
+        const dc:string=first.decision;
+        if(dc==='BEAR_REGIME_SKIP') setSwarmMode('BEAR');
+        else if(dc==='GUARD_REFUSED'||dc==='WOULD_EXECUTE') setSwarmMode('SIGNAL');
+        else setSwarmMode('CALM');
+      }
+    }).catch(()=>{});
+    load();
+    const id=setInterval(load,60_000);
+    return()=>clearInterval(id);
+  },[]);
 
   useEffect(()=>{
     if(!booted)return;
@@ -2098,9 +2329,17 @@ export default function LandingPage() {
         <Fade delay={.1}>
           <div className="kymia-swarm-layout" style={{display:"grid",gridTemplateColumns:"1fr 560px 1fr",gap:48,alignItems:"center",maxWidth:1280,margin:"0 auto"}}>
             <ExplanationPanel steps={LEFT_STEPS}/>
-            <div className="kymia-agent-network"><LandingSwarm/></div>
+            <div className="kymia-agent-network"><LandingSwarm swarmMode={swarmMode}/></div>
             <ExplanationPanel steps={RIGHT_STEPS}/>
           </div>
+          {lastDecision&&(
+            <div style={{textAlign:'center',marginTop:20,fontSize:11,color:K.dim,fontFamily:F}}>
+              <span style={{color:K.c}}>{EN.last_decision}:</span>{' '}
+              <span style={{color:'white',fontWeight:700}}>{lastDecision.symbol}</span>{' · '}
+              <span>{translateDecision(lastDecision.decision,EN)}</span>{' · '}
+              <span>{Math.round((Date.now()-new Date(lastDecision.timestamp).getTime())/60_000)} {EN.mins_ago}</span>
+            </div>
+          )}
         </Fade>
         <Fade delay={.2}>
           <div style={{marginTop:72,display:"flex",justifyContent:"center",gap:48,flexWrap:"wrap",borderTop:"1px solid rgba(0,242,254,0.08)",paddingTop:48,maxWidth:900,margin:"72px auto 0"}}>
@@ -2121,8 +2360,10 @@ export default function LandingPage() {
 
       <GlobeDebateSection/>
 
-      <LiveProofTeaser/>
-      {/* ProofSection — mock data, not rendered; replaced by LiveProofTeaser + /proof */}
+      <DecisionTape/>
+      <RejectedTokensFeed/>
+      {/* LiveProofTeaser — superseded by DecisionTape + RejectedTokensFeed */}
+      {/* ProofSection — mock data, not rendered; replaced by live components + /proof */}
       <PerformanceSection/>
       <APISection/>
       <FounderSection/>
@@ -2406,6 +2647,7 @@ export default function LandingPage() {
         @keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
         @keyframes rspin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
         @keyframes ticker{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+        @media(prefers-reduced-motion:reduce){.tape-inner{animation:none!important;overflow-x:auto}}
         *{box-sizing:border-box}
         html{scroll-behavior:smooth}
         .agent-network-wrap{width:100%;max-width:600px}
