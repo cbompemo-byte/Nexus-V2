@@ -8,7 +8,8 @@ import { updatePaperTrades, recheckOpenPositions } from '@/lib/memecoin/paper'
 
 // ── Module-level state ─────────────────────────────────────────────────────────
 let priceCache: { data: Record<string, any>; timestamp: number } = { data: {}, timestamp: 0 }
-let lastMemeScreenAt = 0   // rate-limit: screening max 1× per 15 min
+// lastMemeScreenAt supprimé — rate-limit géré via MAX(screened_at) en base
+// (survit aux cold starts serverless)
 
 // Simulation d'état de position pour le dry-run (survit aux cycles, pas aux cold starts)
 interface DryRunPosition {
@@ -616,24 +617,33 @@ async function logDryRun(supabase: SupabaseClient, entry: {
 // Budget temps strict : updatePaperTrades + recheckOpenPositions à chaque cycle
 // (5 min). Screening complet limité à 1× par 15 min pour ménager les APIs.
 async function runMemecoinsModule(supabase: SupabaseClient) {
-  const SCREEN_INTERVAL = 15 * 60_000
-  const secSinceScreen  = Math.floor((Date.now() - lastMemeScreenAt) / 1000)
-  const willScreen      = Date.now() - lastMemeScreenAt >= SCREEN_INTERVAL
-  console.log(
-    `[memecoin] module start` +
-    ` (screening: ${willScreen ? 'YES' : `NO — ${secSinceScreen}s < 900s`})`
-  )
-
-  // Position updates + hourly rechecks — chaque cycle
+  // Position updates + hourly rechecks — chaque cycle (5 min)
   await Promise.allSettled([
     updatePaperTrades(supabase),
     recheckOpenPositions(supabase),
   ])
 
+  // Rate-limit screening via DB — une seule requête, indépendant du cold start
+  const { data: lastRow } = await supabase
+    .from('kymia_memecoin_screens')
+    .select('screened_at')
+    .order('screened_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  const lastScreenMs   = lastRow ? new Date((lastRow as any).screened_at).getTime() : 0
+  const secSinceScreen = Math.floor((Date.now() - lastScreenMs) / 1000)
+  const willScreen     = Date.now() - lastScreenMs >= 15 * 60_000
+
+  console.log(
+    `[memecoin] module start` +
+    ` (screening: ${willScreen ? 'YES' : `NO — ${secSinceScreen}s < 900s depuis dernier screen en base`})`
+  )
+
   if (!willScreen) return
 
+  console.log('[memecoin] calling runMemeScreening...')
   const result = await runMemeScreening(supabase)
-  lastMemeScreenAt = Date.now()
   console.log(
     `[memecoin] screening terminé:` +
     ` ${result.screened} screenés, ${result.eligible} éligibles, ${result.opened} ouverts`
