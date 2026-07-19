@@ -3,9 +3,12 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getQuote, toRawAmount } from '@/lib/solana/jupiter'
 import { MINTS as SOL_MINTS, getTokenBalance } from '@/lib/solana/wallet'
 import { runAllGuards } from '@/lib/solana/risk-guards'
+import { runMemeScreening } from '@/lib/memecoin/screen'
+import { updatePaperTrades, recheckOpenPositions } from '@/lib/memecoin/paper'
 
 // ── Module-level state ─────────────────────────────────────────────────────────
 let priceCache: { data: Record<string, any>; timestamp: number } = { data: {}, timestamp: 0 }
+let lastMemeScreenAt = 0   // rate-limit: screening max 1× per 15 min
 // cycleCountRef removed — cycle counter persisted in kymia_global_state to survive cold starts
 
 // Rounds to N significant digits — preserves precision for low-value tokens like BONK ($0.0000042)
@@ -79,6 +82,11 @@ export async function GET(req: NextRequest) {
     // Dry-run Solana — couche séparée, stats séparées (jamais mélangées avec paper sim)
     await runDryRunCycle(supabase).catch(e =>
       console.error('[dryrun] Fatal error:', e.message)
+    )
+
+    // Module Memecoin — observation pure, jamais bloquant
+    await runMemecoinsModule(supabase).catch(e =>
+      console.error('[memecoin] Fatal error:', e.message)
     )
 
     return NextResponse.json({
@@ -580,6 +588,33 @@ async function logDryRun(supabase: SupabaseClient, entry: {
     size_basis:    entry.size_basis ?? null,
   })
   if (error) console.error('[dryrun] logDryRun insert error:', error.message)
+}
+
+// ── runMemecoinsModule ─────────────────────────────────────────────────────────
+// Budget temps strict : updatePaperTrades + recheckOpenPositions à chaque cycle
+// (5 min). Screening complet limité à 1× par 15 min pour ménager les APIs.
+async function runMemecoinsModule(supabase: SupabaseClient) {
+  console.log('[memecoin] Starting module')
+
+  // Position updates + hourly rechecks — chaque cycle
+  await Promise.allSettled([
+    updatePaperTrades(supabase),
+    recheckOpenPositions(supabase),
+  ])
+
+  // Screening — rate-limité à 15 min
+  const SCREEN_INTERVAL = 15 * 60_000
+  if (Date.now() - lastMemeScreenAt < SCREEN_INTERVAL) {
+    console.log('[memecoin] Screening skipped (15min rate-limit)')
+    return
+  }
+
+  const result = await runMemeScreening(supabase)
+  lastMemeScreenAt = Date.now()
+  console.log(
+    `[memecoin] Screening done:` +
+    ` screened=${result.screened} eligible=${result.eligible} opened=${result.opened}`
+  )
 }
 
 // ── runDryRunCycle ─────────────────────────────────────────────────────────────
