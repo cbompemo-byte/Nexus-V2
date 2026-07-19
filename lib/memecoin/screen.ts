@@ -60,23 +60,33 @@ export interface DexPair {
 export async function discoverCandidates(
   supabase: SupabaseClient
 ): Promise<Array<{ mint: string; pair: DexPair }>> {
+  const profilesUrl = `${DEXSCREENER}/token-profiles/latest/v1`
+
   // 1. Fetch latest token profiles from DexScreener
   let profiles: Array<{ chainId: string; tokenAddress: string }> = []
   try {
-    const res = await fetch(`${DEXSCREENER}/token-profiles/latest/v1`, {
+    const res = await fetch(profilesUrl, {
       headers: { 'User-Agent': 'KYMIA/1.0' },
       signal:  AbortSignal.timeout(8000),
     })
-    if (res.ok) profiles = await res.json()
+    if (res.ok) {
+      profiles = await res.json()
+    } else {
+      console.log(`[memecoin] DexScreener profiles HTTP ${res.status} — ${profilesUrl}`)
+      return []
+    }
   } catch (e: any) {
-    console.log('[memecoin] DexScreener profiles fetch error:', e.message)
+    console.log(`[memecoin] DexScreener profiles fetch error: ${e.message} — ${profilesUrl}`)
     return []
   }
 
+  const allCount    = profiles.length
   const solanaMints = profiles
     .filter(p => p.chainId === 'solana')
     .map(p => p.tokenAddress)
     .slice(0, 30)
+
+  console.log(`[memecoin] discovery: ${allCount} profils reçus, ${solanaMints.length} solana`)
 
   if (!solanaMints.length) return []
 
@@ -86,19 +96,28 @@ export async function discoverCandidates(
     .from('kymia_memecoin_screens')
     .select('mint')
     .gt('screened_at', since)
-  const seen = new Set(((recent as any[]) || []).map(r => r.mint as string))
+  const seen  = new Set(((recent as any[]) || []).map(r => r.mint as string))
   const fresh = solanaMints.filter(m => !seen.has(m))
+
+  console.log(`[memecoin] discovery: ${solanaMints.length} solana, ${solanaMints.length - fresh.length} déjà vus, ${fresh.length} à évaluer`)
+
   if (!fresh.length) return []
 
   // 3. Per-token pair data + pre-filter (age > 24h AND vol > 500k)
   const candidates: Array<{ mint: string; pair: DexPair }> = []
+  let rejectedPrefilter = 0
+
   for (const mint of fresh) {
+    const tokenUrl = `${DEXSCREENER}/latest/dex/tokens/${mint}`
     try {
-      const res = await fetch(`${DEXSCREENER}/latest/dex/tokens/${mint}`, {
+      const res = await fetch(tokenUrl, {
         headers: { 'User-Agent': 'KYMIA/1.0' },
         signal:  AbortSignal.timeout(6000),
       })
-      if (!res.ok) continue
+      if (!res.ok) {
+        console.log(`[memecoin] DexScreener tokens HTTP ${res.status} — ${tokenUrl}`)
+        continue
+      }
 
       const data   = await res.json()
       const pairs  = (data.pairs || []) as DexPair[]
@@ -110,10 +129,20 @@ export async function discoverCandidates(
       const ageHours = (Date.now() - pair.pairCreatedAt) / 3_600_000
       const vol24h   = pair.volume?.h24 ?? 0
 
-      if (ageHours < 24 || vol24h < 500_000) continue
+      if (ageHours < 24 || vol24h < 500_000) {
+        rejectedPrefilter++
+        continue
+      }
       candidates.push({ mint, pair })
-    } catch { /* timeout or parse error — skip */ }
+    } catch (e: any) {
+      console.log(`[memecoin] DexScreener tokens fetch error: ${e.message} — ${tokenUrl}`)
+    }
   }
+
+  console.log(
+    `[memecoin] pré-filtre: ${candidates.length} candidats retenus sur ${fresh.length}` +
+    ` (${rejectedPrefilter} rejetés age<24h ou vol<500k)`
+  )
 
   return candidates
 }
@@ -407,7 +436,7 @@ export async function runMemeScreening(
   supabase: SupabaseClient
 ): Promise<{ screened: number; eligible: number; opened: number }> {
   const candidates = await discoverCandidates(supabase)
-  console.log(`[memecoin] ${candidates.length} candidate(s) after pre-filter`)
+  console.log(`[memecoin] ${candidates.length} candidat(s) à screener`)
 
   let eligible = 0
   let opened   = 0
@@ -459,5 +488,6 @@ export async function runMemeScreening(
     }
   }
 
+  console.log(`[memecoin] screening terminé: ${candidates.length} screenés, ${eligible} éligibles, ${opened} trades fictifs ouverts`)
   return { screened: candidates.length, eligible, opened }
 }

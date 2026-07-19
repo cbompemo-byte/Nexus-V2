@@ -75,19 +75,23 @@ export async function GET(req: NextRequest) {
       .select('*')
       .eq('running', true)
 
+    let paperResults = 0
+    let paperFailed  = 0
+
     if (!activeUsers?.length) {
-      console.log('[cycle] No active users — done')
-      return NextResponse.json({ ok: true, active: 0, timestamp: new Date().toISOString() })
+      console.log('[cycle] No active users — skipping paper sim')
+      // Dry-run et memecoin tournent indépendamment du paper sim
+    } else {
+      console.log(`[cycle] Running cycle for ${activeUsers.length} active user(s)`)
+
+      const settled = await Promise.allSettled(
+        activeUsers.map(state => runUserCycle(supabase, state))
+      )
+
+      paperFailed  = settled.filter(r => r.status === 'rejected').length
+      paperResults = settled.length
+      console.log(`[cycle] Done — ${paperResults - paperFailed} ok, ${paperFailed} failed`)
     }
-
-    console.log(`[cycle] Running cycle for ${activeUsers.length} active user(s)`)
-
-    const results = await Promise.allSettled(
-      activeUsers.map(state => runUserCycle(supabase, state))
-    )
-
-    const failed = results.filter(r => r.status === 'rejected').length
-    console.log(`[cycle] Done — ${results.length - failed} ok, ${failed} failed`)
 
     // Dry-run Solana — couche séparée, stats séparées (jamais mélangées avec paper sim)
     await runDryRunCycle(supabase).catch(e =>
@@ -101,9 +105,9 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({
       ok: true,
-      active: activeUsers.length,
-      results: results.length,
-      failed,
+      active: activeUsers?.length ?? 0,
+      results: paperResults,
+      failed:  paperFailed,
       timestamp: new Date().toISOString(),
     })
   } catch (e: any) {
@@ -612,7 +616,13 @@ async function logDryRun(supabase: SupabaseClient, entry: {
 // Budget temps strict : updatePaperTrades + recheckOpenPositions à chaque cycle
 // (5 min). Screening complet limité à 1× par 15 min pour ménager les APIs.
 async function runMemecoinsModule(supabase: SupabaseClient) {
-  console.log('[memecoin] Starting module')
+  const SCREEN_INTERVAL = 15 * 60_000
+  const secSinceScreen  = Math.floor((Date.now() - lastMemeScreenAt) / 1000)
+  const willScreen      = Date.now() - lastMemeScreenAt >= SCREEN_INTERVAL
+  console.log(
+    `[memecoin] module start` +
+    ` (screening: ${willScreen ? 'YES' : `NO — ${secSinceScreen}s < 900s`})`
+  )
 
   // Position updates + hourly rechecks — chaque cycle
   await Promise.allSettled([
@@ -620,18 +630,13 @@ async function runMemecoinsModule(supabase: SupabaseClient) {
     recheckOpenPositions(supabase),
   ])
 
-  // Screening — rate-limité à 15 min
-  const SCREEN_INTERVAL = 15 * 60_000
-  if (Date.now() - lastMemeScreenAt < SCREEN_INTERVAL) {
-    console.log('[memecoin] Screening skipped (15min rate-limit)')
-    return
-  }
+  if (!willScreen) return
 
   const result = await runMemeScreening(supabase)
   lastMemeScreenAt = Date.now()
   console.log(
-    `[memecoin] Screening done:` +
-    ` screened=${result.screened} eligible=${result.eligible} opened=${result.opened}`
+    `[memecoin] screening terminé:` +
+    ` ${result.screened} screenés, ${result.eligible} éligibles, ${result.opened} ouverts`
   )
 }
 
