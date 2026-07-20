@@ -245,11 +245,27 @@ function runCheck2(pair: DexPair, rug: any | null): CheckEntry {
     }
   }
 
-  const markets     = (rug.markets as any[]) || []
-  const lpLockedPct = markets.reduce((max, m) => {
+  // Primary: RugCheck top-level aggregate (present on all tokens incl. Token-2022)
+  const topLevel   = typeof rug.lpLockedPct === 'number' ? rug.lpLockedPct : 0
+  // Fallback: markets[] scan (detailed response, classic SPL tokens)
+  const markets    = (rug.markets as any[]) || []
+  const fromMkts   = markets.reduce((max, m) => {
     const pct = Number(m.lp?.lockedPct ?? m.lp?.locked_pct ?? 0)
     return Math.max(max, pct)
   }, 0)
+  const lpLockedPct = Math.max(topLevel, fromMkts)
+
+  // Minimal response detection: RugCheck returned no useful LP data
+  // (no markets, lpLockedPct=0, no risks) → status unverifiable, not a failure.
+  // Token continues to checks 3-7; if eligible, grade will be PARTIAL/WEAK.
+  const risks        = (rug.risks as any[]) || []
+  const isMinimal    = !markets.length && lpLockedPct === 0 && risks.length === 0
+  if (isMinimal) {
+    return {
+      result: 'skipped',
+      detail: { liquidity_usd: liqUsd, lp_locked_pct: null, reason: 'rugcheck minimal response — LP status unverifiable' },
+    }
+  }
 
   if (lpLockedPct < 80) {
     return { result: 'failed', detail: { liquidity_usd: liqUsd, lp_locked_pct: lpLockedPct, reason: 'LP locked < 80%' } }
