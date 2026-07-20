@@ -11,16 +11,8 @@ let priceCache: { data: Record<string, any>; timestamp: number } = { data: {}, t
 // lastMemeScreenAt supprimé — rate-limit géré via MAX(screened_at) en base
 // (survit aux cold starts serverless)
 
-// Simulation d'état de position pour le dry-run (survit aux cycles, pas aux cold starts)
-interface DryRunPosition {
-  open:       boolean
-  entryPrice: number
-  openedAt:   string
-  episodeId:  string
-  virtual:    boolean   // true = ouvert malgré GUARD_REFUSED (fonds insuffisants)
-}
-const dryRunPositions = new Map<string, DryRunPosition>()
 // cycleCountRef removed — cycle counter persisted in kymia_global_state to survive cold starts
+// dryRunPositions Map removed — persisted in kymia_dryrun_positions (survit aux cold starts)
 
 // Rounds to N significant digits — preserves precision for low-value tokens like BONK ($0.0000042)
 function roundToSignificant(value: number, sigDigits = 6): number {
@@ -656,6 +648,19 @@ async function runMemecoinsModule(supabase: SupabaseClient) {
 async function runDryRunCycle(supabase: SupabaseClient) {
   console.log('[dryrun] Starting dry-run cycle (R1–R4, R6)')
 
+  // ── Charger les positions ouvertes depuis la DB (cold-start safe) ──────────
+  const { data: dbPositions } = await supabase
+    .from('kymia_dryrun_positions')
+    .select('symbol,entry_price,opened_at,episode_id,virtual')
+  const posMap = new Map<string, { entryPrice: number; openedAt: string; episodeId: string; virtual: boolean }>(
+    (dbPositions ?? []).map((r: any) => [r.symbol, {
+      entryPrice: Number(r.entry_price),
+      openedAt:   r.opened_at,
+      episodeId:  r.episode_id,
+      virtual:    r.virtual,
+    }])
+  )
+
   for (const sym of WHITELIST_CORE) {
     try {
       // ── Prix courant (depuis le cache module-level) ────────────────────────
@@ -708,12 +713,12 @@ async function runDryRunCycle(supabase: SupabaseClient) {
 
       // ── R2 — Remapping des signaux SHORT ──────────────────────────────────
       if (opp.signal === 'SELL') {
-        const pos = dryRunPositions.get(sym)
-        if (pos?.open) {
+        const pos = posMap.get(sym)
+        if (pos) {
           // Position ouverte → fermer l'épisode
           const pnlPct = parseFloat((((price - pos.entryPrice) / pos.entryPrice) * 100).toFixed(2))
           console.log(`[dryrun] ${sym} EPISODE_CLOSED entry=$${pos.entryPrice.toFixed(4)} exit=$${price.toFixed(4)} pnl=${pnlPct}%${pos.virtual ? ' [VIRTUAL]' : ''}`)
-          dryRunPositions.set(sym, { open: false, entryPrice: 0, openedAt: '', episodeId: pos.episodeId, virtual: pos.virtual })
+          await supabase.from('kymia_dryrun_positions').delete().eq('symbol', sym)
           await logDryRun(supabase, {
             symbol:          sym,
             regime,
@@ -749,8 +754,8 @@ async function runDryRunCycle(supabase: SupabaseClient) {
       }
 
       // ── Signal BUY — vérifier si déjà en position ─────────────────────────
-      const existingPos = dryRunPositions.get(sym)
-      if (existingPos?.open) {
+      const existingPos = posMap.get(sym)
+      if (existingPos) {
         await logDryRun(supabase, {
           symbol:     sym,
           regime,
@@ -843,12 +848,13 @@ async function runDryRunCycle(supabase: SupabaseClient) {
       let episodeId: string | null = null
       if (shouldOpen) {
         episodeId = crypto.randomUUID()
-        dryRunPositions.set(sym, {
-          open:       true,
-          entryPrice: price,
-          openedAt:   new Date().toISOString(),
-          episodeId,
-          virtual:    isVirtual,
+        const openedAt = new Date().toISOString()
+        await supabase.from('kymia_dryrun_positions').upsert({
+          symbol:      sym,
+          entry_price: price,
+          opened_at:   openedAt,
+          episode_id:  episodeId,
+          virtual:     isVirtual,
         })
         console.log(
           `[dryrun] ${sym} EPISODE OPENED @ $${price.toFixed(4)} id=${episodeId}` +
