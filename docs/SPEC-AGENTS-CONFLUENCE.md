@@ -47,6 +47,35 @@ risk           | risk-guards.ts — kill switch, fonds, impact| oui
 universe       | R21 — le token est-il tradable (liquidité) | oui
 rug            | module memecoin, 7 checks (candidats meme) | oui
 
+Formules de confidence (calibration v1, 2026-07-21) :
+
+regime APPROVE : pctAbove = (price−EMA200)/EMA200
+  base   = clamp(50 + pctAbove×500, 50, 95)    // 0%→50  10%→95
+  bonus  = clamp(emaSpread×200, 0, 10)          // spread EMA50/EMA200
+  confidence = min(100, round(base + bonus))
+regime REJECT  : pctBelow = (EMA200−price)/EMA200
+  confidence = clamp(round(50 + pctBelow×500), 50, 100)
+regime ABSTAIN : 0
+
+signal : confidence produite directement par computeSignal
+  (65-95 TREND, 60-90 RANGE, 72 MIXED, 0 NO_SIGNAL/ABSTAIN)
+
+edge APPROVE : ratio = gainExpected/costEstimate
+  confidence = min(100, round(50 + (ratio−3)/3 × 50))
+  // 3× → 50   4.5× → 75   ≥6× → 100
+edge REJECT  : 0
+
+sizing : SIZING_RISK_COEFF = 0.00025, cap = MAX_POSITION_PCT × capital ($20)
+  NOTE : coefficient d'échelle, PAS un risque-par-trade au sens Kelly.
+  La vraie perte dépend du stop de signalAgent (max(2×ATR, 1.2% floor)).
+  Calibré pour que le major le moins volatil (SOL, ~0.25% ATR/prix) atterrisse
+  au cap. À re-valider après changement de régime de volatilité.
+  sizeRaw = (200 × 0.00025) / (atr14/price)
+  confidence = 100 si libre (sizeRaw ≤ $20), sinon round(100 × 20 / sizeRaw)
+  data contient atr14 et vol_ratio NON arrondis pour calibration.
+
+risk : APPROVE→100 / REJECT→0 (binaire assumé, c'est un véto dur)```
+
 * véto "doux" : en régime BEAR le trade ne s'exécute pas, mais les autres
   agents votent quand même et tout est loggé — on veut savoir ce que le
   système "aurait pensé" même quand la porte est fermée.
@@ -80,12 +109,29 @@ Pour chaque symbole du cycle :
 Composantes (total 100) — pondérations initiales, revues avec les données :
   regime.confidence   × 0.25    // marché favorable, et à quel point
   signal.confidence   × 0.30    // force du setup EMA/RSI
-  edge.confidence     × 0.20    // marge sur les coûts (4× le coût = 100)
+  edge.confidence     × 0.20    // marge sur les coûts (6× le coût = 100)
   universe.confidence × 0.10    // qualité de liquidité du token
   contexte SOL        × 0.15    // SOL au-dessus de son EMA200 4h = vent porteur
 
 Un agent ABSTAIN → sa composante est redistribuée au prorata des autres
 (le score reste sur 100, mais un flag 'partial_score' est loggé).
+
+Décisions issues du score :
+  score < 50          → REJECTED_LOW_SCORE (trade bloqué)
+  50 ≤ score < 70     → taille × 50%
+  score ≥ 70          → taille pleine
+
+Note comparabilité SOL vs non-SOL (important pour R23 / auto-audit) :
+  Pour SOL lui-même, sol_context = ABSTAIN (évite le double-comptage avec
+  son propre agent regime). Résultat : activeWeight = 0.75 sur SOL vs 0.90
+  sur les autres quand SOL a voté. Les scores de SOL et des non-SOL ne sont
+  donc PAS directement comparables dans les vues d'audit — le dénominateur
+  diffère. Les filtrer séparément dans R23.
+
+Chaque cycle persiste une ligne agent='confluence' dans kymia_agent_verdicts
+avec data = { score, partial_score, active_weight, breakdown } pour l'audit
+a posteriori. active_weight et breakdown permettent de reconstruire
+exactement d'où vient le score.
 
 Futur : smart_money (Partie D) entrera avec un poids de 0.20-0.25 en
 réduisant les autres au prorata. Le calcul vit dans une fonction unique

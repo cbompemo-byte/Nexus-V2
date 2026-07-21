@@ -118,6 +118,7 @@ export const EN: ProofDict = {
     NO_SIGNAL:                   'Monitoring — no valid setup',
     SHORT_SIGNAL_IGNORED_SPOT:   'Exit signal — staying in cash',
     GUARD_REFUSED:               'Signal detected — blocked by risk guards',
+    REJECTED_LOW_SCORE:          'Setup too weak — confluence score below threshold',
     CANDLES_UNAVAILABLE:         'Data unavailable — skipped for safety',
     NOT_IN_WHITELIST:            'Token not in approved list',
     EDGE_INSUFFICIENT:           'Edge below cost threshold — skipped',

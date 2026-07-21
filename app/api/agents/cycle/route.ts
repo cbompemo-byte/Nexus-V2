@@ -5,6 +5,7 @@ import { MINTS as SOL_MINTS, getTokenBalance } from '@/lib/solana/wallet'
 import { runMemeScreening } from '@/lib/memecoin/screen'
 import { updatePaperTrades, recheckOpenPositions } from '@/lib/memecoin/paper'
 import { CycleContext, AgentVerdict } from '@/lib/agents/types'
+import { computeConfluence, ConfluenceResult } from '@/lib/agents/confluence'
 import { regimeAgent }   from '@/lib/agents/regime'
 import { signalAgent, computeSignal } from '@/lib/agents/signal'
 import { sizingAgent }   from '@/lib/agents/sizing'
@@ -413,6 +414,7 @@ async function logDryRun(supabase: SupabaseClient, entry: {
   episode_id?:       string | null
   pnl_pct?:          number | null
   episode_virtual?:  boolean | null
+  score_total?:      number | null  // R20 — SQL: ALTER TABLE kymia_dryrun_decisions ADD COLUMN IF NOT EXISTS score_total numeric;
 }) {
   const { error } = await supabase.from('kymia_dryrun_decisions').insert({
     timestamp:        new Date().toISOString(),
@@ -428,6 +430,7 @@ async function logDryRun(supabase: SupabaseClient, entry: {
     episode_id:       entry.episode_id ?? null,
     pnl_pct:          entry.pnl_pct ?? null,
     episode_virtual:  entry.episode_virtual ?? null,
+    score_total:      entry.score_total ?? null,
   })
   if (error) console.error('[dryrun] logDryRun insert error:', error.message)
 }
@@ -442,6 +445,7 @@ async function logVerdicts(
   symbol:     string,
   decision:   string,
   episodeId:  string | null,
+  scoreTotal: number | null,
 ) {
   if (verdicts.length === 0) return
   try {
@@ -453,7 +457,7 @@ async function logVerdicts(
       confidence:  v.confidence,
       reason:      v.reason,
       data:        v.data ?? null,
-      score_total: null,       // étape 3 (R20)
+      score_total: scoreTotal,   // R20 — même valeur sur toutes les lignes du cycle
       decision,
       episode_id:  episodeId,
     }))
@@ -462,6 +466,30 @@ async function logVerdicts(
   } catch (e: any) {
     console.error('[verdicts] logVerdicts failed (non-fatal):', e.message)
   }
+}
+
+// ── scoreAndAppend ────────────────────────────────────────────────────────────
+// Calcule le score de confluence, PUIS ajoute une ligne 'confluence' dans
+// verdicts (agent fictif) afin que logVerdicts persiste le breakdown complet
+// dans kymia_agent_verdicts.data — nécessaire pour l'auto-audit R23.
+function scoreAndAppend(
+  verdicts:  AgentVerdict[],
+  solCtx:    AgentVerdict | null,
+): ConfluenceResult {
+  const result = computeConfluence(verdicts, solCtx)
+  verdicts.push({
+    agent:      'confluence',
+    vote:       'APPROVE',  // vote fictif — 'confluence' n'est pas dans WEIGHTS
+    confidence: result.score,
+    reason:     `score=${result.score}${result.partial_score ? ' (partial)' : ''}`,
+    data: {
+      score:         result.score,
+      partial_score: result.partial_score,
+      active_weight: result.active_weight,
+      breakdown:     result.breakdown,
+    },
+  })
+  return result
 }
 
 // ── runMemecoinsModule ─────────────────────────────────────────────────────────
@@ -522,6 +550,11 @@ async function runDryRunCycle(supabase: SupabaseClient) {
     }])
   )
 
+  // Contexte SOL pour le score de confluence (R20) :
+  // le verdict regime de SOL est mis en cache à la première itération (SOL est en tête de WHITELIST_CORE)
+  // et réutilisé pour tous les autres symboles comme "vent porteur" (poids 0.15).
+  let solRegimeVerdict: AgentVerdict | null = null
+
   for (const sym of WHITELIST_CORE) {
     try {
       // Timestamp partagé par tous les verdicts de ce symbole (R22)
@@ -560,6 +593,8 @@ async function runDryRunCycle(supabase: SupabaseClient) {
       // ── Agent 1 : Regime (R1) ─────────────────────────────────────────────
       const regimeV = regimeAgent(ctx)
       verdicts.push(regimeV)
+      // Cache pour le sol_context des autres symboles (R20)
+      if (sym === 'SOL') solRegimeVerdict = regimeV
 
       if (regimeV.vote === 'ABSTAIN') {
         console.log(`[dryrun] ${sym} bougies 4h indisponibles (${candles4h?.length ?? 0}) — skip safe`)
@@ -569,7 +604,8 @@ async function runDryRunCycle(supabase: SupabaseClient) {
           reason:   regimeV.reason,
           price_usd: price,
         })
-        await logVerdicts(supabase, verdicts, cycleTs, sym, 'CANDLES_UNAVAILABLE', posMap.get(sym)?.episodeId ?? null)
+        const { score: scoreAbstain } = scoreAndAppend(verdicts, sym === 'SOL' ? null : solRegimeVerdict)
+        await logVerdicts(supabase, verdicts, cycleTs, sym, 'CANDLES_UNAVAILABLE', posMap.get(sym)?.episodeId ?? null, scoreAbstain)
         continue
       }
 
@@ -600,7 +636,8 @@ async function runDryRunCycle(supabase: SupabaseClient) {
           reason:    regimeV.reason,
           price_usd: price,
         })
-        await logVerdicts(supabase, verdicts, cycleTs, sym, 'BEAR_REGIME_SKIP', posMap.get(sym)?.episodeId ?? null)
+        const { score: scoreBear } = scoreAndAppend(verdicts, sym === 'SOL' ? null : solRegimeVerdict)
+        await logVerdicts(supabase, verdicts, cycleTs, sym, 'BEAR_REGIME_SKIP', posMap.get(sym)?.episodeId ?? null, scoreBear)
         continue
       }
 
@@ -624,7 +661,8 @@ async function runDryRunCycle(supabase: SupabaseClient) {
             pnl_pct:         pnlPct,
             episode_virtual: pos.virtual,
           })
-          await logVerdicts(supabase, verdicts, cycleTs, sym, 'EPISODE_CLOSED', pos.episodeId)
+          const { score: scoreClose } = scoreAndAppend(verdicts, sym === 'SOL' ? null : solRegimeVerdict)
+          await logVerdicts(supabase, verdicts, cycleTs, sym, 'EPISODE_CLOSED', pos.episodeId, scoreClose)
         } else {
           console.log(`[dryrun] ${sym} SHORT_SIGNAL_IGNORED_SPOT`)
           await logDryRun(supabase, {
@@ -633,7 +671,8 @@ async function runDryRunCycle(supabase: SupabaseClient) {
             reason:    signalV.reason,
             price_usd: price,
           })
-          await logVerdicts(supabase, verdicts, cycleTs, sym, 'SHORT_SIGNAL_IGNORED_SPOT', null)
+          const { score: scoreShort } = scoreAndAppend(verdicts, sym === 'SOL' ? null : solRegimeVerdict)
+          await logVerdicts(supabase, verdicts, cycleTs, sym, 'SHORT_SIGNAL_IGNORED_SPOT', null, scoreShort)
         }
         continue
       }
@@ -645,7 +684,8 @@ async function runDryRunCycle(supabase: SupabaseClient) {
           reason:    signalV.reason,
           price_usd: price,
         })
-        await logVerdicts(supabase, verdicts, cycleTs, sym, 'NO_SIGNAL', posMap.get(sym)?.episodeId ?? null)
+        const { score: scoreNone } = scoreAndAppend(verdicts, sym === 'SOL' ? null : solRegimeVerdict)
+        await logVerdicts(supabase, verdicts, cycleTs, sym, 'NO_SIGNAL', posMap.get(sym)?.episodeId ?? null, scoreNone)
         continue
       }
 
@@ -662,7 +702,8 @@ async function runDryRunCycle(supabase: SupabaseClient) {
           episode_id:      existingPos.episodeId,
           episode_virtual: existingPos.virtual,
         })
-        await logVerdicts(supabase, verdicts, cycleTs, sym, 'ALREADY_IN_POSITION', existingPos.episodeId)
+        const { score: scoreHeld } = scoreAndAppend(verdicts, sym === 'SOL' ? null : solRegimeVerdict)
+        await logVerdicts(supabase, verdicts, cycleTs, sym, 'ALREADY_IN_POSITION', existingPos.episodeId, scoreHeld)
         continue
       }
 
@@ -721,7 +762,29 @@ async function runDryRunCycle(supabase: SupabaseClient) {
         console.log(`[dryrun] ${sym} Jupiter quote error: ${e.message}`)
       }
 
-      // ── Ouvrir l'épisode (logique inchangée) ─────────────────────────────
+      // ── Score de confluence (R20) ─────────────────────────────────────────
+      // Calculé après tous les agents du cycle (edge ± risk inclus si atteints).
+      // Pour SOL, solContext=null (évite le double-comptage avec son propre regime).
+      const solCtx = sym === 'SOL' ? null : solRegimeVerdict
+      const { score, partial_score } = scoreAndAppend(verdicts, solCtx)
+
+      // Application du score — uniquement sur WOULD_EXECUTE (les autres décisions
+      // sont déjà definies par un véto ou une condition structurelle).
+      let sizeEffective = sizeCalculee
+      if (decision === 'WOULD_EXECUTE') {
+        if (score < 50) {
+          decision     = 'REJECTED_LOW_SCORE'
+          rejectReason = `confluence score ${score} < 50${partial_score ? ' (partial)' : ''}`
+        } else if (score < 70) {
+          // Tranche 50-70 : taille réduite à 50%
+          sizeEffective = parseFloat((sizeCalculee * 0.5).toFixed(2))
+        }
+        // ≥70 : taille pleine (trailing élargi à implémenter avec R23/vrai exécution)
+      }
+
+      console.log(`[dryrun] ${sym} confluence score=${score}${partial_score ? '(p)' : ''} → decision=${decision}${sizeEffective !== sizeCalculee ? ` size=${sizeEffective}(50%)` : ''}`)
+
+      // ── Ouvrir l'épisode ──────────────────────────────────────────────────
       const isFundsRefusal = /insuffisant/i.test(rejectReason)
       const isVirtual      = decision === 'GUARD_REFUSED' && isFundsRefusal
       const shouldOpen     = decision === 'WOULD_EXECUTE' || isVirtual
@@ -749,15 +812,16 @@ async function runDryRunCycle(supabase: SupabaseClient) {
         signal:          'BUY',
         decision,
         reason:          rejectReason || signalV.reason,
-        size_calculee:   sizeCalculee,
+        size_calculee:   sizeEffective,   // taille effective (50% si score 50-70)
         quote_jupiter:   quoteJupiter,
         size_basis:      'reference_200',
         price_usd:       price,
         episode_id:      episodeId,
         episode_virtual: episodeId ? isVirtual : null,
+        score_total:     score,
       })
       // Verdicts : episodeId = nouvel épisode si ouvert, sinon null (pas de position ouverte à ce stade)
-      await logVerdicts(supabase, verdicts, cycleTs, sym, decision, episodeId)
+      await logVerdicts(supabase, verdicts, cycleTs, sym, decision, episodeId, score)
 
     } catch (e: any) {
       console.error(`[dryrun] ${sym} erreur inattendue: ${e.message}`)
