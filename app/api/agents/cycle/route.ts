@@ -484,6 +484,7 @@ function scoreAndAppend(
     reason:     `score=${result.score}${result.partial_score ? ' (partial)' : ''}`,
     data: {
       score:         result.score,
+      score_type:    result.score_type,
       partial_score: result.partial_score,
       active_weight: result.active_weight,
       breakdown:     result.breakdown,

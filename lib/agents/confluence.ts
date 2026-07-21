@@ -22,6 +22,10 @@ const WEIGHTS: Record<string, number> = {
 
 export interface ConfluenceResult {
   score:         number              // 0-100, arrondi
+  score_type:    'DECISION' | 'AMBIENT'
+  //   DECISION : signal a voté APPROVE ou REJECT (setup évalué — score actionnable)
+  //   AMBIENT  : signal ABSTAIN (NO_SIGNAL — mesure la météo du marché, pas un trade)
+  //   Seuls les scores DECISION entrent dans l'auto-audit R23.
   partial_score: boolean             // true si ≥1 agent ABSTAIN (score normalisé)
   active_weight: number              // somme des poids des agents non-ABSTAIN (pour audit)
   breakdown:     Record<string, number>  // contribution brute par agent (pour audit)
@@ -83,5 +87,11 @@ export function computeConfluence(
     ? Math.round(rawScore / activeWeight)
     : 0
 
-  return { score, partial_score: partial, active_weight: activeWeight, breakdown }
+  // score_type : DECISION si signal a voté (setup évalué), AMBIENT sinon (météo du marché).
+  // map['signal'] est renseigné par la boucle ci-dessus depuis les verdicts.
+  const signalVote = map['signal']?.vote
+  const score_type: 'DECISION' | 'AMBIENT' =
+    (signalVote === 'APPROVE' || signalVote === 'REJECT') ? 'DECISION' : 'AMBIENT'
+
+  return { score, score_type, partial_score: partial, active_weight: activeWeight, breakdown }
 }

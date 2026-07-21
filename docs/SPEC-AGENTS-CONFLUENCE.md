@@ -128,10 +128,16 @@ Note comparabilité SOL vs non-SOL (important pour R23 / auto-audit) :
   donc PAS directement comparables dans les vues d'audit — le dénominateur
   diffère. Les filtrer séparément dans R23.
 
+score_type : champ obligatoire dans data du verdict confluence.
+  DECISION : signal a voté APPROVE ou REJECT (setup réellement évalué).
+  AMBIENT  : signal ABSTAIN — mesure la météo du marché, PAS la conviction
+             d'un trade. Sur 95% des cycles, score_type='AMBIENT'. Afficher
+             un score AMBIENT comme indicateur d'un trade serait trompeur.
+
 Chaque cycle persiste une ligne agent='confluence' dans kymia_agent_verdicts
-avec data = { score, partial_score, active_weight, breakdown } pour l'audit
-a posteriori. active_weight et breakdown permettent de reconstruire
-exactement d'où vient le score.
+avec data = { score, score_type, partial_score, active_weight, breakdown }
+pour l'audit a posteriori. active_weight et breakdown permettent de
+reconstruire exactement d'où vient le score.
 
 Futur : smart_money (Partie D) entrera avec un poids de 0.20-0.25 en
 réduisant les autres au prorata. Le calcul vit dans une fonction unique
@@ -177,6 +183,15 @@ affichage /proof en phase 2) :
 - par agent : corrélation entre sa confidence et le PnL des épisodes
   → un agent non-prédictif après N≥100 épisodes voit son poids questionné
 Publication : d'abord interne, puis sur /proof quand N est significatif.
+
+Règles de filtrage obligatoires pour toute comparaison de scores :
+1. score_type = 'DECISION' uniquement — les scores AMBIENT mesurent
+   la météo du marché, pas la qualité d'un setup. Les mélanger avec
+   les scores DECISION biaise toutes les corrélations.
+2. active_weight constant — les scores ne sont comparables qu'à
+   active_weight égal. Observé en base : 0.25 (SOL, sol_context ABSTAIN)
+   à 0.90 (JTO avec SOL en BULL). Filtrer par tranche ou normaliser
+   explicitement avant toute agrégation.
 ```
 
 ---
