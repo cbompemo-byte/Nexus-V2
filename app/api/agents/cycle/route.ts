@@ -2,9 +2,14 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { NextRequest, NextResponse } from 'next/server'
 import { getQuote, toRawAmount } from '@/lib/solana/jupiter'
 import { MINTS as SOL_MINTS, getTokenBalance } from '@/lib/solana/wallet'
-import { runAllGuards } from '@/lib/solana/risk-guards'
 import { runMemeScreening } from '@/lib/memecoin/screen'
 import { updatePaperTrades, recheckOpenPositions } from '@/lib/memecoin/paper'
+import { CycleContext }  from '@/lib/agents/types'
+import { regimeAgent }   from '@/lib/agents/regime'
+import { signalAgent, computeSignal } from '@/lib/agents/signal'
+import { sizingAgent }   from '@/lib/agents/sizing'
+import { edgeAgent }     from '@/lib/agents/edge'
+import { riskAgent }     from '@/lib/agents/risk'
 
 // ── Module-level state ─────────────────────────────────────────────────────────
 let priceCache: { data: Record<string, any>; timestamp: number } = { data: {}, timestamp: 0 }
@@ -114,35 +119,7 @@ function isGoodTradingHour() {
   return { allowed: true, session: 'ALWAYS ON', quality: 80 }
 }
 
-function calcEMA(closes: number[], period: number): number {
-  if (closes.length < period) return closes[closes.length - 1] ?? 0
-  const k = 2 / (period + 1)
-  let ema = closes.slice(0, period).reduce((a, b) => a + b, 0) / period
-  for (let i = period; i < closes.length; i++) {
-    ema = closes[i] * k + ema * (1 - k)
-  }
-  return ema
-}
-
-function calcRSI(closes: number[], period = 14): number {
-  if (closes.length < period + 1) return 50
-  let gains = 0, losses = 0
-  for (let i = closes.length - period; i < closes.length; i++) {
-    const diff = closes[i] - closes[i - 1]
-    if (diff > 0) gains += diff
-    else losses += Math.abs(diff)
-  }
-  const avgGain = gains / period
-  const avgLoss = losses / period
-  if (avgLoss === 0) return 100
-  return 100 - 100 / (1 + avgGain / avgLoss)
-}
-
-function calcATR(closes: number[], period = 14): number {
-  if (closes.length < period + 1) return closes[closes.length - 1] * 0.02
-  const trs = closes.slice(1).map((c, i) => Math.abs(c - closes[i]))
-  return trs.slice(-period).reduce((a: number, b: number) => a + b, 0) / period
-}
+// calcEMA / calcRSI / calcATR → moved to lib/agents/utils.ts
 
 // ── Exchange pair maps ─────────────────────────────────────────────────────────
 const KRAKEN_PAIRS: Record<string, string> = {
@@ -374,9 +351,11 @@ async function getCandles4h(sym: string): Promise<number[] | null> {
   return null
 }
 
-// ── Hybrid EMA/RSI strategy ────────────────────────────────────────────────────
+// ── Hybrid EMA/RSI strategy ───────────────────────────────────────────────────
+// Thin async wrapper around computeSignal (lib/agents/signal.ts).
+// Kept here so runUserCycle (paper sim) can continue calling it unchanged.
 async function findTradingOpportunity(
-  sym: string,
+  sym:    string,
   prices: Record<string, any>
 ): Promise<{
   signal: 'BUY' | 'SELL' | 'NONE'
@@ -394,159 +373,8 @@ async function findTradingOpportunity(
   try {
     const closes = await getCandles(sym)
     if (!closes) return { ...NONE, reason: 'no candle data' }
-
-    // Indicators
-    const ema9  = calcEMA(closes, 9)
-    const ema21 = calcEMA(closes, 21)
-    const ema50 = calcEMA(closes, 50)
-    const rsi   = calcRSI(closes.slice(-15))
-    const last3 = closes.slice(-3)
-    const momentum  = (last3[2] - last3[0]) / last3[0] * 100
     const change24h = prices[sym]?.change || 0
-
-    // ATR
-    const trs = closes.slice(1).map((c, i) => Math.abs(c - closes[i]))
-    const atr  = trs.slice(-14).reduce((a: number, b: number) => a + b, 0) / 14
-
-    // Trend strength (% of candles that closed in the dominant direction)
-    let trend = 0
-    for (let i = 1; i < closes.length; i++) {
-      trend += closes[i] > closes[i - 1] ? 1 : -1
-    }
-    const adx = Math.abs(trend) / closes.length * 100
-
-    const isTrending = adx > 55
-    const isRanging  = adx < 40
-
-    const slDist = Math.max(atr * 2, price * 0.012)
-    const tpDist = Math.max(slDist * 2.5, price * 0.03)
-
-    // Absolute minimum distance floors — prevents instant-close on low-ATR / tiny-price tokens
-    const MIN_SL_PCT = 0.008  // SL never closer than 0.8% from entry
-    const MIN_TP_PCT = 0.020  // TP never closer than 2.0% from entry
-    const floorSl = (sl: number, isBuy: boolean) =>
-      isBuy ? Math.min(sl, price * (1 - MIN_SL_PCT)) : Math.max(sl, price * (1 + MIN_SL_PCT))
-    const floorTp = (tp: number, isBuy: boolean) =>
-      isBuy ? Math.max(tp, price * (1 + MIN_TP_PCT)) : Math.min(tp, price * (1 - MIN_TP_PCT))
-
-    console.log(
-      `[${sym}] price=${price.toFixed(4)}` +
-      ` ema9=${ema9.toFixed(4)} ema21=${ema21.toFixed(4)}` +
-      ` rsi=${rsi.toFixed(1)} mom=${momentum.toFixed(2)}%` +
-      ` trend=${adx.toFixed(0)}% regime=${isTrending ? 'TREND' : isRanging ? 'RANGE' : 'MIXED'}`
-    )
-
-    // ── TRENDING → EMA trend following ────────────────────────────────────
-    if (isTrending) {
-      const bullTrend = ema9 > ema21 && ema21 > ema50
-      const bearTrend = ema9 < ema21 && ema21 < ema50
-
-      if (bullTrend && price > ema9 && rsi > 45 && rsi < 72 && momentum > 0.1 && change24h > -1) {
-        const sl   = price - slDist
-        const tp   = price + tpDist
-        const conf = Math.min(95,
-          65 + (adx > 70 ? 20 : 10) +
-          (momentum > 0.3 ? 8 : 3) +
-          (change24h > 2  ? 7 : 0)
-        )
-        const fsl = floorSl(sl, true), ftp = floorTp(tp, true)
-        console.log(`[${sym}] TREND BUY: sl=${fsl.toFixed(4)} tp=${ftp.toFixed(4)} conf=${conf}`)
-        return {
-          signal: 'BUY', confidence: conf,
-          reason: `TREND Bull EMA trend=${adx.toFixed(0)}% RSI:${rsi.toFixed(0)}`,
-          entry: price, sl: fsl, tp: ftp,
-          size_pct: conf >= 85 ? 0.10 : 0.07,
-        }
-      }
-
-      if (bearTrend && price < ema9 && rsi > 28 && rsi < 55 && momentum < -0.1 && change24h < 1) {
-        const sl   = price + slDist
-        const tp   = price - tpDist
-        const conf = Math.min(95,
-          65 + (adx > 70 ? 20 : 10) +
-          (momentum < -0.3 ? 8 : 3) +
-          (change24h < -2  ? 7 : 0)
-        )
-        const fsl = floorSl(sl, false), ftp = floorTp(tp, false)
-        console.log(`[${sym}] TREND SELL: sl=${fsl.toFixed(4)} tp=${ftp.toFixed(4)} conf=${conf}`)
-        return {
-          signal: 'SELL', confidence: conf,
-          reason: `TREND Bear EMA trend=${adx.toFixed(0)}% RSI:${rsi.toFixed(0)}`,
-          entry: price, sl: fsl, tp: ftp,
-          size_pct: conf >= 85 ? 0.10 : 0.07,
-        }
-      }
-    }
-
-    // ── RANGING → RSI mean reversion ──────────────────────────────────────
-    if (isRanging) {
-      if (rsi < 32 && momentum > -0.5) {
-        const sl   = price - Math.max(price * 0.015, slDist)
-        const tp   = price + Math.max(price * 0.035, tpDist)
-        const conf = Math.min(90, 60 + (rsi < 25 ? 20 : 10) + (momentum > 0 ? 5 : 0))
-        const fsl = floorSl(sl, true), ftp = floorTp(tp, true)
-        console.log(`[${sym}] RANGE BUY: rsi=${rsi.toFixed(1)} sl=${fsl.toFixed(4)} tp=${ftp.toFixed(4)} conf=${conf}`)
-        return {
-          signal: 'BUY', confidence: conf,
-          reason: `RANGE Oversold RSI:${rsi.toFixed(0)} trend=${adx.toFixed(0)}%`,
-          entry: price, sl: fsl, tp: ftp,
-          size_pct: 0.06,
-        }
-      }
-
-      if (rsi > 68 && momentum < 0.5) {
-        const sl   = price + Math.max(price * 0.015, slDist)
-        const tp   = price - Math.max(price * 0.035, tpDist)
-        const conf = Math.min(90, 60 + (rsi > 75 ? 20 : 10) + (momentum < 0 ? 5 : 0))
-        const fsl = floorSl(sl, false), ftp = floorTp(tp, false)
-        console.log(`[${sym}] RANGE SELL: rsi=${rsi.toFixed(1)} sl=${fsl.toFixed(4)} tp=${ftp.toFixed(4)} conf=${conf}`)
-        return {
-          signal: 'SELL', confidence: conf,
-          reason: `RANGE Overbought RSI:${rsi.toFixed(0)} trend=${adx.toFixed(0)}%`,
-          entry: price, sl: fsl, tp: ftp,
-          size_pct: 0.06,
-        }
-      }
-    }
-
-    // ── MIXED → only very strong setups ───────────────────────────────────
-    const veryBull = ema9 > ema21 && rsi > 50 && momentum > 0.2
-    const veryBear = ema9 < ema21 && rsi < 50 && momentum < -0.2
-
-    if (veryBull && change24h > 2) {
-      return {
-        signal: 'BUY', confidence: 72,
-        reason: `MIXED Bull RSI:${rsi.toFixed(0)} mom:${momentum.toFixed(2)}%`,
-        entry: price,
-        sl: floorSl(price - Math.max(price * 0.018, slDist), true),
-        tp: floorTp(price + Math.max(price * 0.045, tpDist), true),
-        size_pct: 0.05,
-      }
-    }
-
-    if (veryBear && change24h < -2) {
-      return {
-        signal: 'SELL', confidence: 72,
-        reason: `MIXED Bear RSI:${rsi.toFixed(0)} mom:${momentum.toFixed(2)}%`,
-        entry: price,
-        sl: floorSl(price + Math.max(price * 0.018, slDist), false),
-        tp: floorTp(price - Math.max(price * 0.045, tpDist), false),
-        size_pct: 0.05,
-      }
-    }
-
-    console.log(`[${sym}] NO SIGNAL:`, {
-      bullTrend:  ema9 > ema21 && ema21 > ema50,
-      bearTrend:  ema9 < ema21 && ema21 < ema50,
-      rsi:        rsi.toFixed(1),
-      momentum:   momentum.toFixed(3),
-      change24h:  change24h.toFixed(2),
-      trend:      adx.toFixed(1) + '%',
-    })
-    return {
-      ...NONE,
-      reason: `No signal: ema9=${ema9.toFixed(1)} rsi=${rsi.toFixed(0)} trend=${adx.toFixed(0)}%`,
-    }
+    return computeSignal(closes, price, change24h, sym)
   } catch (e: any) {
     console.log(`[strategy] ${sym} error: ${e.message}`)
     return { ...NONE, reason: e.message }
@@ -566,8 +394,7 @@ const WHITELIST_MINTS: Record<CoreSymbol, string> = {
   RAY:  '4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R',
 }
 
-// Capital de référence pour le sizing indicatif en dry-run (R4)
-const REFERENCE_CAPITAL_USDC = 200
+// REFERENCE_CAPITAL_USDC → moved to lib/agents/sizing.ts
 
 // Garde-fou global : executeSwap() ne sera JAMAIS appelé tant que cette var est false
 const LIVE_TRADING = process.env.LIVE_TRADING === 'true'
@@ -645,6 +472,8 @@ async function runMemecoinsModule(supabase: SupabaseClient) {
 // ── runDryRunCycle ─────────────────────────────────────────────────────────────
 // Tourne en parallèle du paper sim. Stats SÉPARÉES — jamais mélangées.
 // LIVE_TRADING=false → getQuote() OK, executeSwap() interdit.
+// R17-R19 : orchestrateur agent. Chaque symbole → 5 agents → décision.
+// Les décisions et reasons loggées en base sont IDENTIQUES à l'ancienne version.
 async function runDryRunCycle(supabase: SupabaseClient) {
   console.log('[dryrun] Starting dry-run cycle (R1–R4, R6)')
 
@@ -663,7 +492,7 @@ async function runDryRunCycle(supabase: SupabaseClient) {
 
   for (const sym of WHITELIST_CORE) {
     try {
-      // ── Prix courant (depuis le cache module-level) ────────────────────────
+      // ── Prix courant (pre-check inchangé) ────────────────────────────────
       const price = priceCache.data[sym]?.price as number | undefined
       if (!price) {
         const cacheSize = Object.keys(priceCache.data).length
@@ -675,47 +504,79 @@ async function runDryRunCycle(supabase: SupabaseClient) {
         continue
       }
 
-      // ── R1 — Filtre de régime (EMA50 / EMA200 sur 4h) ────────────────────
-      const candles4h = await getCandles4h(sym)
-      if (!candles4h || candles4h.length < 200) {
+      // ── Pré-fetch candles (partagé par tous les agents) ───────────────────
+      // candles4h + candles1h fetched en parallèle (R17 : tous les agents votent,
+      // y compris signal et sizing en régime BEAR — véto doux).
+      const [candles4h, candles1h] = await Promise.all([
+        getCandles4h(sym),
+        getCandles(sym),
+      ])
+
+      // ── Contexte de base ──────────────────────────────────────────────────
+      const ctx: CycleContext = {
+        symbol:    sym,
+        price,
+        candles4h,
+        candles1h,
+        priceData: priceCache.data,
+        mintOut:   WHITELIST_MINTS[sym],
+      }
+
+      // ── Agent 1 : Regime (R1) ─────────────────────────────────────────────
+      const regimeV = regimeAgent(ctx)
+
+      if (regimeV.vote === 'ABSTAIN') {
+        // Bougies 4h indisponibles — skip safe (identique à l'ancien pre-check)
         console.log(`[dryrun] ${sym} bougies 4h indisponibles (${candles4h?.length ?? 0}) — skip safe`)
         await logDryRun(supabase, {
           symbol: sym, regime: null, signal: null,
           decision: 'CANDLES_UNAVAILABLE',
-          reason:   `4h candles: ${candles4h?.length ?? 0} < 200`,
+          reason:   regimeV.reason,  // "4h candles: N < 200" — byte-identique
           price_usd: price,
         })
         continue
       }
 
-      const ema50_4h  = calcEMA(candles4h, 50)
-      const ema200_4h = calcEMA(candles4h, 200)
-      const regime: 'BULL' | 'BEAR' = (price > ema200_4h && ema50_4h > ema200_4h) ? 'BULL' : 'BEAR'
+      const regime = regimeV.data!.regime as 'BULL' | 'BEAR'
       console.log(
         `[dryrun] ${sym} regime=${regime}  price=${price.toFixed(4)}` +
-        `  EMA50=${ema50_4h.toFixed(4)}  EMA200=${ema200_4h.toFixed(4)}`
+        `  EMA50=${(regimeV.data!.ema50_4h as number).toFixed(4)}` +
+        `  EMA200=${(regimeV.data!.ema200_4h as number).toFixed(4)}`
       )
 
-      if (regime === 'BEAR') {
+      // ── Agent 2 : Signal (véto doux : tourne aussi en BEAR) ──────────────
+      const signalV = signalAgent(ctx)
+      const sigData = signalV.data as { signal: string; tp: number; sl: number }
+
+      // ── Agent 3 : Sizing (véto doux : tourne aussi en BEAR) ──────────────
+      const sizingV = sizingAgent(ctx)
+
+      if (regimeV.vote === 'REJECT') {
+        // Véto doux : les agents ont voté — log console, BEAR_REGIME_SKIP en base
+        console.log(
+          `[dryrun] ${sym} BEAR — verdicts:`,
+          JSON.stringify({
+            signal: { vote: signalV.vote, reason: signalV.reason },
+            sizing: { vote: sizingV.vote, data: sizingV.data },
+          })
+        )
         await logDryRun(supabase, {
           symbol:    sym,
           regime,
           signal:    null,
           decision:  'BEAR_REGIME_SKIP',
-          reason:    `price ${price.toFixed(4)} below EMA200 ${ema200_4h.toFixed(4)} or EMA50 < EMA200`,
+          reason:    regimeV.reason,  // "price X below EMA200 Y or EMA50 < EMA200" — byte-identique
           price_usd: price,
         })
         continue
       }
 
-      // ── Signal (stratégie EMA/RSI identique au paper sim) ─────────────────
-      const opp = await findTradingOpportunity(sym, priceCache.data)
+      // ── BULL — routing du signal ──────────────────────────────────────────
 
-      // ── R2 — Remapping des signaux SHORT ──────────────────────────────────
-      if (opp.signal === 'SELL') {
+      // R2 : SELL → close épisode ou ignorer (spot only)
+      if (sigData.signal === 'SELL') {
         const pos = posMap.get(sym)
         if (pos) {
-          // Position ouverte → fermer l'épisode
           const pnlPct = parseFloat((((price - pos.entryPrice) / pos.entryPrice) * 100).toFixed(2))
           console.log(`[dryrun] ${sym} EPISODE_CLOSED entry=$${pos.entryPrice.toFixed(4)} exit=$${price.toFixed(4)} pnl=${pnlPct}%${pos.virtual ? ' [VIRTUAL]' : ''}`)
           await supabase.from('kymia_dryrun_positions').delete().eq('symbol', sym)
@@ -731,36 +592,35 @@ async function runDryRunCycle(supabase: SupabaseClient) {
             episode_virtual: pos.virtual,
           })
         } else {
-          // Pas de position → ignorer (spot only)
           console.log(`[dryrun] ${sym} SHORT_SIGNAL_IGNORED_SPOT`)
           await logDryRun(supabase, {
             symbol: sym, regime, signal: 'SELL',
             decision:  'SHORT_SIGNAL_IGNORED_SPOT',
-            reason:    opp.reason,
+            reason:    signalV.reason,  // identique à opp.reason
             price_usd: price,
           })
         }
         continue
       }
 
-      if (opp.signal !== 'BUY') {
+      if (sigData.signal !== 'BUY') {
         await logDryRun(supabase, {
-          symbol: sym, regime, signal: opp.signal,
+          symbol: sym, regime, signal: sigData.signal as any,
           decision:  'NO_SIGNAL',
-          reason:    opp.reason,
+          reason:    signalV.reason,  // identique à opp.reason
           price_usd: price,
         })
         continue
       }
 
-      // ── Signal BUY — vérifier si déjà en position ─────────────────────────
+      // BUY — déjà en position ?
       const existingPos = posMap.get(sym)
       if (existingPos) {
         await logDryRun(supabase, {
-          symbol:     sym,
+          symbol:          sym,
           regime,
-          signal:     'BUY',
-          decision:   'ALREADY_IN_POSITION',
+          signal:          'BUY',
+          decision:        'ALREADY_IN_POSITION',
           reason:          `episode opened @ $${existingPos.entryPrice.toFixed(4)} on ${existingPos.openedAt}`,
           price_usd:       price,
           episode_id:      existingPos.episodeId,
@@ -769,65 +629,49 @@ async function runDryRunCycle(supabase: SupabaseClient) {
         continue
       }
 
-      // ── Signal BUY sans position — R3 + R4 ───────────────────────────────
+      // ── Sizing déjà calculé par Agent 3 ──────────────────────────────────
+      const sizeCalculee = (sizingV.data as { sizeCalculee: number }).sizeCalculee
+      const atr14        = (sizingV.data as { atr14: number }).atr14
 
-      // R4 — Sizing par volatilité (ATR14 sur bougies 1h)
-      const candles1h  = await getCandles(sym)
-      const atr14      = candles1h ? calcATR(candles1h, 14) : price * 0.02
-      const sizeRaw    = (REFERENCE_CAPITAL_USDC * 0.01) / (atr14 / price)
-      const sizeCalculee = parseFloat(
-        Math.min(sizeRaw, REFERENCE_CAPITAL_USDC * 0.10).toFixed(2)
-      )
-
-      // R3 — Seuil de rentabilité + guards via quote Jupiter
+      // ── Jupiter quote → Agents 4 (Edge) + 5 (Risk) ───────────────────────
       let quoteJupiter: any = null
       let decision     = 'WOULD_EXECUTE'
       let rejectReason = ''
 
-      const mintOut = WHITELIST_MINTS[sym]
       try {
         const amountRaw = toRawAmount(sizeCalculee, 6)  // USDC = 6 décimales
-        const quote = await getQuote(SOL_MINTS.USDC, mintOut, amountRaw, 50)
+        const quote = await getQuote(SOL_MINTS.USDC, ctx.mintOut, amountRaw, 50)
+        quoteJupiter = { inAmount: quote.inAmount, outAmount: quote.outAmount, priceImpactPct: quote.priceImpactPct }
 
-        quoteJupiter = {
-          inAmount:       quote.inAmount,
-          outAmount:      quote.outAmount,
-          priceImpactPct: quote.priceImpactPct,
-        }
+        // Enrichir le contexte avec size + quote
+        const enrichedCtx: CycleContext = { ...ctx, sizeCalculee, quoteJupiter }
 
-        // Coût aller-retour estimé : fee Jupiter ~0.3% × 2 + price impact × 2
-        const priceImpact     = Math.abs(parseFloat(quote.priceImpactPct))
-        const costEstimatePct = 2 * (0.003 + priceImpact / 100)
-        const gainExpectedPct = opp.tp > 0 ? (opp.tp - price) / price : 0
+        // ── Agent 4 : Edge (R3) ────────────────────────────────────────────
+        const edgeV = edgeAgent(enrichedCtx, sigData.tp)
+        const priceImpact = Math.abs(parseFloat(quote.priceImpactPct))
 
-        if (gainExpectedPct < 3 * costEstimatePct) {
+        if (edgeV.vote === 'REJECT') {
           decision     = 'REJECTED_LOW_EDGE'
-          rejectReason = (
-            `gain ${(gainExpectedPct * 100).toFixed(2)}% < 3×cost ${(costEstimatePct * 100).toFixed(2)}%` +
-            ` (impact=${priceImpact.toFixed(3)}%)`
-          )
+          rejectReason = edgeV.reason  // byte-identique au format précédent
         } else {
-          // R3 passé → guards de risque (equity on-chain réelle, pas la référence 200)
+          // ── Agent 5 : Risk (guards) ──────────────────────────────────────
           let onchainEquity = 0
           try {
             onchainEquity = await getTokenBalance(SOL_MINTS.USDC)
           } catch {
-            // Wallet non configuré / RPC absent → equity=0
-            // checkPositionSize refusera → GUARD_REFUSED attendu
+            // Wallet non configuré / RPC absent → equity=0 → GUARD_REFUSED attendu
           }
 
-          const guard = await runAllGuards(
-            supabase,
-            sizeCalculee,
-            quote.priceImpactPct,
-            onchainEquity
-          )
-          if (!guard.allowed) {
+          const fullCtx: CycleContext = { ...enrichedCtx, onchainEquity }
+          const riskV = await riskAgent(fullCtx, supabase)
+
+          if (riskV.vote === 'REJECT') {
             decision     = 'GUARD_REFUSED'
-            rejectReason = guard.reason ?? 'guard failed'
+            rejectReason = riskV.reason  // = guard.reason ?? 'guard failed' — byte-identique
           }
         }
 
+        const gainExpectedPct = sigData.tp > 0 ? (sigData.tp - price) / price : 0
         console.log(
           `[dryrun] ${sym} BUY | regime=${regime} | size=$${sizeCalculee}` +
           ` | ATR=${atr14.toFixed(4)} | impact=${priceImpact.toFixed(3)}%` +
@@ -839,8 +683,7 @@ async function runDryRunCycle(supabase: SupabaseClient) {
         console.log(`[dryrun] ${sym} Jupiter quote error: ${e.message}`)
       }
 
-      // Ouvrir l'épisode si WOULD_EXECUTE, ou si GUARD_REFUSED pour raison de fonds.
-      // Les refus kill-switch ou price-impact n'ouvrent PAS d'épisode.
+      // ── Ouvrir l'épisode (logique inchangée) ─────────────────────────────
       const isFundsRefusal = /insuffisant/i.test(rejectReason)
       const isVirtual      = decision === 'GUARD_REFUSED' && isFundsRefusal
       const shouldOpen     = decision === 'WOULD_EXECUTE' || isVirtual
@@ -867,7 +710,7 @@ async function runDryRunCycle(supabase: SupabaseClient) {
         regime,
         signal:          'BUY',
         decision,
-        reason:          rejectReason || opp.reason,
+        reason:          rejectReason || signalV.reason,  // identique à rejectReason || opp.reason
         size_calculee:   sizeCalculee,
         quote_jupiter:   quoteJupiter,
         size_basis:      'reference_200',
