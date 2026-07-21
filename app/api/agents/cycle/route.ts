@@ -4,7 +4,7 @@ import { getQuote, toRawAmount } from '@/lib/solana/jupiter'
 import { MINTS as SOL_MINTS, getTokenBalance } from '@/lib/solana/wallet'
 import { runMemeScreening } from '@/lib/memecoin/screen'
 import { updatePaperTrades, recheckOpenPositions } from '@/lib/memecoin/paper'
-import { CycleContext }  from '@/lib/agents/types'
+import { CycleContext, AgentVerdict } from '@/lib/agents/types'
 import { regimeAgent }   from '@/lib/agents/regime'
 import { signalAgent, computeSignal } from '@/lib/agents/signal'
 import { sizingAgent }   from '@/lib/agents/sizing'
@@ -432,6 +432,38 @@ async function logDryRun(supabase: SupabaseClient, entry: {
   if (error) console.error('[dryrun] logDryRun insert error:', error.message)
 }
 
+// ── logVerdicts (R22) ─────────────────────────────────────────────────────────
+// Batch-inserts agent verdicts into kymia_agent_verdicts.
+// Non-fatal: a write failure NEVER interrupts the cycle or blocks logDryRun.
+async function logVerdicts(
+  supabase:   SupabaseClient,
+  verdicts:   AgentVerdict[],
+  cycleTs:    string,
+  symbol:     string,
+  decision:   string,
+  episodeId:  string | null,
+) {
+  if (verdicts.length === 0) return
+  try {
+    const rows = verdicts.map(v => ({
+      cycle_ts:    cycleTs,
+      symbol,
+      agent:       v.agent,
+      vote:        v.vote,
+      confidence:  v.confidence,
+      reason:      v.reason,
+      data:        v.data ?? null,
+      score_total: null,       // étape 3 (R20)
+      decision,
+      episode_id:  episodeId,
+    }))
+    const { error } = await supabase.from('kymia_agent_verdicts').insert(rows)
+    if (error) console.error('[verdicts] insert error:', error.message)
+  } catch (e: any) {
+    console.error('[verdicts] logVerdicts failed (non-fatal):', e.message)
+  }
+}
+
 // ── runMemecoinsModule ─────────────────────────────────────────────────────────
 // Budget temps strict : updatePaperTrades + recheckOpenPositions à chaque cycle
 // (5 min). Screening complet limité à 1× par 15 min pour ménager les APIs.
@@ -492,6 +524,10 @@ async function runDryRunCycle(supabase: SupabaseClient) {
 
   for (const sym of WHITELIST_CORE) {
     try {
+      // Timestamp partagé par tous les verdicts de ce symbole (R22)
+      const cycleTs  = new Date().toISOString()
+      const verdicts: AgentVerdict[] = []
+
       // ── Prix courant (pre-check inchangé) ────────────────────────────────
       const price = priceCache.data[sym]?.price as number | undefined
       if (!price) {
@@ -501,12 +537,11 @@ async function runDryRunCycle(supabase: SupabaseClient) {
           : `${sym} absent from price cache — Kraken failed and KuCoin returned no data for this symbol`
         console.log(`[dryrun] ${sym} ${reason} — skip`)
         await logDryRun(supabase, { symbol: sym, regime: null, signal: null, decision: 'CANDLES_UNAVAILABLE', reason, price_usd: null })
+        // No agents ran — nothing to insert in kymia_agent_verdicts
         continue
       }
 
       // ── Pré-fetch candles (partagé par tous les agents) ───────────────────
-      // candles4h + candles1h fetched en parallèle (R17 : tous les agents votent,
-      // y compris signal et sizing en régime BEAR — véto doux).
       const [candles4h, candles1h] = await Promise.all([
         getCandles4h(sym),
         getCandles(sym),
@@ -524,16 +559,17 @@ async function runDryRunCycle(supabase: SupabaseClient) {
 
       // ── Agent 1 : Regime (R1) ─────────────────────────────────────────────
       const regimeV = regimeAgent(ctx)
+      verdicts.push(regimeV)
 
       if (regimeV.vote === 'ABSTAIN') {
-        // Bougies 4h indisponibles — skip safe (identique à l'ancien pre-check)
         console.log(`[dryrun] ${sym} bougies 4h indisponibles (${candles4h?.length ?? 0}) — skip safe`)
         await logDryRun(supabase, {
           symbol: sym, regime: null, signal: null,
           decision: 'CANDLES_UNAVAILABLE',
-          reason:   regimeV.reason,  // "4h candles: N < 200" — byte-identique
+          reason:   regimeV.reason,
           price_usd: price,
         })
+        await logVerdicts(supabase, verdicts, cycleTs, sym, 'CANDLES_UNAVAILABLE', posMap.get(sym)?.episodeId ?? null)
         continue
       }
 
@@ -546,28 +582,25 @@ async function runDryRunCycle(supabase: SupabaseClient) {
 
       // ── Agent 2 : Signal (véto doux : tourne aussi en BEAR) ──────────────
       const signalV = signalAgent(ctx)
+      verdicts.push(signalV)
       const sigData = signalV.data as { signal: string; tp: number; sl: number }
 
       // ── Agent 3 : Sizing (véto doux : tourne aussi en BEAR) ──────────────
       const sizingV = sizingAgent(ctx)
+      verdicts.push(sizingV)
 
       if (regimeV.vote === 'REJECT') {
-        // Véto doux : les agents ont voté — log console, BEAR_REGIME_SKIP en base
-        console.log(
-          `[dryrun] ${sym} BEAR — verdicts:`,
-          JSON.stringify({
-            signal: { vote: signalV.vote, reason: signalV.reason },
-            sizing: { vote: sizingV.vote, data: sizingV.data },
-          })
-        )
+        // Véto doux : verdicts écrits en base (signal + sizing visibles)
+        console.log(`[dryrun] ${sym} BEAR — signal=${signalV.vote} sizing=${(sizingV.data as any)?.sizeCalculee}`)
         await logDryRun(supabase, {
           symbol:    sym,
           regime,
           signal:    null,
           decision:  'BEAR_REGIME_SKIP',
-          reason:    regimeV.reason,  // "price X below EMA200 Y or EMA50 < EMA200" — byte-identique
+          reason:    regimeV.reason,
           price_usd: price,
         })
+        await logVerdicts(supabase, verdicts, cycleTs, sym, 'BEAR_REGIME_SKIP', posMap.get(sym)?.episodeId ?? null)
         continue
       }
 
@@ -591,14 +624,16 @@ async function runDryRunCycle(supabase: SupabaseClient) {
             pnl_pct:         pnlPct,
             episode_virtual: pos.virtual,
           })
+          await logVerdicts(supabase, verdicts, cycleTs, sym, 'EPISODE_CLOSED', pos.episodeId)
         } else {
           console.log(`[dryrun] ${sym} SHORT_SIGNAL_IGNORED_SPOT`)
           await logDryRun(supabase, {
             symbol: sym, regime, signal: 'SELL',
             decision:  'SHORT_SIGNAL_IGNORED_SPOT',
-            reason:    signalV.reason,  // identique à opp.reason
+            reason:    signalV.reason,
             price_usd: price,
           })
+          await logVerdicts(supabase, verdicts, cycleTs, sym, 'SHORT_SIGNAL_IGNORED_SPOT', null)
         }
         continue
       }
@@ -607,9 +642,10 @@ async function runDryRunCycle(supabase: SupabaseClient) {
         await logDryRun(supabase, {
           symbol: sym, regime, signal: sigData.signal as any,
           decision:  'NO_SIGNAL',
-          reason:    signalV.reason,  // identique à opp.reason
+          reason:    signalV.reason,
           price_usd: price,
         })
+        await logVerdicts(supabase, verdicts, cycleTs, sym, 'NO_SIGNAL', posMap.get(sym)?.episodeId ?? null)
         continue
       }
 
@@ -626,6 +662,7 @@ async function runDryRunCycle(supabase: SupabaseClient) {
           episode_id:      existingPos.episodeId,
           episode_virtual: existingPos.virtual,
         })
+        await logVerdicts(supabase, verdicts, cycleTs, sym, 'ALREADY_IN_POSITION', existingPos.episodeId)
         continue
       }
 
@@ -643,16 +680,16 @@ async function runDryRunCycle(supabase: SupabaseClient) {
         const quote = await getQuote(SOL_MINTS.USDC, ctx.mintOut, amountRaw, 50)
         quoteJupiter = { inAmount: quote.inAmount, outAmount: quote.outAmount, priceImpactPct: quote.priceImpactPct }
 
-        // Enrichir le contexte avec size + quote
         const enrichedCtx: CycleContext = { ...ctx, sizeCalculee, quoteJupiter }
 
         // ── Agent 4 : Edge (R3) ────────────────────────────────────────────
         const edgeV = edgeAgent(enrichedCtx, sigData.tp)
+        verdicts.push(edgeV)
         const priceImpact = Math.abs(parseFloat(quote.priceImpactPct))
 
         if (edgeV.vote === 'REJECT') {
           decision     = 'REJECTED_LOW_EDGE'
-          rejectReason = edgeV.reason  // byte-identique au format précédent
+          rejectReason = edgeV.reason
         } else {
           // ── Agent 5 : Risk (guards) ──────────────────────────────────────
           let onchainEquity = 0
@@ -664,10 +701,11 @@ async function runDryRunCycle(supabase: SupabaseClient) {
 
           const fullCtx: CycleContext = { ...enrichedCtx, onchainEquity }
           const riskV = await riskAgent(fullCtx, supabase)
+          verdicts.push(riskV)
 
           if (riskV.vote === 'REJECT') {
             decision     = 'GUARD_REFUSED'
-            rejectReason = riskV.reason  // = guard.reason ?? 'guard failed' — byte-identique
+            rejectReason = riskV.reason
           }
         }
 
@@ -710,7 +748,7 @@ async function runDryRunCycle(supabase: SupabaseClient) {
         regime,
         signal:          'BUY',
         decision,
-        reason:          rejectReason || signalV.reason,  // identique à rejectReason || opp.reason
+        reason:          rejectReason || signalV.reason,
         size_calculee:   sizeCalculee,
         quote_jupiter:   quoteJupiter,
         size_basis:      'reference_200',
@@ -718,6 +756,8 @@ async function runDryRunCycle(supabase: SupabaseClient) {
         episode_id:      episodeId,
         episode_virtual: episodeId ? isVirtual : null,
       })
+      // Verdicts : episodeId = nouvel épisode si ouvert, sinon null (pas de position ouverte à ce stade)
+      await logVerdicts(supabase, verdicts, cycleTs, sym, decision, episodeId)
 
     } catch (e: any) {
       console.error(`[dryrun] ${sym} erreur inattendue: ${e.message}`)
