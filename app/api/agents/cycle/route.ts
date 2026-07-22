@@ -11,6 +11,7 @@ import { signalAgent, computeSignal } from '@/lib/agents/signal'
 import { sizingAgent }   from '@/lib/agents/sizing'
 import { edgeAgent }     from '@/lib/agents/edge'
 import { riskAgent }     from '@/lib/agents/risk'
+import { universeAgent } from '@/lib/agents/universe'
 
 // ── Module-level state ─────────────────────────────────────────────────────────
 let priceCache: { data: Record<string, any>; timestamp: number } = { data: {}, timestamp: 0 }
@@ -530,13 +531,159 @@ async function runMemecoinsModule(supabase: SupabaseClient) {
   )
 }
 
+// ── runUniverseCheckJob (R21) ─────────────────────────────────────────────────
+// Tournée quotidienne : met à jour liquidity_usd / volume_24h dans kymia_universe
+// et applique les transitions de statut avec hystérésis.
+// Appelle fetchRealPrices() implicitement via priceCache (doit tourner après fetchRealPrices).
+// Rate-limit via MAX(last_check) en DB — survit aux cold starts.
+async function runUniverseCheckJob(supabase: SupabaseClient): Promise<void> {
+  // Rate-limit : 1× par 23h
+  const { data: lastRow } = await supabase
+    .from('kymia_universe')
+    .select('last_check')
+    .not('last_check', 'is', null)
+    .order('last_check', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (lastRow?.last_check) {
+    const elapsed = Date.now() - new Date((lastRow as any).last_check).getTime()
+    if (elapsed < 23 * 3600 * 1000) {
+      console.log(`[universe] Job skipped — last check ${Math.round(elapsed / 3600000)}h ago`)
+      return
+    }
+  }
+
+  console.log('[universe] Starting daily universe check')
+
+  const { data: tokens } = await supabase
+    .from('kymia_universe')
+    .select('symbol, mint, status, price_symbol, liquidity_usd, volume_24h')
+
+  for (const token of tokens ?? []) {
+    const sym         = (token as any).symbol as string
+    const mint        = (token as any).mint as string
+    const curStatus   = (token as any).status as string
+    const priceSymbol = ((token as any).price_symbol ?? sym) as string
+
+    let liq = 0
+    let vol = 0
+
+    try {
+      const res = await fetch(
+        `https://api.dexscreener.com/latest/dex/tokens/${mint}`,
+        { headers: { 'User-Agent': 'KYMIA/1.0' }, signal: AbortSignal.timeout(10000) }
+      )
+      if (res.ok) {
+        const dexData = await res.json()
+        // Aggregate ALL Solana pairs — Jupiter routes across all pools
+        const solanaPairs = ((dexData.pairs ?? []) as any[]).filter(p => p.chainId === 'solana')
+        liq = solanaPairs.reduce((sum, p) => sum + (Number(p.liquidity?.usd) || 0), 0)
+        vol = solanaPairs.reduce((sum, p) => sum + (Number(p.volume?.h24) || 0), 0)
+        console.log(`[universe] ${sym} liq=$${Math.round(liq / 1000)}k vol=$${Math.round(vol / 1000)}k (${solanaPairs.length} pairs)`)
+      }
+    } catch (e: any) {
+      console.log(`[universe] ${sym} DexScreener error: ${e.message} — skipping`)
+      continue
+    }
+
+    // ── Hysteresis transitions ────────────────────────────────────────────────
+    // Entry:      liq > $500k AND vol > $250k (AND valid price source)
+    // Suspension: liq < $250k OR  vol < $100k
+    let newStatus   = curStatus
+    let statusReason = `liq $${Math.round(liq / 1000)}k vol $${Math.round(vol / 1000)}k`
+
+    if (curStatus === 'CANDIDATE' && liq > 500_000 && vol > 250_000) {
+      // Guard: ACTIVE eligibility requires a valid price source (KRAKEN_PAIRS or KUCOIN_PAIRS)
+      const hasPrice = !!(KRAKEN_PAIRS[priceSymbol] || KUCOIN_PAIRS[priceSymbol])
+      if (hasPrice) {
+        newStatus    = 'ACTIVE'
+        statusReason = `promoted: ${statusReason}`
+      } else {
+        statusReason = `thresholds met but no price source for price_symbol=${priceSymbol} — staying CANDIDATE`
+        console.log(`[universe] ${sym} CANDIDATE thresholds met but price_symbol='${priceSymbol}' not in KRAKEN_PAIRS/KUCOIN_PAIRS — NOT promoting`)
+      }
+    } else if (curStatus === 'ACTIVE' && (liq < 250_000 || vol < 100_000)) {
+      newStatus    = 'SUSPENDED'
+      statusReason = `suspended: ${statusReason}`
+
+      // Force-close any open episode before suspension (Option A)
+      try {
+        const { data: openPos } = await supabase
+          .from('kymia_dryrun_positions')
+          .select('symbol, entry_price, episode_id, virtual')
+          .eq('symbol', sym)
+          .maybeSingle()
+
+        if (openPos) {
+          const closePrice = priceCache.data[priceSymbol]?.price as number | undefined
+          const entryPrice = Number((openPos as any).entry_price)
+          const episodeId  = (openPos as any).episode_id as string
+          const isVirtual  = (openPos as any).virtual as boolean
+          const pnlPct     = closePrice
+            ? parseFloat((((closePrice - entryPrice) / entryPrice) * 100).toFixed(2))
+            : null
+
+          await supabase.from('kymia_dryrun_positions').delete().eq('symbol', sym)
+          await logDryRun(supabase, {
+            symbol:          sym,
+            regime:          null,
+            signal:          null,
+            decision:        'EPISODE_CLOSED',
+            reason:          `forced close — UNIVERSE_SUSPENDED (liq $${Math.round(liq / 1000)}k vol $${Math.round(vol / 1000)}k)${closePrice ? ` @ $${closePrice}` : ''}`,
+            price_usd:       closePrice ?? null,
+            episode_id:      episodeId,
+            pnl_pct:         pnlPct,
+            episode_virtual: isVirtual,
+          })
+          console.log(`[universe] ${sym} open episode ${episodeId} force-closed (pnl=${pnlPct}%)`)
+        }
+      } catch (e: any) {
+        console.error(`[universe] ${sym} forced close error: ${e.message}`)
+      }
+    }
+
+    // ── Persist updated metrics ───────────────────────────────────────────────
+    await supabase.from('kymia_universe').update({
+      liquidity_usd: liq,
+      volume_24h:    vol,
+      last_check:    new Date().toISOString(),
+      status:        newStatus,
+      status_reason: statusReason,
+    }).eq('symbol', sym)
+
+    // Log status change to tape
+    if (newStatus !== curStatus) {
+      await logDryRun(supabase, {
+        symbol:   sym,
+        regime:   null,
+        signal:   null,
+        decision: 'UNIVERSE_CHANGE',
+        reason:   `${curStatus} → ${newStatus}: ${statusReason}`,
+        price_usd: priceCache.data[priceSymbol]?.price ?? null,
+      })
+      console.log(`[universe] ${sym} status ${curStatus} → ${newStatus}`)
+    }
+  }
+
+  console.log('[universe] Daily check complete')
+}
+
 // ── runDryRunCycle ─────────────────────────────────────────────────────────────
 // Tourne en parallèle du paper sim. Stats SÉPARÉES — jamais mélangées.
 // LIVE_TRADING=false → getQuote() OK, executeSwap() interdit.
 // R17-R19 : orchestrateur agent. Chaque symbole → 5 agents → décision.
 // Les décisions et reasons loggées en base sont IDENTIQUES à l'ancienne version.
 async function runDryRunCycle(supabase: SupabaseClient) {
-  console.log('[dryrun] Starting dry-run cycle (R1–R4, R6)')
+  console.log('[dryrun] Starting dry-run cycle (R1–R4, R6, R21)')
+
+  // ── Prix courants (nécessaires avant universe job pour forced close) ────────
+  await fetchRealPrices()
+
+  // ── Universe job quotidien (R21) ───────────────────────────────────────────
+  await runUniverseCheckJob(supabase).catch(e =>
+    console.error('[universe] Job error (non-fatal):', e.message)
+  )
 
   // ── Charger les positions ouvertes depuis la DB (cold-start safe) ──────────
   const { data: dbPositions } = await supabase
@@ -551,44 +698,94 @@ async function runDryRunCycle(supabase: SupabaseClient) {
     }])
   )
 
+  // ── Charger l'univers actif depuis kymia_universe (R21) ────────────────────
+  // SOL doit passer en premier (solRegimeVerdict cache pour les autres symboles).
+  // Fallback sur WHITELIST_CORE si la table est vide (safeguard cold-start).
+  const { data: universeRows } = await supabase
+    .from('kymia_universe')
+    .select('symbol, mint, price_symbol, liquidity_usd')
+    .eq('status', 'ACTIVE')
+
+  type UniverseRow = { symbol: string; mint: string; price_symbol: string | null; liquidity_usd: number | null }
+
+  const activeTokens: UniverseRow[] = (
+    universeRows?.length
+      ? universeRows as UniverseRow[]
+      : WHITELIST_CORE.map(s => ({
+          symbol:       s,
+          mint:         WHITELIST_MINTS[s],
+          price_symbol: s,
+          liquidity_usd: null,
+        }))
+  ).sort((a, b) => {
+    if (a.symbol === 'SOL') return -1
+    if (b.symbol === 'SOL') return 1
+    return a.symbol.localeCompare(b.symbol)
+  })
+
+  console.log(`[dryrun] Active universe: ${activeTokens.map(t => t.symbol).join(', ')}`)
+
   // Contexte SOL pour le score de confluence (R20) :
-  // le verdict regime de SOL est mis en cache à la première itération (SOL est en tête de WHITELIST_CORE)
+  // le verdict regime de SOL est mis en cache à la première itération (SOL est en tête)
   // et réutilisé pour tous les autres symboles comme "vent porteur" (poids 0.15).
   let solRegimeVerdict: AgentVerdict | null = null
 
-  for (const sym of WHITELIST_CORE) {
+  for (const row of activeTokens) {
+    // sym = identifiant Solana (ex. 'cbBTC') ; priceSymbol = clé priceCache/candles (ex. 'BTC')
+    const sym         = row.symbol
+    const priceSymbol = row.price_symbol ?? sym   // cbBTC→BTC, WETH→ETH, autres inchangés
+
     try {
       // Timestamp partagé par tous les verdicts de ce symbole (R22)
       const cycleTs  = new Date().toISOString()
       const verdicts: AgentVerdict[] = []
 
-      // ── Prix courant (pre-check inchangé) ────────────────────────────────
-      const price = priceCache.data[sym]?.price as number | undefined
+      // ── Agent 0 : Universe (R21 — véto dur, tourne en premier) ──────────
+      const universeV = universeAgent({ symbol: sym } as CycleContext, row.liquidity_usd)
+      verdicts.push(universeV)
+      if (universeV.vote === 'REJECT') {
+        console.log(`[dryrun] ${sym} UNIVERSE_REJECT — ${universeV.reason}`)
+        await logDryRun(supabase, {
+          symbol: sym, regime: null, signal: null,
+          decision:  'GUARD_REFUSED',
+          reason:    universeV.reason,
+          price_usd: priceCache.data[priceSymbol]?.price ?? null,
+        })
+        const { score: scoreUni } = scoreAndAppend(verdicts, sym === 'SOL' ? null : solRegimeVerdict)
+        await logVerdicts(supabase, verdicts, cycleTs, sym, 'GUARD_REFUSED', posMap.get(sym)?.episodeId ?? null, scoreUni)
+        continue
+      }
+
+      // ── Prix courant (priceSymbol = BTC/ETH pour les wrapped tokens) ─────
+      const price = priceCache.data[priceSymbol]?.price as number | undefined
       if (!price) {
         const cacheSize = Object.keys(priceCache.data).length
         const reason = cacheSize === 0
           ? 'price cache empty — Kraken + KuCoin both failed'
-          : `${sym} absent from price cache — Kraken failed and KuCoin returned no data for this symbol`
-        console.log(`[dryrun] ${sym} ${reason} — skip`)
+          : `${priceSymbol} absent from price cache — Kraken failed and KuCoin returned no data for this symbol`
+        console.log(`[dryrun] ${sym} (priceSymbol=${priceSymbol}) ${reason} — skip`)
         await logDryRun(supabase, { symbol: sym, regime: null, signal: null, decision: 'CANDLES_UNAVAILABLE', reason, price_usd: null })
-        // No agents ran — nothing to insert in kymia_agent_verdicts
+        // No agents ran beyond universe — nothing more to insert
+        const { score: scoreMissing } = scoreAndAppend(verdicts, sym === 'SOL' ? null : solRegimeVerdict)
+        await logVerdicts(supabase, verdicts, cycleTs, sym, 'CANDLES_UNAVAILABLE', posMap.get(sym)?.episodeId ?? null, scoreMissing)
         continue
       }
 
-      // ── Pré-fetch candles (partagé par tous les agents) ───────────────────
+      // ── Pré-fetch candles via priceSymbol ─────────────────────────────────
       const [candles4h, candles1h] = await Promise.all([
-        getCandles4h(sym),
-        getCandles(sym),
+        getCandles4h(priceSymbol),
+        getCandles(priceSymbol),
       ])
 
       // ── Contexte de base ──────────────────────────────────────────────────
       const ctx: CycleContext = {
-        symbol:    sym,
+        symbol:      sym,
         price,
         candles4h,
         candles1h,
-        priceData: priceCache.data,
-        mintOut:   WHITELIST_MINTS[sym],
+        priceData:   priceCache.data,
+        mintOut:     row.mint,    // SPL mint pour Jupiter — jamais remplacé par priceSymbol
+        priceSymbol,
       }
 
       // ── Agent 1 : Regime (R1) ─────────────────────────────────────────────

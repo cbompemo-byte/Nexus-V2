@@ -26,6 +26,9 @@ export interface CycleContext {
   candles1h:      number[] | null   // 1h, shared by signal + sizing agents
   priceData:      Record<string, any> // full price cache — signal needs .change
   mintOut:        string
+  // R21 — price lookup key (Kraken/KuCoin ticker, may differ from symbol for wrapped tokens)
+  // cbBTC → 'BTC', WETH → 'ETH', all others → same as symbol
+  priceSymbol?:   string
   // BUY path only:
   sizeCalculee?:  number
   quoteJupiter?:  JupiterQuote | null

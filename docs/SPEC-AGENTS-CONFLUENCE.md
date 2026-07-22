@@ -192,6 +192,18 @@ Règles de filtrage obligatoires pour toute comparaison de scores :
    active_weight égal. Observé en base : 0.25 (SOL, sol_context ABSTAIN)
    à 0.90 (JTO avec SOL en BULL). Filtrer par tranche ou normaliser
    explicitement avant toute agrégation.
+3. Segmenter par date de déploiement — les scores ne sont pas comparables
+   entre déploiements qui ont modifié les poids ou les agents votants :
+
+   Avant R21 (universe = ABSTAIN) :
+     active_weight non-SOL : 0.75 (sol_context ABSTAIN → 0.60)
+   Après R21 (universe = APPROVE, poids 0.10) :
+     active_weight non-SOL : 0.85 (sol_context ABSTAIN → 0.75)
+
+   Toute vue d'audit cross-période DOIT filtrer sur cycle_ts ≥ date de
+   déploiement R21 ou normaliser explicitement par active_weight.
+   Référence : colonne active_weight dans kymia_agent_verdicts.data
+   (agent='confluence') permet de reconstruire la période exacte.
 ```
 
 ---
@@ -203,9 +215,10 @@ Règles de filtrage obligatoires pour toute comparaison de scores :
 ```sql
 CREATE TABLE IF NOT EXISTS kymia_universe (
   symbol        text PRIMARY KEY,
-  mint          text NOT NULL,
+  mint          text NOT NULL,          -- SPL mint Solana (pour Jupiter)
   status        text NOT NULL DEFAULT 'CANDIDATE',
                 -- ACTIVE | SUSPENDED | CANDIDATE
+  price_symbol  text,                   -- ticker Kraken/KuCoin (ex. 'BTC' pour cbBTC)
   liquidity_usd numeric,
   volume_24h    numeric,
   last_check    timestamptz,
@@ -216,19 +229,53 @@ CREATE TABLE IF NOT EXISTS kymia_universe (
 
 ```
 Seed initial : SOL, JUP, JTO, PYTH, RAY (ACTIVE) + cbBTC, WETH (CANDIDATE).
-Mints à vérifier au moment de l'implémentation (jamais de mémoire).
+price_symbol : SOL/JUP/JTO/PYTH/RAY → valeur identique au symbol.
+              cbBTC → 'BTC' (Kraken XBTUSD), WETH → 'ETH' (Kraken ETHUSD).
+Mints vérifiés via DexScreener à l'implémentation (jamais de mémoire).
 
-Job quotidien (dans le cycle, 1×/24h comme le screening 15min) :
-- pour chaque ligne : liquidité + volume via DexScreener/Jupiter quote test
-- CANDIDATE → ACTIVE si liquidité > $5M ET volume 24h > $10M
-- ACTIVE → SUSPENDED si liquidité < $3M OU volume < $5M (hystérésis :
-  seuils de sortie plus bas que d'entrée, évite le yo-yo)
-- chaque changement de statut → ligne dans kymia_dryrun_decisions
-  (decision: 'UNIVERSE_CHANGE', reason humaine) → visible sur la tape
+RÈGLE D'ÉLIGIBILITÉ ACTIVE : un token n'est promu ACTIVE que si
+  (a) price_symbol est présent ET reconnu dans KRAKEN_PAIRS ou KUCOIN_PAIRS, ET
+  (b) liquidity agrégée (toutes paires Solana) > $500k ET volume 24h > $250k.
+  Sans source de prix valide, le token reste CANDIDATE même si les seuils sont atteints.
 
-Le cycle core itère sur SELECT symbol FROM kymia_universe WHERE
-status='ACTIVE' au lieu de la constante WHITELIST_CORE.
-L'agent universe vote REJECT (véto) pour tout symbole non-ACTIVE.
+Seuils (calibrés pour position ~$20) :
+  CANDIDATE → ACTIVE  : liq > $500k ET vol > $250k (ET price_symbol valide)
+  ACTIVE → SUSPENDED  : liq < $250k OU vol < $100k
+  (hystérésis : seuils de sortie plus bas que d'entrée, évite le yo-yo)
+
+Fragile à surveiller :
+  PYTH — liq ~$557k (2× le seuil de suspension). Première à être touchée
+  en cas de baisse de liquidité. Surveiller last_check/status_reason.
+
+Suspension → épisode ouvert force-closé immédiatement (Option A) :
+  Prix de fermeture = priceCache au moment du job (Kraken/KuCoin).
+  Decision loggée : EPISODE_CLOSED, reason "forced close — UNIVERSE_SUSPENDED".
+  PnL calculé et persisté. Ensuite seulement : statut → SUSPENDED.
+
+Job quotidien (runUniverseCheckJob — dans runDryRunCycle) :
+- rate-limit via MAX(last_check) en DB, 1×/23h
+- pour chaque token : DexScreener /latest/dex/tokens/{mint}
+  → agréger TOUTES les paires Solana (Jupiter route sur l'ensemble)
+- transitions + force-close + logDryRun(UNIVERSE_CHANGE)
+- chaque changement de statut → ligne kymia_dryrun_decisions visible sur la tape
+
+Le cycle core itère sur SELECT FROM kymia_universe WHERE status='ACTIVE',
+SOL trié en premier (solRegimeVerdict cache). Fallback WHITELIST_CORE si table vide.
+Pour chaque token : price_symbol utilisé pour priceCache + getCandles ;
+  mint utilisé pour Jupiter (jamais remplacé par price_symbol).
+
+Limite connue du mapping price_symbol (critique en LIVE) :
+  Les indicateurs techniques (EMA, RSI, ATR) et le PnL des épisodes sont calculés
+  avec le prix Kraken de l'actif sous-jacent (BTC pour cbBTC, ETH pour WETH).
+  L'exécution réelle se ferait au prix Solana du wrapped via Jupiter (peg ≈ 1:1
+  mais non parfait, notamment en période de stress). En LIVE, le prix de fill
+  à écrire en base DOIT venir de la quote/du swap Jupiter, jamais du priceCache.
+  Cette règle est déjà documentée dans le SETUP — elle devient critique ici.
+
+L'agent universe vote REJECT (véto dur) si liquidity_usd < $250k même pour
+un token ACTIVE (protection intra-cycle si le job n'a pas encore tourné).
+ABSTAIN si pas de données (fallback WHITELIST_CORE sans DB).
+APPROVE sinon, confidence linéaire : $500k → 50, $25M → 100.
 ```
 
 ---

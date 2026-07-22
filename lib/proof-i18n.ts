@@ -123,6 +123,7 @@ export const EN: ProofDict = {
     NOT_IN_WHITELIST:            'Token not in approved list',
     EDGE_INSUFFICIENT:           'Edge below cost threshold — skipped',
     SIZE_ZERO:                   'Position size too small — skipped',
+    UNIVERSE_CHANGE:             'Universe updated — token tradability changed',
   },
 
   // Ordered: more specific matches first
