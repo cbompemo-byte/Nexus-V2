@@ -530,14 +530,27 @@ export async function runMemeScreening(
 
       if (result.eligible) {
         eligible++
-        // openPaperTrade imported from paper.ts to avoid circular deps
-        const { openPaperTrade } = await import('./paper')
-        const wasOpened = await openPaperTrade(supabase, result.mint, result.symbol, result.price_usd)
-        if (wasOpened) opened++
-        console.log(
-          `[memecoin] ELIGIBLE: ${result.symbol} (${result.mint.slice(0, 8)}…)` +
-          ` grade=${result.eligible_grade} skips=${result.checks_skipped} opened=${wasOpened}`
-        )
+
+        // ── Filtre momentum h6 (R9) ────────────────────────────────────────
+        // Ne pas entrer si le token a déjà fait > +80% dans les 6 dernières heures.
+        // Si la donnée manque (null), on ne bloque pas.
+        const h6Change = pair.priceChange?.h6 ?? null
+        if (h6Change !== null && h6Change > 80) {
+          console.log(
+            `[memecoin] H6_SKIP: ${result.symbol} (${result.mint.slice(0, 8)}…)` +
+            ` h6=+${h6Change.toFixed(1)}% > 80% — achat de sommet évité`
+          )
+        } else {
+          // openPaperTrade imported from paper.ts to avoid circular deps
+          const { openPaperTrade } = await import('./paper')
+          const wasOpened = await openPaperTrade(supabase, result.mint, result.symbol, result.price_usd)
+          if (wasOpened) opened++
+          console.log(
+            `[memecoin] ELIGIBLE: ${result.symbol} (${result.mint.slice(0, 8)}…)` +
+            ` grade=${result.eligible_grade} skips=${result.checks_skipped}` +
+            ` h6=${h6Change !== null ? '+' + h6Change.toFixed(1) + '%' : 'n/a'} opened=${wasOpened}`
+          )
+        }
       } else {
         console.log(
           `[memecoin] REJECTED: ${result.symbol} — ${result.first_failed_check}: ${result.fail_reason}`

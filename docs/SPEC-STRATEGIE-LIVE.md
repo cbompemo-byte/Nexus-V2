@@ -172,8 +172,11 @@ CHECK 7 — Détection bundling / wallets liés (anti "slow rug") :
 Signal d'entrée (momentum, pas EMA/RSI) :
   - volume 1h en croissance sur 3 fenêtres consécutives
   - prix > VWAP de la session
-  - pas d'achat si le token a déjà fait > +100% dans les 6 dernières heures
-    (on n'achète pas les sommets)
+  - pas d'achat si le token a déjà fait > +80% dans les 6 dernières heures
+    (DexScreener priceChange.h6 — si donnée absente, filtre non appliqué)
+  - pas de ré-entrée si le dernier trade fermé sur ce mint a fini en SL_HIT
+    il y a < 24h (reentry_cooldown — prouvé nécessaire : CUBEMAN 5 trades
+    en 32h, TOESCOIN 2 trades ; 8 SL_HIT sur 9 trades, -2.35 USDC)
 
 Gestion de position (stricte, automatique) — SL/TP OBLIGATOIRES,
 créés au moment même de l'achat, jamais "ajoutés plus tard" :

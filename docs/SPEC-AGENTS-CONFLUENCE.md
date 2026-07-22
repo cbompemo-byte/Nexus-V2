@@ -329,10 +329,15 @@ est intradable sans smart money — conclusion précieuse aussi.
 - beta_lag : retard des majors Solana sur les mouvements forts de SOL
 - volume_anomaly : volume 3-5× la moyenne avant mouvement de prix
 - smart_money : Partie D (R12-R14) — entre comme votant à poids 0.20+
-- reentry_cooldown : pas de nouveau trade memecoin sur un mint dont le
-  dernier trade a fini SL_HIT il y a < 24-48h (pattern observé le
-  20/07 : ré-entrée CUBEMAN 6h après le sommet du pump → -16%).
-  À valider avec plus de données avant implémentation.
+
+# Filtres d'entrée memecoin implémentés (R9 — module memecoin uniquement)
+- reentry_cooldown (2026-07-22) : refus d'ouverture si SL_HIT sur ce mint
+  il y a < 24h. Vérifié dans openPaperTrade (lib/memecoin/paper.ts) via
+  requête kymia_memecoin_paper. Validé par 9 trades obs. : CUBEMAN 5×/32h,
+  TOESCOIN 2× ; 8 SL / 9 trades, -2.35 USDC.
+- momentum_h6 (2026-07-22) : refus si priceChange.h6 > +80% (DexScreener).
+  Vérifié dans runMemeScreening (lib/memecoin/screen.ts) avant openPaperTrade.
+  Si donnée absente → non bloquant (skip du filtre).
 
 ---
 

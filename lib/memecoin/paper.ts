@@ -35,6 +35,27 @@ export async function openPaperTrade(
 ): Promise<boolean> {
   if (entryPrice <= 0) return false
 
+  // ── Reentry cooldown (R9) ─────────────────────────────────────────────────
+  // Refus si le dernier trade fermé sur ce mint a fini en SL_HIT il y a < 24h.
+  // Prouvé nécessaire par les données (CUBEMAN : 5 trades en 32h, 4 SL_HIT).
+  const since24h = new Date(Date.now() - 24 * 3600_000).toISOString()
+  const { data: recentSl } = await supabase
+    .from('kymia_memecoin_paper')
+    .select('closed_at')
+    .eq('mint', mint)
+    .eq('status', 'SL_HIT')
+    .not('closed_at', 'is', null)
+    .gt('closed_at', since24h)
+    .limit(1)
+    .maybeSingle()
+
+  if (recentSl) {
+    const hoursAgo = ((Date.now() - new Date((recentSl as any).closed_at).getTime()) / 3_600_000).toFixed(1)
+    console.log(`[paper] COOLDOWN_SKIP ${symbol} — SL_HIT ${hoursAgo}h ago, cooldown 24h`)
+    return false
+  }
+
+  // ── Déjà en position sur ce mint ─────────────────────────────────────────
   const { data: existing } = await supabase
     .from('kymia_memecoin_paper')
     .select('id')
