@@ -669,6 +669,88 @@ async function runUniverseCheckJob(supabase: SupabaseClient): Promise<void> {
   console.log('[universe] Daily check complete')
 }
 
+// ── runBenchmarkJob (R25) ─────────────────────────────────────────────────────
+// Job horaire : met à jour last_price dans kymia_benchmark pour chaque symbole ACTIVE.
+// Baseline ancrée au PREMIER price_usd historique en base — jamais écrasée.
+// Pour un nouveau symbole sans historique (ex. cbBTC → ACTIVE) : baseline = prix courant.
+// Rate-limit via MIN(last_update) : tous les symboles doivent être à jour, pas seulement le dernier.
+async function runBenchmarkJob(supabase: SupabaseClient): Promise<void> {
+  // Rate-limit : skip si le symbole le plus ancien a été mis à jour il y a < 55 min
+  const { data: oldestRow } = await supabase
+    .from('kymia_benchmark')
+    .select('last_update')
+    .order('last_update', { ascending: true })
+    .limit(1)
+    .maybeSingle()
+
+  if (oldestRow?.last_update) {
+    const elapsed = Date.now() - new Date((oldestRow as any).last_update).getTime()
+    if (elapsed < 55 * 60 * 1000) {
+      console.log(`[benchmark] Job skipped — last update ${Math.round(elapsed / 60000)}min ago`)
+      return
+    }
+  }
+
+  const { data: universeRows } = await supabase
+    .from('kymia_universe')
+    .select('symbol, price_symbol')
+    .eq('status', 'ACTIVE')
+
+  const now = new Date().toISOString()
+
+  for (const row of universeRows ?? []) {
+    const sym         = (row as any).symbol as string
+    const priceSymbol = ((row as any).price_symbol ?? sym) as string
+    const price       = priceCache.data[priceSymbol]?.price as number | undefined
+
+    if (!price) {
+      console.log(`[benchmark] ${sym} no price (priceSymbol=${priceSymbol}) — skip`)
+      continue
+    }
+
+    // Vérifie si une baseline existe déjà
+    const { data: existing } = await supabase
+      .from('kymia_benchmark')
+      .select('symbol')
+      .eq('symbol', sym)
+      .maybeSingle()
+
+    if (!existing) {
+      // Nouveau symbole : ancrer la baseline sur la première ligne historique
+      // kymia_dryrun_decisions avec price_usd (même fenêtre que les épisodes futurs).
+      // Si aucun historique (cbBTC/WETH venant de passer ACTIVE) : baseline = prix courant.
+      const { data: earliest } = await supabase
+        .from('kymia_dryrun_decisions')
+        .select('price_usd, timestamp')
+        .eq('symbol', sym)
+        .not('price_usd', 'is', null)
+        .order('timestamp', { ascending: true })
+        .limit(1)
+        .maybeSingle()
+
+      const baselinePrice = earliest ? Number((earliest as any).price_usd) : price
+      const baselineAt    = earliest ? (earliest as any).timestamp as string : now
+
+      await supabase.from('kymia_benchmark').insert({
+        symbol:         sym,
+        baseline_price: baselinePrice,
+        baseline_at:    baselineAt,
+        last_price:     price,
+        last_update:    now,
+      })
+      console.log(`[benchmark] ${sym} baseline @ $${baselinePrice} (${baselineAt})`)
+    } else {
+      // Symbole connu : update last_price uniquement — baseline jamais modifiée
+      await supabase.from('kymia_benchmark').update({
+        last_price:  price,
+        last_update: now,
+      }).eq('symbol', sym)
+    }
+  }
+
+  console.log('[benchmark] Job complete')
+}
+
 // ── runDryRunCycle ─────────────────────────────────────────────────────────────
 // Tourne en parallèle du paper sim. Stats SÉPARÉES — jamais mélangées.
 // LIVE_TRADING=false → getQuote() OK, executeSwap() interdit.
@@ -683,6 +765,11 @@ async function runDryRunCycle(supabase: SupabaseClient) {
   // ── Universe job quotidien (R21) ───────────────────────────────────────────
   await runUniverseCheckJob(supabase).catch(e =>
     console.error('[universe] Job error (non-fatal):', e.message)
+  )
+
+  // ── Benchmark job horaire (R25) ────────────────────────────────────────────
+  await runBenchmarkJob(supabase).catch(e =>
+    console.error('[benchmark] Job error (non-fatal):', e.message)
   )
 
   // ── Charger les positions ouvertes depuis la DB (cold-start safe) ──────────

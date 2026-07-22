@@ -324,6 +324,27 @@ est intradable sans smart money — conclusion précieuse aussi.
 
 ---
 
+# PARTIE I — Benchmark Agent (R25-R26)
+Long-only spot : un PnL positif seul ne prouve rien, il faut le comparer
+à ne rien faire. Sans benchmark on publie du bêta déguisé en alpha.
+
+R25 — table kymia_benchmark { symbol PK, baseline_price, baseline_at,
+last_price, last_update }. Job dans le cycle (1×/h) : si pas de ligne
+pour un symbole ACTIF → INSERT au prix courant ; sinon UPDATE last_price.
+Métriques (vue/fonction SQL, pas de stockage redondant) :
+- hold_pct = (last - baseline)/baseline
+- agent_pct = somme des pnl_pct des épisodes fermés du symbole
+- alpha = agent_pct - hold_pct
+- exposure_pct = temps en position / temps total
+- max_drawdown comparé hold vs épisodes agent
+Un alpha négatif est publié comme les autres. Alpha faible + drawdown
+inférieur = bon résultat : afficher les deux ensemble.
+
+R26 — publication /proof "Agent vs Buy & Hold" par symbole et global,
+observation et live séparés (règle R2). Mention obligatoire de la durée.
+
+---
+
 # Candidats agents v2 (spec ultérieure, NE PAS implémenter maintenant)
 - mean_reversion : achats de replis RSI en régime BULL (contre-stratégie)
 - beta_lag : retard des majors Solana sur les mouvements forts de SOL
