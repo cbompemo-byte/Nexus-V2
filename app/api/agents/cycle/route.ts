@@ -136,6 +136,8 @@ const KRAKEN_PAIRS: Record<string, string> = {
 }
 
 const KUCOIN_PAIRS: Record<string, string> = {
+  'BTC':  'BTC-USDT',
+  'ETH':  'ETH-USDT',
   'JUP':  'JUP-USDT',
   'WIF':  'WIF-USDT',
   'BONK': 'BONK-USDT',
@@ -200,11 +202,12 @@ async function fetchRealPrices(): Promise<Record<string, any>> {
     console.log(`[prices] Kraken error: ${e.message}`)
   }
 
-  // KuCoin for Solana ecosystem tokens
+  // KuCoin fallback — dynamically built from union of both pair maps to avoid omissions
+  const kuCoinCurrencies = [...new Set([...Object.keys(KRAKEN_PAIRS), ...Object.keys(KUCOIN_PAIRS)])].join(',')
   try {
     const kuRes = await fetch(
       'https://api.kucoin.com/api/v1/prices' +
-      '?currencies=SOL,JUP,WIF,BONK,JTO,PYTH,RAY,BNB',
+      `?currencies=${kuCoinCurrencies}`,
       { headers: { 'User-Agent': 'KYMIA/1.0' }, signal: AbortSignal.timeout(8000) }
     )
 
