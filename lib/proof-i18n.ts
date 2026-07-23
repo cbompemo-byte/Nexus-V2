@@ -113,6 +113,7 @@ export const EN: ProofDict = {
   decisions: {
     WOULD_EXECUTE:               'Signal confirmed — would execute',
     EPISODE_CLOSED:              'Position closed',
+    EPISODE_CLOSED_SL:           'Position closed — stop loss triggered',
     ALREADY_IN_POSITION:         'Already in position — skipped',
     BEAR_REGIME_SKIP:            'Position declined — bear market',
     NO_SIGNAL:                   'Monitoring — no valid setup',

@@ -779,13 +779,28 @@ async function runDryRunCycle(supabase: SupabaseClient) {
   // ── Charger les positions ouvertes depuis la DB (cold-start safe) ──────────
   const { data: dbPositions } = await supabase
     .from('kymia_dryrun_positions')
-    .select('symbol,entry_price,opened_at,episode_id,virtual')
-  const posMap = new Map<string, { entryPrice: number; openedAt: string; episodeId: string; virtual: boolean }>(
+    .select('symbol,entry_price,opened_at,episode_id,virtual,sl_price,tp_price,opened_regime,high_since_entry,sl_backfilled')
+  const posMap = new Map<string, {
+    entryPrice:     number
+    openedAt:       string
+    episodeId:      string
+    virtual:        boolean
+    slPrice:        number | null
+    tpPrice:        number | null
+    openedRegime:   string | null
+    highSinceEntry: number | null
+    slBackfilled:   boolean
+  }>(
     (dbPositions ?? []).map((r: any) => [r.symbol, {
-      entryPrice: Number(r.entry_price),
-      openedAt:   r.opened_at,
-      episodeId:  r.episode_id,
-      virtual:    r.virtual,
+      entryPrice:     Number(r.entry_price),
+      openedAt:       r.opened_at,
+      episodeId:      r.episode_id,
+      virtual:        r.virtual,
+      slPrice:        r.sl_price        != null ? Number(r.sl_price)        : null,
+      tpPrice:        r.tp_price        != null ? Number(r.tp_price)        : null,
+      openedRegime:   r.opened_regime   ?? null,
+      highSinceEntry: r.high_since_entry != null ? Number(r.high_since_entry) : null,
+      slBackfilled:   r.sl_backfilled   ?? false,
     }])
   )
 
@@ -906,6 +921,52 @@ async function runDryRunCycle(supabase: SupabaseClient) {
         console.error(`[regime-shadow] ${sym}:`, e.message)
       }
 
+      // ── PARTIE 1 : SL guard — tourne AVANT ABSTAIN et BEAR_REGIME_SKIP ─────
+      // Fermeture réelle sur SL uniquement. TP est SHADOW UNIQUEMENT (voir PARTIE 2).
+      // Raison TP shadow : benchmark montre que la stratégie rate les hausses (JTO +15%
+      // non capté) — un plafond automatique aggraverait ce défaut en coupant les gagnants.
+      // Positions ouvertes avant ce déploiement (sl_price=null) : pas de protection SL.
+      // Elles se fermeront sur signal SELL. Seuls les épisodes ouverts APRÈS ce
+      // déploiement ont sl_price stocké à l'ouverture.
+      {
+        const openPosSl = posMap.get(sym)
+        if (openPosSl?.slPrice != null) {
+          const { slPrice, tpPrice, entryPrice, episodeId: epId, virtual: epVirt, highSinceEntry, slBackfilled } = openPosSl
+          const pnlPct = parseFloat((((price - entryPrice) / entryPrice) * 100).toFixed(2))
+
+          // Mise à jour high_since_entry — non-bloquant
+          const prevHigh = highSinceEntry ?? entryPrice
+          const newHigh  = Math.max(prevHigh, price)
+          if (newHigh > prevHigh) {
+            supabase.from('kymia_dryrun_positions')
+              .update({ high_since_entry: newHigh }).eq('symbol', sym)
+              .then(({ error: e }) => { if (e) console.error(`[dryrun] ${sym} high_since_entry:`, e.message) })
+          }
+
+          if (price <= slPrice) {
+            const backfillTag = slBackfilled
+              ? ' [BACKFILLED_SL — late trigger, pre-fix episode]'
+              : ''
+            const reason = `stop loss hit @ $${price.toFixed(6)} (sl=$${slPrice.toFixed(6)})${backfillTag}`
+            console.log(`[dryrun] ${sym} SL_HIT @ $${price.toFixed(4)} (sl=$${slPrice.toFixed(4)}) pnl=${pnlPct}%${slBackfilled ? ' [BACKFILLED]' : ''}`)
+            await supabase.from('kymia_dryrun_positions').delete().eq('symbol', sym)
+            const curRegimeSl = regimeV.vote !== 'ABSTAIN' ? (regimeV.data?.regime as 'BULL' | 'BEAR' ?? null) : null
+            await logDryRun(supabase, {
+              symbol: sym, regime: curRegimeSl, signal: null,
+              decision: 'EPISODE_CLOSED_SL', reason,
+              price_usd: price, episode_id: epId, pnl_pct: pnlPct, episode_virtual: epVirt,
+            })
+            const { score: scoreSl } = scoreAndAppend(verdicts, sym === 'SOL' ? null : solRegimeVerdict)
+            await logVerdicts(supabase, verdicts, cycleTs, sym, 'EPISODE_CLOSED_SL', epId, scoreSl)
+            continue
+          }
+          // TP atteint → SHADOW UNIQUEMENT (aucune fermeture — voir PARTIE 2)
+          if (tpPrice != null && price >= tpPrice) {
+            console.log(`[dryrun] ${sym} TP_SHADOW: price $${price.toFixed(4)} >= tp $${tpPrice.toFixed(4)} pnl=${pnlPct}% — shadow only, no close`)
+          }
+        }
+      }
+
       if (regimeV.vote === 'ABSTAIN') {
         console.log(`[dryrun] ${sym} bougies 4h indisponibles (${candles4h?.length ?? 0}) — skip safe`)
         await logDryRun(supabase, {
@@ -925,6 +986,38 @@ async function runDryRunCycle(supabase: SupabaseClient) {
         `  EMA50=${(regimeV.data!.ema50_4h as number).toFixed(4)}` +
         `  EMA200=${(regimeV.data!.ema200_4h as number).toFixed(4)}`
       )
+
+      // ── PARTIE 2 : Exit shadow — SHADOW UNIQUEMENT, aucune fermeture ─────
+      // Mesure ce qu'auraient donné regime_flip, time_stop et TP AVANT de les
+      // implémenter. Données de comparaison pour l'auto-audit dans 2 semaines.
+      {
+        const openPosEx = posMap.get(sym)
+        if (openPosEx != null) {
+          const pnlEx    = parseFloat((((price - openPosEx.entryPrice) / openPosEx.entryPrice) * 100).toFixed(2))
+          const hoursOpen = (Date.now() - new Date(openPosEx.openedAt).getTime()) / 3_600_000
+          try {
+            await supabase.from('kymia_regime_shadow').insert({
+              cycle_ts: cycleTs,
+              symbol:   sym,
+              variant:  'EXIT_shadow',
+              regime,
+              price,
+              data: {
+                would_exit_regime_flip: openPosEx.openedRegime === 'BULL' && regime === 'BEAR',
+                would_exit_time_stop:   hoursOpen > 48,
+                would_exit_tp:          openPosEx.tpPrice != null && price >= openPosEx.tpPrice,
+                pnl_pct:                pnlEx,
+                hours_open:             parseFloat(hoursOpen.toFixed(1)),
+                opened_at:              openPosEx.openedAt,
+                opened_regime:          openPosEx.openedRegime,
+                tp_price:               openPosEx.tpPrice,
+              },
+            })
+          } catch (e: any) {
+            console.error(`[exit-shadow] ${sym}:`, e.message)
+          }
+        }
+      }
 
       // ── Agent 2 : Signal (véto doux : tourne aussi en BEAR) ──────────────
       const signalV = signalAgent(ctx)
@@ -1104,15 +1197,21 @@ async function runDryRunCycle(supabase: SupabaseClient) {
         episodeId = crypto.randomUUID()
         const openedAt = new Date().toISOString()
         await supabase.from('kymia_dryrun_positions').upsert({
-          symbol:      sym,
-          entry_price: price,
-          opened_at:   openedAt,
-          episode_id:  episodeId,
-          virtual:     isVirtual,
+          symbol:           sym,
+          entry_price:      price,
+          opened_at:        openedAt,
+          episode_id:       episodeId,
+          virtual:          isVirtual,
+          sl_price:         sigData.sl > 0 ? sigData.sl : null,
+          tp_price:         sigData.tp > 0 ? sigData.tp : null,
+          opened_regime:    regime,
+          high_since_entry: price,
+          sl_backfilled:    false,
         })
         console.log(
           `[dryrun] ${sym} EPISODE OPENED @ $${price.toFixed(4)} id=${episodeId}` +
-          (isVirtual ? ' [VIRTUAL — fonds insuffisants]' : '')
+          (isVirtual ? ' [VIRTUAL — fonds insuffisants]' : '') +
+          (sigData.sl > 0 ? ` sl=$${sigData.sl.toFixed(4)} tp=$${sigData.tp.toFixed(4)}` : '')
         )
       }
 

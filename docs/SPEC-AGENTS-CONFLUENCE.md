@@ -204,6 +204,18 @@ Règles de filtrage obligatoires pour toute comparaison de scores :
    déploiement R21 ou normaliser explicitement par active_weight.
    Référence : colonne active_weight dans kymia_agent_verdicts.data
    (agent='confluence') permet de reconstruire la période exacte.
+4. Exclure les épisodes backfillés (sl_backfilled = true) —
+   Ces épisodes ont été ouverts AVANT l'implémentation du SL guard.
+   Le sl_price a été reconstruit après coup (formule signalAgent appliquée
+   à l'entry_price historique, sans l'ATR ni le régime réels du moment).
+   La sortie EPISODE_CLOSED_SL qui en résulte est donc plus tardive et
+   plus mauvaise que ce que la stratégie aurait produit en conditions réelles.
+   Inclure ces épisodes dans le win rate ou le PnL moyen biaiserait les
+   stats à la baisse de manière non représentative.
+   → Filtre SQL : AND (sl_backfilled IS NULL OR sl_backfilled = false)
+     sur la jointure avec kymia_dryrun_positions.
+   Épisode connu : RAY ouvert le 2026-07-23, fermé en EPISODE_CLOSED_SL
+   avec reason contenant '[BACKFILLED_SL — late trigger, pre-fix episode]'.
 ```
 
 ---
