@@ -48,7 +48,7 @@ export function universeAgent(
     agent:      'universe',
     vote:       'APPROVE',
     confidence,
-    reason:     `liquidity $${(liquidityUsd / 1_000_000).toFixed(2)}M → confidence ${confidence}`,
+    reason:     `liquidity $${(liquidityUsd / 1_000_000).toFixed(2)}M -> confidence ${confidence}`,
     data: {
       liquidity_usd: liquidityUsd,
       liq_entry:     LIQ_ENTRY,

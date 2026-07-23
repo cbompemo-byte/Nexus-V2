@@ -125,6 +125,7 @@ export const EN: ProofDict = {
     EDGE_INSUFFICIENT:           'Edge below cost threshold — skipped',
     SIZE_ZERO:                   'Position size too small — skipped',
     UNIVERSE_CHANGE:             'Universe updated — token tradability changed',
+    UNIVERSE_ANOMALY:            'Universe check — liquidity data spike detected, update skipped',
   },
 
   // Ordered: more specific matches first

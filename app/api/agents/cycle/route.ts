@@ -580,11 +580,35 @@ async function runUniverseCheckJob(supabase: SupabaseClient): Promise<void> {
       )
       if (res.ok) {
         const dexData = await res.json()
-        // Aggregate ALL Solana pairs — Jupiter routes across all pools
-        const solanaPairs = ((dexData.pairs ?? []) as any[]).filter(p => p.chainId === 'solana')
+        // Aggregate Solana pairs where this token is the BASE token only.
+        // Excluding quote pairs prevents inflation from pools like TOKEN/JUP
+        // where JUP appears as pricing currency — that liquidity is not JUP's.
+        const solanaPairs = ((dexData.pairs ?? []) as any[]).filter(
+          p => p.chainId === 'solana' && p.baseToken?.address === mint
+        )
         liq = solanaPairs.reduce((sum, p) => sum + (Number(p.liquidity?.usd) || 0), 0)
         vol = solanaPairs.reduce((sum, p) => sum + (Number(p.volume?.h24) || 0), 0)
-        console.log(`[universe] ${sym} liq=$${Math.round(liq / 1000)}k vol=$${Math.round(vol / 1000)}k (${solanaPairs.length} pairs)`)
+
+        // Spike guard : DexScreener occasionally returns aberrant liquidity values
+        // (confirmed: JUP stored $541M vs real ~$2M). If the new value is 10×
+        // the previous AND > $10M, it is almost certainly a data spike — skip
+        // and log UNIVERSE_ANOMALY. The value stays unchanged until the next run.
+        const prevLiq = Number((token as any).liquidity_usd) || 0
+        if (liq > prevLiq * 10 && liq > 10_000_000) {
+          console.warn(
+            `[universe] ${sym} UNIVERSE_ANOMALY — liq spike $${Math.round(prevLiq / 1000)}k → $${Math.round(liq / 1_000_000)}M` +
+            ` (${solanaPairs.length} pairs) — skipping update, keeping previous value`
+          )
+          await logDryRun(supabase, {
+            symbol:   sym, regime: null, signal: null,
+            decision: 'UNIVERSE_ANOMALY',
+            reason:   `DexScreener liq spike: $${Math.round(prevLiq / 1000)}k -> $${Math.round(liq / 1_000_000)}M (${solanaPairs.length} pairs) — update skipped`,
+            price_usd: null,
+          })
+          continue
+        }
+
+        console.log(`[universe] ${sym} liq=$${Math.round(liq / 1000)}k vol=$${Math.round(vol / 1000)}k (${solanaPairs.length} base pairs)`)
       }
     } catch (e: any) {
       console.log(`[universe] ${sym} DexScreener error: ${e.message} — skipping`)
