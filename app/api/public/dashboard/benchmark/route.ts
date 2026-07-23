@@ -1,7 +1,8 @@
 // app/api/public/dashboard/benchmark/route.ts
 // Comparaison agent vs buy-and-hold — lecture seule, publique.
-// Appelle kymia_benchmark_stats(true) — le paramètre `true` inclut les épisodes
-// virtuels (wallet non financé), cohérent avec /positions qui les expose aussi.
+// kymia_benchmark_stats() n'a aucun paramètre : la fonction inclut les épisodes
+// virtuels par construction (filtre episode_virtual retiré lors de l'implémentation).
+// Cohérent avec /positions qui expose également les épisodes virtuels.
 
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
@@ -16,14 +17,14 @@ export async function GET() {
       { auth: { persistSession: false } }
     )
 
-    const { data, error } = await supabase.rpc('kymia_benchmark_stats', { include_virtual: true })
+    const { data, error } = await supabase.rpc('kymia_benchmark_stats')
 
     if (error) throw error
 
     return NextResponse.json({
       stats: data ?? [],
       mode:  'OBSERVATION',
-      note:  'agent_pct and hold_pct share the same baseline date — alpha is comparable',
+      note:  'agent_pct and hold_pct share the same baseline date — alpha is directly comparable',
     })
   } catch (e: any) {
     console.error('[api/public/dashboard/benchmark]', e?.message)
