@@ -345,6 +345,22 @@ observation et live séparés (règle R2). Mention obligatoire de la durée.
 
 ---
 
+# PARTIE J — Shadow Regime Evaluation (R-shadow, 2026-07-23)
+Observation pure des variantes du filtre de régime. Zéro impact décisionnel.
+
+table kymia_regime_shadow { id, cycle_ts, symbol, variant, regime, price, data }
+Variantes : V1_current (référence), V2_fast4h (EMA20/50 4h), V3_cross (croisement seul),
+V4_price (prix seul), V5_momentum (EMA20/50 1h + gap > 0.1%).
+Analyse : kymia_regime_shadow_stats() — spread = fwd_bull - fwd_bear par variante/symbole.
+V5_momentum : pente EMA50(1h) rejetée (3 points fiables sur 52 bougies = bruit).
+Remplacée par gap > 0.1% : même esprit (momentum confirmé), robuste.
+
+Volume : ~10 000 lignes/jour. Purge à planifier : conserver 60 jours (~600k lignes),
+purger au-delà via fonction SQL 1×/semaine (comme kymia_agent_verdicts).
+Spread_1h fiable à partir de N≥100 cycles (≈8h), spread_24h à partir de N≥576 (≈2 jours).
+
+---
+
 # Candidats agents v2 (spec ultérieure, NE PAS implémenter maintenant)
 - mean_reversion : achats de replis RSI en régime BULL (contre-stratégie)
 - beta_lag : retard des majors Solana sur les mouvements forts de SOL

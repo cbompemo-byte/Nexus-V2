@@ -11,7 +11,8 @@ import { signalAgent, computeSignal } from '@/lib/agents/signal'
 import { sizingAgent }   from '@/lib/agents/sizing'
 import { edgeAgent }     from '@/lib/agents/edge'
 import { riskAgent }     from '@/lib/agents/risk'
-import { universeAgent } from '@/lib/agents/universe'
+import { universeAgent }              from '@/lib/agents/universe'
+import { computeAllShadowVariants }   from '@/lib/agents/regime-shadow'
 
 // ── Module-level state ─────────────────────────────────────────────────────────
 let priceCache: { data: Record<string, any>; timestamp: number } = { data: {}, timestamp: 0 }
@@ -880,6 +881,27 @@ async function runDryRunCycle(supabase: SupabaseClient) {
       verdicts.push(regimeV)
       // Cache pour le sol_context des autres symboles (R20)
       if (sym === 'SOL') solRegimeVerdict = regimeV
+
+      // ── Shadow regime variants (R-shadow) — awaité, non-fatal ───────────
+      // Single insert : 5 variantes en 1 aller-retour Supabase par symbole.
+      // Zéro appel API supplémentaire — price/candles4h/candles1h déjà en ctx.
+      // Inclut les cycles ABSTAIN (candles manquantes → UNKNOWN dans shadow).
+      // Await requis en serverless : les promesses non-attendues sont gelées
+      // avant complétion sur Vercel → inserts perdus silencieusement.
+      try {
+        const shadowRows = computeAllShadowVariants({ price, candles4h, candles1h }).map(v => ({
+          cycle_ts: cycleTs,
+          symbol:   sym,
+          variant:  v.variant,
+          regime:   v.regime,
+          price,
+          data:     v.data,
+        }))
+        const { error: shadowErr } = await supabase.from('kymia_regime_shadow').insert(shadowRows)
+        if (shadowErr) console.error(`[regime-shadow] ${sym} insert:`, shadowErr.message)
+      } catch (e: any) {
+        console.error(`[regime-shadow] ${sym}:`, e.message)
+      }
 
       if (regimeV.vote === 'ABSTAIN') {
         console.log(`[dryrun] ${sym} bougies 4h indisponibles (${candles4h?.length ?? 0}) — skip safe`)
