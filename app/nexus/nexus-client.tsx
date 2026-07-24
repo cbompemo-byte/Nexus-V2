@@ -257,14 +257,29 @@ const CONNS=[
   ["vector","consensus"],["delta","consensus"],["radar","consensus"],
   ["leviathan","consensus"],["surge","consensus"],["atlas","consensus"],
 ];
+// ── Real server-side agents (6 agents + confluence aggregator at center) ──────
+const REAL_AGENTS=[
+  {id:"confluence",name:"CONFLUENCE",s:"CNSNS",lv:0,ag:0},
+  {id:"universe",  name:"UNIVERSE",  s:"UNIV", lv:1,ag:270},
+  {id:"regime",    name:"REGIME",    s:"REGM", lv:1,ag:30},
+  {id:"signal",    name:"SIGNAL",    s:"SGNL", lv:1,ag:150},
+  {id:"sizing",    name:"SIZING",    s:"SIZE", lv:2,ag:330},
+  {id:"edge",      name:"EDGE",      s:"EDGE", lv:2,ag:90},
+  {id:"risk",      name:"RISK",      s:"RISK", lv:2,ag:210},
+];
+const REAL_CONNS=[
+  ["confluence","universe"],["confluence","regime"],["confluence","signal"],
+  ["confluence","sizing"],["confluence","edge"],["confluence","risk"],
+  ["universe","sizing"],["regime","edge"],["signal","risk"],
+];
 
 const BOOT_STEPS=[
   "[SYSTEM]: Initializing KYMIA Swarm...",
-  "[LEVIATHAN]: Liquidity Radar Online...",
-  "[ATLAS]: Global Macro Sphere Synced...",
-  "[AEGIS]: Adaptive Risk Matrix Active...",
+  "[UNIVERSE]: Liquidity Monitor Online...",
+  "[REGIME]: Macro Regime Detector Active...",
+  "[SIGNAL]: Technical Signal Engine Synced...",
   `[JUPITER]: ${SYM_COUNT} Solana pairs loaded...`,
-  "[SWARM]: 18 Cognitive Agents Connected...",
+  "[SWARM]: 6 Cognitive Agents Connected...",
   "[KYMIA]: ◈ KYMIA OPERATIONAL.",
 ];
 
@@ -307,6 +322,8 @@ interface SignalWithDecay{id:string;sym:string;signal:'BUY'|'SELL';initialConf:n
 type TokenStatus='WATCHLISTED'|'CONFIRMING'|'ENTRY_CANDIDATE'|'EXECUTING'|'REJECTED';
 interface WatchlistedToken{sym:string;name:string;address:string;status:TokenStatus;safetyScore:number;momentumScore:number;watchlistTime:number;confirmationProgress:number;liquidity:number;volume1h:number;buyRatio:number;priceChange1h:number;price:number;dexUrl:string;flags:string[];passed:string[]}
 interface MissedOpportunity{sym:string;move:number;reason:string;timestamp:string;wasRightToSkip:boolean}
+// Real server-side verdict from /api/public/dashboard/agents
+interface AgentFeedVerdict{cycle_ts:string;symbol:string;agent:string;vote:string;confidence:number;reason:string;score_total:number|null;decision:string|null}
 interface RejectedTrade{sym:string;confidence:number;reasons:string[];timestamp:string;capitalProtected:number}
 // ── V2.1 Constants ───────────────────────────────────────────────────
 const AGENT_LAYER_MAP:Record<string,{layer:number,role:string}>={
@@ -900,7 +917,6 @@ function ConfirmCloseModal({sym,onCancel,onConfirm}:{sym:string,onCancel:()=>voi
 function Globe3D({trades,blackSwan,whaleAlert,totalPnL,tradeCount,agSt,running}:{trades:Trade[],blackSwan:boolean,whaleAlert:boolean,totalPnL:number,tradeCount:number,agSt:{[k:string]:AgentState},running:boolean}){
   const mountRef=useRef<HTMLDivElement>(null);
   const [moneyLabels,setMoneyLabels]=useState<MoneyLabel[]>([]);
-  const [observers]=useState(()=>2800+Math.floor(Math.random()*200));
   const [activeAgentLabel,setActiveAgentLabel]=useState<{agentId:string,signal:string,conf:number,col:string}|null>(null);
   const agStGlobeRef=useRef(agSt);
   useEffect(()=>{agStGlobeRef.current=agSt;},[agSt]);
@@ -1103,10 +1119,9 @@ function Globe3D({trades,blackSwan,whaleAlert,totalPnL,tradeCount,agSt,running}:
 
       {/* HUD overlay */}
       <svg width={W} height={H} style={{position:"absolute",top:0,left:0,pointerEvents:"none",overflow:"visible"}}>
-        <text x={W/2} y={18} textAnchor="middle" fontSize="6" fontFamily="monospace" fill={K.c} opacity=".65" style={{animation:"breathe 3s ease-in-out infinite"}}>{observers.toLocaleString()} ONLINE</text>
         <text x={22} y={H/2-2} textAnchor="middle" fontSize="7" fontFamily="monospace" fill={K.dim} opacity=".5" fontWeight="700">{tradeCount}</text>
         <text x={22} y={H/2+7} textAnchor="middle" fontSize="4.5" fontFamily="monospace" fill={K.dim} opacity=".38">TRADES</text>
-        <text x={W/2} y={H-14} textAnchor="middle" fontSize="6" fontFamily="monospace" fill={K.c} opacity=".6" style={{animation:"breathe 1.8s ease-in-out infinite"}}>18 AGENTS</text>
+        <text x={W/2} y={H-14} textAnchor="middle" fontSize="6" fontFamily="monospace" fill={K.c} opacity=".6" style={{animation:"breathe 1.8s ease-in-out infinite"}}>6 AGENTS</text>
         <rect x={4} y={6} width={58} height={14} rx="2" fill={session.col} fillOpacity=".1" stroke={session.col} strokeWidth=".7" strokeOpacity=".45"/>
         <text x={33} y={16.5} textAnchor="middle" fontSize="6.5" fontFamily="monospace" fill={session.col} fontWeight="700">{session.name} OPEN</text>
       </svg>
@@ -1344,10 +1359,12 @@ function ElectricArc({x1,y1,x2,y2,col,active}:{x1:number,y1:number,x2:number,y2:
   );
 }
 
-function SwarmGraph({st,debate,disabled,swarmRef,flashingAgent,highConviction,convCol,isMobile}:{st:{[k:string]:AgentState},debate:string[],disabled:Set<string>,swarmRef?:React.RefObject<HTMLDivElement|null>,flashingAgent?:string|null,highConviction?:boolean,convCol?:string,isMobile?:boolean}){
+function SwarmGraph({st,debate,disabled,swarmRef,flashingAgent,highConviction,convCol,isMobile,agents:agentsProp,conns:connsProp}:{st:{[k:string]:AgentState},debate:string[],disabled:Set<string>,swarmRef?:React.RefObject<HTMLDivElement|null>,flashingAgent?:string|null,highConviction?:boolean,convCol?:string,isMobile?:boolean,agents?:typeof AGENTS,conns?:typeof CONNS}){
+  const agents=agentsProp??AGENTS;
+  const conns=connsProp??CONNS;
   const [hov,setHov]=useState<string|null>(null);
   const nm:{[k:string]:{pos:{x:number,y:number},id:string,name:string,s:string,lv:number,ag:number}}={};
-  for(const a of AGENTS)nm[a.id]={...a,pos:gpos(a)};
+  for(const a of agents)nm[a.id]={...a,pos:gpos(a)};
   const glowCol=convCol||K.c;
   return(
     <div ref={swarmRef} style={{position:"relative",display:"inline-block",transition:"filter .5s",filter:highConviction?`drop-shadow(0 0 18px ${glowCol}60)`:undefined,maxHeight:isMobile?"38vh":undefined,overflow:isMobile?"hidden":"visible"}}>
@@ -1365,7 +1382,7 @@ function SwarmGraph({st,debate,disabled,swarmRef,flashingAgent,highConviction,co
             const offset=Math.max(8,len*0.25);
             return `M${p1.x},${p1.y} Q${mx-(dy/len)*offset},${my+(dx/len)*offset} ${p2.x},${p2.y}`;
           };
-          return CONNS.map(([a,b])=>{
+          return conns.map(([a,b])=>{
             const pa=nm[a]?.pos,pb=nm[b]?.pos;if(!pa||!pb)return null;
             const isDebating=debate.includes(a)&&debate.includes(b);
             const dis2=disabled.has(a)||disabled.has(b);
@@ -1398,9 +1415,9 @@ function SwarmGraph({st,debate,disabled,swarmRef,flashingAgent,highConviction,co
             );
           });
         })()}
-        {AGENTS.map(({id,s,lv})=>{
+        {agents.map(({id,s,lv})=>{
           const n=nm[id],ag=st[id]||{on:false,conf:null,sig:null,th:""};
-          const dis=disabled.has(id),isAegis=id==="aegis";
+          const dis=disabled.has(id),isAegis=false;
           const r=id==="consensus"?34:lv===1?28:lv===2?22:17;
           const col=dis?"#101820":ag.sig==="BUY"?K.g:ag.sig==="SELL"?K.r:id==="consensus"?K.c:K.co;
           const active=ag.on&&!dis;
@@ -1426,7 +1443,7 @@ function SwarmGraph({st,debate,disabled,swarmRef,flashingAgent,highConviction,co
       {hov&&nm[hov]&&(()=>{
         const ag=st[hov]||{on:false,conf:null,sig:null,th:""};
         const col=ag.sig==="BUY"?K.g:ag.sig==="SELL"?K.r:K.c;
-        const info=AGENTS.find(a=>a.id===hov);
+        const info=agents.find(a=>a.id===hov);
         const seed=hov.split("").reduce((a,c)=>a+c.charCodeAt(0),0);
         return(
           <div style={{position:"absolute",top:8,left:8,background:"#030810",border:"1px solid "+col+"50",borderRadius:3,padding:"10px 14px",fontSize:9,color:K.hi,zIndex:20,minWidth:170,pointerEvents:"none",boxShadow:"0 4px 20px "+col+"20"}}>
@@ -2345,6 +2362,14 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   const entropyRef=useRef(entropy);
   useEffect(()=>{entropyRef.current=entropy;},[entropy]);
 
+  // ── Real agent feed from server (public route, 60s refresh) ─────────
+  const [agentFeed,setAgentFeed]=useState<{by_symbol:Record<string,AgentFeedVerdict[]>}|null>(null);
+  const lastLoggedCycleRef=useRef<string>("");
+  useEffect(()=>{
+    const load=async()=>{try{const r=await fetch('/api/public/dashboard/agents');if(r.ok)setAgentFeed(await r.json())}catch{}};
+    load();const iv=setInterval(load,60_000);return()=>clearInterval(iv);
+  },[]);
+
   // ── V2.1 State ───────────────────────────────────────────────────────
   const [regimeState,setRegimeState]=useState<RegimeState|null>(null);
   const regimeRef=useRef<RegimeState|null>(null);
@@ -2388,23 +2413,23 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[running]);
 
-  // ── Market pressure gauge ─────────────────────────────────────────────
+  // ── Market pressure gauge — real regime verdicts from server ──────────
   const [pressureScore,setPressureScore]=useState(50);
   const [pressureDir,setPressureDir]=useState<'BULL'|'BEAR'|'NEUTRAL'>('NEUTRAL');
   useEffect(()=>{
-    if(!running)return;
-    const iv=setInterval(()=>{
-      const sigs=Object.values(agSt);
-      if(!sigs.length)return;
-      const bulls=sigs.filter((s:any)=>s?.sig==='BUY').length;
-      const bears=sigs.filter((s:any)=>s?.sig==='SELL').length;
-      const score=Math.round(50+(bulls-bears)/sigs.length*50);
-      const clamped=Math.max(0,Math.min(100,score));
-      setPressureScore(clamped);
-      setPressureDir(clamped>60?'BULL':clamped<40?'BEAR':'NEUTRAL');
-    },3000);
-    return()=>clearInterval(iv);
-  },[running,agSt]);
+    if(!agentFeed)return;
+    const regimeVerdicts=Object.values(agentFeed.by_symbol).flat().filter(v=>v.agent==='regime');
+    // Keep latest verdict per symbol
+    const bySymbol:Record<string,AgentFeedVerdict>={};
+    regimeVerdicts.forEach(v=>{const ex=bySymbol[v.symbol];if(!ex||v.cycle_ts>ex.cycle_ts)bySymbol[v.symbol]=v;});
+    const all=Object.values(bySymbol);
+    if(!all.length)return;
+    const bulls=all.filter(v=>v.vote==='APPROVE').length;
+    const score=Math.round(bulls/all.length*100);
+    const clamped=Math.max(0,Math.min(100,score));
+    setPressureScore(clamped);
+    setPressureDir(clamped>60?'BULL':clamped<40?'BEAR':'NEUTRAL');
+  },[agentFeed]);
 
   // Keep completedMissions ref in sync for use inside effects
   useEffect(()=>{completedMissionsRef.current=completedMissions;},[completedMissions]);
@@ -2434,6 +2459,20 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   },[agSt]);
 
   const log=useCallback((ag:string,msg:string,col=K.hi)=>setLogs(l=>[...l.slice(-150),{t:ts(),ag,msg,col}]),[]);
+
+  // ── Inject real agent verdicts into reasoning log ─────────────────────
+  useEffect(()=>{
+    if(!agentFeed)return;
+    const all:AgentFeedVerdict[]=Object.values(agentFeed.by_symbol).flat();
+    const fresh=all.filter(v=>v.cycle_ts>lastLoggedCycleRef.current).sort((a,b)=>a.cycle_ts>b.cycle_ts?1:-1);
+    if(!fresh.length)return;
+    lastLoggedCycleRef.current=all.reduce((mx,v)=>v.cycle_ts>mx?v.cycle_ts:mx,"");
+    fresh.slice(0,8).forEach(v=>{
+      const col=v.vote==='APPROVE'?K.g:v.vote==='REJECT'?K.r:K.tx;
+      log(v.agent.toUpperCase().slice(0,5),`[${v.symbol}] ${v.reason}`.slice(0,90),col);
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[agentFeed]);
 
   // ── Supabase auth ─────────────────────────────────────────────────────
   const loadUserSession=async(userId:string)=>{
@@ -3353,6 +3392,24 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
   },[dnaLoading,trades,port]);
 
 
+  // ── Derive realAgSt from agentFeed (6 real agents + confluence center) ─
+  const realAgSt=(()=>{
+    const empty=Object.fromEntries(REAL_AGENTS.map(a=>[a.id,{on:false,conf:null as number|null,sig:null as string|null,th:""}]));
+    if(!agentFeed)return empty;
+    const allV:AgentFeedVerdict[]=Object.values(agentFeed.by_symbol).flat();
+    const latestByAgent:Record<string,AgentFeedVerdict>={};
+    allV.forEach(v=>{const ex=latestByAgent[v.agent];if(!ex||v.cycle_ts>ex.cycle_ts)latestByAgent[v.agent]=v;});
+    const latestV=allV.sort((a,b)=>b.cycle_ts>a.cycle_ts?1:-1)[0];
+    const confScore=latestV?.score_total!=null?Math.round(latestV.score_total):null;
+    return Object.fromEntries(REAL_AGENTS.map(a=>{
+      if(a.id==='confluence')return [a.id,{on:confScore!=null,conf:confScore,sig:confScore!=null?(confScore>=60?'BUY':confScore>=40?'HOLD':'SELL'):null,th:confScore!=null?`Score agrégé : ${confScore}/100`:""}];
+      const v=latestByAgent[a.id];
+      if(!v)return [a.id,{on:false,conf:null,sig:null,th:""}];
+      const sig=v.vote==='APPROVE'?'BUY':v.vote==='REJECT'?'SELL':'HOLD';
+      return [a.id,{on:true,conf:v.confidence,sig,th:v.reason}];
+    }));
+  })();
+
   const totalPnL=port.equity-CAP,pct=(totalPnL/CAP)*100;
   const dd=((port.peak-port.equity)/port.peak)*100;
   const cl=trades.filter(t=>t.pnl!==0);
@@ -3543,25 +3600,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
             <div style={{width:6,height:6,borderRadius:"50%",background:running?K.g:K.r,boxShadow:"0 0 8px "+(running?K.g:K.r),animation:"pu 1.5s infinite"}}/>
             <span style={{fontSize:9,color:running?K.g:K.r}}>{running?"LIVE · AUTO":"STANDBY"}</span>
           </div>
-          <div style={{display:"flex",alignItems:"center",gap:5,padding:"3px 9px",background:K.g+"12",border:"1px solid "+K.g+"40",borderRadius:2}}>
-            <div style={{width:5,height:5,borderRadius:"50%",background:K.g,boxShadow:"0 0 6px "+K.g,animation:"pu 1.5s infinite"}}/>
-            <span style={{fontSize:11,fontWeight:700,color:K.g,letterSpacing:".04em"}}>{liveUsers.toLocaleString()}</span>
-            <span style={{fontSize:8,color:K.g,opacity:.7,letterSpacing:".08em"}}>ONLINE</span>
-          </div>
-          <div style={{display:"flex",alignItems:"center",gap:5,padding:"2px 7px",background:entropyCol+"15",border:"1px solid "+entropyCol+"40",borderRadius:2}}>
-            <span style={{fontSize:8,color:K.dim}}>ENTROPY</span>
-            <span style={{fontSize:10,color:entropyCol,fontWeight:700}}>{Math.round(entropy)}</span>
-          </div>
-          <div style={{display:'flex',gap:6,alignItems:'center',padding:'3px 8px',background:'rgba(0,242,254,0.06)',border:'1px solid rgba(0,242,254,0.12)',borderRadius:4,fontSize:8,fontFamily:'monospace',color:K.dim}}>
-            <span>CONF</span><span style={{color:'#00FF88',fontWeight:700}}>78%+</span>
-            <span>·</span>
-            <span>4H</span><span style={{color:'#00FF88',fontWeight:700}}>ON</span>
-            <span>·</span>
-            <span>CYCLE</span><span style={{color:K.c,fontWeight:700}}>45s</span>
-          </div>
-          {(()=>{const nextM=MISSIONS.find(m=>!completedMissions.includes(m.id));if(!nextM)return null;const mp=Math.min(100,((port.equity-CAP)/CAP)/nextM.target*100);return(<div style={{display:"flex",alignItems:"center",gap:5,padding:"2px 8px",background:nextM.color+"10",border:`1px solid ${nextM.color}25`,borderRadius:2}}><span style={{fontSize:9,color:nextM.color}}>{nextM.icon}</span><div style={{width:52,height:3,background:"#06090F",borderRadius:2}}><div style={{height:"100%",borderRadius:2,background:nextM.color,width:mp+"%",transition:"width .5s",boxShadow:`0 0 6px ${nextM.color}`}}/></div><span style={{fontSize:8,color:"#2A5070"}}>{mp.toFixed(0)}%</span></div>);})()}
           {running&&<div style={{display:"flex",alignItems:"center",gap:4,padding:"2px 7px",background:K.g+"10",border:"1px solid "+K.g+"25",borderRadius:2}}><div style={{width:5,height:5,borderRadius:"50%",background:K.g,animation:"pu 1s infinite"}}/><span style={{fontSize:7,color:K.g,letterSpacing:".1em"}}>24/7</span></div>}
-          {aiData&&<span style={{padding:"2px 7px",background:rc+"20",color:rc,border:"1px solid "+rc+"40",fontSize:9,borderRadius:2}}>{String(aiData.regime||"")}</span>}
           {/* Part 2: Regime badge */}
           {regimeState&&(
             <div style={{display:'flex',alignItems:'center',gap:6,padding:'4px 10px',background:`${REGIME_CONFIG[regimeState.regime].col}10`,border:`1px solid ${REGIME_CONFIG[regimeState.regime].col}30`,borderRadius:4}}>
@@ -3612,7 +3651,6 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
             {!isMobile&&<button className="btn" onClick={()=>setModal("share")} style={{background:"#0A1428",color:K.gold,border:"1px solid "+K.gold+"50"}}>◈ SHARE</button>}
             {!isMobile&&<button className="btn" onClick={()=>setFocusMode(f=>!f)} style={{background:focusMode?K.c+"20":"#040810",color:focusMode?K.c:K.dim,border:"1px solid "+(focusMode?K.c+"50":K.brd)}}>{focusMode?"◈ EXIT FOCUS":"◈ FOCUS"}</button>}
             {!isMobile&&<button className="btn" onClick={runAI} disabled={analyzing} style={{background:analyzing?"#06111E":"#001428",color:analyzing?"#1A4A6A":K.c,border:"1px solid "+(analyzing?"#0A2040":K.c+"60")}}>{analyzing?"⟳":"⚡ DEBATE"}</button>}
-            {!isMobile&&<button className="btn" onClick={runDNA} disabled={dnaLoading} style={{background:"#100020",color:K.pu,border:"1px solid "+K.pu+"50"}}>{dnaLoading?"⟳":"🧬 DNA"}</button>}
             {!isMobile&&<button className="btn" onClick={()=>setModal("beat")} style={{background:"#001820",color:K.gold,border:"1px solid "+K.gold+"50"}}>🎮 BEAT AI</button>}
             {!isMobile&&<button className="btn" onClick={()=>setShowKill(s=>!s)} style={{background:"#000F28",color:K.co,border:"1px solid "+K.co+"50"}}>⚙ AGENTS</button>}
             <button className="btn" onClick={handleStart} style={{background:running?"#180610":"#001808",color:running?K.r:K.g,border:"1px solid "+(running?K.r+"40":K.g+"40")}}>{running?"⏹ HALT":"▶ START"}</button>
@@ -3638,7 +3676,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
       )}
 
       <div style={{background:"#030710",borderBottom:"1px solid #060B14",padding:"0 16px",display:"flex",gap:2}}>
-        {[["terminal","◈ COMMAND"],["alpha","⚡ ALPHA RADAR"],["hunter","🔍 HUNTER"],["rejected","⛔ REJECTED"],["trades","◎ HISTORY"],["scanner","⊕ SCANNER"],["crisis","⊞ CRISIS REPLAY"],["dna","🧬 SWARM DNA"],["onchain","⛓ ON-CHAIN"]].map(([v,l])=>(
+        {[["terminal","◈ COMMAND"],["alpha","⚡ ALPHA RADAR"],["hunter","🔍 HUNTER"],["rejected","⛔ REJECTED"],["trades","◎ HISTORY"],["scanner","⊕ SCANNER"],["onchain","⛓ ON-CHAIN"]].map(([v,l])=>(
           <button key={v} className={`tab${tab===v?" on":""}`} onClick={()=>setTab(v)}>{l}</button>
         ))}
         <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:12,fontSize:8,color:"#0A1D2A"}}>
@@ -3660,8 +3698,14 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
         const sellVotes=activeAgents.filter(a=>agSt[a.id].sig==="SELL").length;
         const totalVotes=activeAgents.length||1;
         const swarmBP=Math.round(buyVotes/totalVotes*100);const swarmSP=Math.round(sellVotes/totalVotes*100);
-        const highConviction=swarmBP>72||swarmSP>72;
-        const convDom=swarmBP>swarmSP?"BUY":"SELL";
+        // Real agent conviction for swarm graph glow
+        const realActive=REAL_AGENTS.filter(a=>a.id!=="confluence"&&realAgSt[a.id]?.on&&realAgSt[a.id]?.sig);
+        const realBuy=realActive.filter(a=>realAgSt[a.id].sig==="BUY").length;
+        const realSell=realActive.filter(a=>realAgSt[a.id].sig==="SELL").length;
+        const realTotal=realActive.length||1;
+        const realBP=Math.round(realBuy/realTotal*100);const realSP=Math.round(realSell/realTotal*100);
+        const highConviction=realBP>72||realSP>72;
+        const convDom=realBP>realSP?"BUY":"SELL";
         const convCol=convDom==="BUY"?K.g:K.r;
         return(
         <div style={{flex:1,display:"grid",gridTemplateColumns:isMobile?"1fr":focusMode?"0px 1fr 0px":"220px 1fr 260px",gridTemplateRows:isMobile?"auto auto auto":"1fr 240px",gap:isMobile?8:focusMode?0:6,padding:isMobile?4:8,overflowY:isMobile?"auto":"hidden",height:isMobile?"auto":undefined,minHeight:0,transition:"grid-template-columns .4s ease"}}>
@@ -3715,8 +3759,8 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
               </div>
             </div>
             <div className="panel" style={{padding:9}}>
-              <div style={{fontSize:8,color:K.dim,marginBottom:6,letterSpacing:".12em"}}>◉ ENTROPY & RISK</div>
-              {([{l:"ENTROPY",v:Math.round(entropy),col:entropyCol,pct:entropy},{l:"CASH",v:f2(port.cash/port.equity*100,1)+"%",col:K.co,pct:port.cash/port.equity*100},{l:"DRAWDOWN",v:"-"+f2(dd,1)+"%",col:dd>5?K.r:K.gold,pct:dd}] as Array<{l:string,v:number|string,col:string,pct:number}>).map((r,i)=>(
+              <div style={{fontSize:8,color:K.dim,marginBottom:6,letterSpacing:".12em"}}>◉ RISK</div>
+              {([{l:"CASH",v:f2(port.cash/port.equity*100,1)+"%",col:K.co,pct:port.cash/port.equity*100},{l:"DRAWDOWN",v:"-"+f2(dd,1)+"%",col:dd>5?K.r:K.gold,pct:dd}] as Array<{l:string,v:number|string,col:string,pct:number}>).map((r,i)=>(
                 <div key={i} style={{marginBottom:5}}>
                   <div style={{display:"flex",justifyContent:"space-between",marginBottom:2,fontSize:8}}>
                     <span style={{color:K.tx}}>{r.l}</span><span style={{color:r.col}}>{r.v}</span>
@@ -3768,14 +3812,15 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
                 </>);
               })()}
             </div>
-            {/* Agent Activity Monitor */}
+            {/* Agent Activity Monitor — 6 real server agents */}
             <div className="panel" style={{padding:"6px 9px"}}>
               <div style={{fontSize:7,color:K.dim,letterSpacing:".12em",marginBottom:5}}>◉ AGENT ACTIVITY</div>
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"2px 6px"}}>
-                {AGENTS.filter(a=>a.id!=="consensus").slice(0,12).map(a=>{
-                  const last=agentLastActiveRef.current[a.id]||0;
-                  const secAgo=last?(Date.now()-last)/1000:999;
-                  const status=secAgo<20?"ACTIVE":secAgo<60?"SCAN":"IDLE";
+                {REAL_AGENTS.filter(a=>a.id!=="confluence").map(a=>{
+                  const verdicts=agentFeed?Object.values(agentFeed.by_symbol).flat().filter(v=>v.agent===a.id):[];
+                  const latestV=verdicts.sort((x,y)=>y.cycle_ts>x.cycle_ts?1:-1)[0];
+                  const minAgo=latestV?(Date.now()-new Date(latestV.cycle_ts).getTime())/60000:999;
+                  const status=minAgo<10?"ACTIVE":minAgo<60?"SCAN":"IDLE";
                   const col=status==="ACTIVE"?K.g:status==="SCAN"?K.gold:K.dim;
                   return(<div key={a.id} style={{display:"flex",justifyContent:"space-between",fontSize:7,padding:"1px 0"}}>
                     <span style={{color:K.tx}}>{a.s}</span>
@@ -3783,7 +3828,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
                   </div>);
                 })}
               </div>
-              <div style={{marginTop:5,fontSize:7,color:"#2A5070"}}>⚡ {signalCount} signals analyzed</div>
+              <div style={{marginTop:5,fontSize:7,color:"#2A5070"}}>⚡ {agentFeed?Object.values(agentFeed.by_symbol).flat().length:0} verdicts loaded</div>
             </div>
           </div>
 
@@ -3805,22 +3850,24 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
               <div style={{position:"absolute",inset:0,background:"repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,242,254,0.012) 3px,rgba(0,242,254,0.012) 4px)",pointerEvents:"none"}}/>
               {/* Header */}
               <div style={{padding:"5px 12px 4px",borderBottom:"1px solid #060A14",display:"flex",justifyContent:"space-between",alignItems:"center",position:"relative",zIndex:1}}>
-                <div style={{fontSize:8,color:K.dim,letterSpacing:".12em"}}>◈ NEURAL SWARM — 18 COGNITIVE AGENTS</div>
+                <div style={{fontSize:8,color:K.dim,letterSpacing:".12em"}}>◈ NEURAL SWARM — 6 COGNITIVE AGENTS</div>
                 <div style={{display:"flex",gap:8,fontSize:8}}>
-                  {([["BUY",K.g],["SELL",K.r],["ACTIVE",K.c]] as Array<[string,string]>).map(([l,c])=><span key={l} style={{color:c}}>● {l}</span>)}
+                  {([["APPROVE",K.g],["REJECT",K.r],["ACTIVE",K.c]] as Array<[string,string]>).map(([l,c])=><span key={l} style={{color:c}}>● {l}</span>)}
                 </div>
               </div>
               <div style={{flex:1,display:"flex",flexDirection:"column",justifyContent:"center",alignItems:"center",padding:4,position:"relative",zIndex:1,boxShadow:"inset 0 0 60px rgba(0,0,0,0.55)",overflow:isMobile?"auto":"visible"}}>
                 {!running&&<ActivateScreen onActivate={handleStart} swarmConfig={swarmConfig} user={user}/>}
-                <SwarmGraph st={agSt} debate={debate} disabled={disabled} swarmRef={swarmRef} flashingAgent={flashingAgent} highConviction={highConviction} convCol={convCol} isMobile={isMobile}/>
-                {/* Part 13: Layer legend */}
-                <div style={{display:'flex',gap:12,justifyContent:'center',marginTop:6}}>
-                  {[{l:'L1 CORE',col:LAYER_RING_COLORS[1]},{l:'L2 TOP50',col:LAYER_RING_COLORS[2]},{l:'L3 HUNTER',col:LAYER_RING_COLORS[3]}].map((ly,i)=>(
-                    <div key={i} style={{display:'flex',alignItems:'center',gap:4}}>
-                      <div style={{width:7,height:7,borderRadius:'50%',background:ly.col,boxShadow:`0 0 5px ${ly.col}`}}/>
-                      <span style={{fontSize:7,color:ly.col,fontFamily:'monospace',letterSpacing:'.08em'}}>{ly.l}</span>
-                    </div>
-                  ))}
+                <SwarmGraph st={realAgSt} debate={[]} disabled={new Set<string>()} swarmRef={swarmRef} flashingAgent={null} highConviction={highConviction} convCol={convCol} isMobile={isMobile} agents={REAL_AGENTS} conns={REAL_CONNS}/>
+                {/* Agent legend */}
+                <div style={{display:'flex',gap:10,justifyContent:'center',marginTop:6,flexWrap:'wrap'}}>
+                  {REAL_AGENTS.filter(a=>a.id!=='confluence').map(a=>{
+                    const v=realAgSt[a.id];
+                    const c=v?.sig==='BUY'?K.g:v?.sig==='SELL'?K.r:K.dim;
+                    return(<div key={a.id} style={{display:'flex',alignItems:'center',gap:3}}>
+                      <div style={{width:5,height:5,borderRadius:'50%',background:c,boxShadow:`0 0 4px ${c}`}}/>
+                      <span style={{fontSize:6,color:c,fontFamily:'monospace'}}>{a.s}</span>
+                    </div>);
+                  })}
                 </div>
                 {/* Focus mode: Globe overlay in top-left */}
                 {focusMode&&<div style={{position:"absolute",top:8,left:8,zIndex:10,opacity:.85,borderRadius:4,overflow:"hidden",border:"1px solid "+K.c+"30"}}><Globe3D trades={trades} blackSwan={blackSwan} whaleAlert={whaleAlert} totalPnL={totalPnL} tradeCount={trades.length} agSt={agSt} running={running}/></div>}
@@ -3833,24 +3880,24 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
             <div className="panel" style={{overflow:"hidden",display:"flex",flexDirection:"column",maxHeight:190}}>
               <div style={{fontSize:11,color:K.dim,padding:"6px 10px 4px",borderBottom:"1px solid #060A14",letterSpacing:".12em"}}>◉ SIGNAL STREAM</div>
               <div style={{overflow:"auto",flex:1}}>
-                {AGENTS.filter(a=>agSt[a.id]?.on&&!disabled.has(a.id)).slice(0,8).map(({id,s})=>{
-                  const ag=agSt[id]||{};
+                {REAL_AGENTS.filter(a=>a.id!=="confluence").map(({id,s})=>{
+                  const ag=realAgSt[id]||{on:false,conf:null,sig:null,th:""};
                   const col=ag.sig==="BUY"?K.g:ag.sig==="SELL"?K.r:K.tx;
                   const conf=ag.conf||0;
                   const circ=2*Math.PI*10;
                   return(
-                    <div key={id} className="fi" style={{padding:"5px 10px",borderBottom:"1px solid #040910",display:"flex",gap:7,alignItems:"center",borderLeft:"2px solid "+col+"40"}}>
+                    <div key={id} className="fi" style={{padding:"5px 10px",borderBottom:"1px solid #040910",display:"flex",gap:7,alignItems:"center",borderLeft:"2px solid "+col+"40",opacity:ag.on?1:0.4}}>
                       <svg width="24" height="24" style={{flexShrink:0}}>
                         <circle cx="12" cy="12" r="10" fill="none" stroke={K.brd} strokeWidth="2"/>
                         <circle cx="12" cy="12" r="10" fill="none" stroke={col} strokeWidth="2" strokeDasharray={`${conf/100*circ} ${circ}`} strokeLinecap="round" transform="rotate(-90 12 12)" opacity=".8"/>
-                        <text x="12" y="15" textAnchor="middle" fontSize="8" fontFamily="monospace" fill={col}>{conf}</text>
+                        <text x="12" y="15" textAnchor="middle" fontSize="8" fontFamily="monospace" fill={col}>{conf||"—"}</text>
                       </svg>
                       <div style={{flex:1,minWidth:0}}>
                         <div style={{display:"flex",gap:5,alignItems:"center",marginBottom:1}}>
                           <span style={{padding:"1px 5px",background:col+"15",color:col,border:"1px solid "+col+"30",fontSize:11,borderRadius:1}}>{ag.sig==="BUY"?"▲":ag.sig==="SELL"?"▼":"◆"} {s}</span>
-                          {ag.real&&<span style={{padding:"1px 4px",background:K.g+"20",color:K.g,border:"1px solid "+K.g+"40",fontSize:6,borderRadius:1,letterSpacing:".06em"}}>LIVE</span>}
+                          {ag.on&&<span style={{padding:"1px 4px",background:K.g+"20",color:K.g,border:"1px solid "+K.g+"40",fontSize:6,borderRadius:1,letterSpacing:".06em"}}>LIVE</span>}
                         </div>
-                        <div style={{fontSize:11,color:K.tx,lineHeight:1.3,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:150}}>{ag.th}</div>
+                        <div style={{fontSize:11,color:K.tx,lineHeight:1.3,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:150}}>{ag.th||"Waiting for data…"}</div>
                       </div>
                     </div>
                   );
@@ -3887,13 +3934,14 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
                   </div>
                 );
               })()}
-              {running&&(()=>{
+              {(()=>{
                 const pCol=pressureDir==='BULL'?K.g:pressureDir==='BEAR'?K.r:K.dim;
+                const regimeTotal=agentFeed?Object.values(agentFeed.by_symbol).flat().filter(v=>v.agent==='regime').length:0;
                 return(
                   <div style={{marginBottom:10,padding:'8px 12px',background:'rgba(4,6,13,0.9)',border:'1px solid #0A1D33',borderRadius:6}}>
                     <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
                       <span style={{fontSize:8,color:K.dim,fontFamily:'monospace',letterSpacing:'.12em'}}>◈ MARKET PRESSURE</span>
-                      <span style={{fontSize:9,color:pCol,fontFamily:'monospace',fontWeight:700}}>{pressureDir} {pressureScore}</span>
+                      <span style={{fontSize:9,color:pCol,fontFamily:'monospace',fontWeight:700}}>{pressureDir} {pressureScore}%{regimeTotal?` · ${regimeTotal}s`:""}</span>
                     </div>
                     <div style={{height:4,background:'rgba(255,255,255,0.05)',borderRadius:2,overflow:'hidden'}}>
                       <div style={{height:'100%',width:`${pressureScore}%`,background:`linear-gradient(90deg,${K.r},${K.dim} 40%,${K.g})`,borderRadius:2,transition:'width 0.8s ease'}}/>
@@ -4028,9 +4076,8 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
                 return([
                   {l:"Execution",v:circuit?"LOCKED":traderIsPaused?"PAUSED":"ACTIVE",c:circuit?K.r:traderIsPaused?K.gold:K.g},
                   {l:"SL/TP",v:"Tiered Trail",c:K.tx},
-                  {l:"Agents",v:(AGENTS.length-disabled.size)+"/18",c:disabled.size>0?K.gold:K.g},
+                  {l:"Agents",v:"6/6",c:K.g},
                   {l:"Positions",v:Object.keys(port.pos).length+"/"+getMaxPositions(port.equity||port.cash),c:K.tx},
-                  {l:"Entropy",v:Math.round(entropy)+"/100",c:entropyCol},
                   {l:"PEAK HOURS",v:peakStr,c:peakCol},
                   {l:"MACRO TREND",v:"BTC "+macroStr,c:macroCol},
                   {l:"LOSS STREAK",v:lossStreakStr,c:lossStreakCol},
@@ -4051,17 +4098,6 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
             <div style={{flexShrink:0}}>
               <DecisionZone agSt={agSt} running={running} onExecute={()=>{}}/>
             </div>
-            {/* Compact Claude AI bar (if available) */}
-            {aiData&&(
-              <div className="panel" style={{flexShrink:0,padding:"5px 12px",borderColor:rc+"30",background:"linear-gradient(135deg,"+K.pan+" 0%,"+rc+"08 100%)",display:"flex",alignItems:"center",gap:10}}>
-                <span style={{fontSize:8,color:rc,letterSpacing:".1em",flexShrink:0}}>◈ CLAUDE</span>
-                {(aiData.consensus as {signal?:string,symbol?:string,confidence?:number})?.signal&&(
-                  <span style={{padding:"1px 7px",background:((aiData.consensus as {signal?:string}).signal==="BUY"?K.g:K.r)+"20",color:(aiData.consensus as {signal?:string}).signal==="BUY"?K.g:K.r,border:"1px solid "+((aiData.consensus as {signal?:string}).signal==="BUY"?K.g:K.r)+"40",fontSize:9,borderRadius:1,flexShrink:0}}>{String((aiData.consensus as {signal?:string}).signal||"")} {String((aiData.consensus as {symbol?:string}).symbol||"")} {String((aiData.consensus as {confidence?:number}).confidence||0)}%</span>
-                )}
-                <span style={{fontSize:8,color:K.tx,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{String(aiData.marketSummary||"").slice(0,120)}</span>
-                <button className="btn" onClick={()=>setModal("debate")} style={{background:K.c+"10",color:K.c,border:"1px solid "+K.c+"30",fontSize:7,padding:"2px 8px",flexShrink:0}}>THEATER</button>
-              </div>
-            )}
             {/* Log — fills remaining space, always visible */}
             <div className="panel" style={{flex:isMobile?"none":1,overflow:"hidden",display:"flex",flexDirection:"column",minHeight:0,maxHeight:isMobile?"28vh":undefined}}>
               <div style={{padding:"3px 10px",borderBottom:"1px solid #060A14",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
@@ -4200,78 +4236,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
         </div>
       )}
 
-      {tab==="crisis"&&(
-        <div style={{flex:1,padding:10,display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,overflow:"auto"}}>
-          {[
-            {e:"FTX COLLAPSE",d:"Nov 2022",drop:"-32%",dur:"48h",sol:"-61%",out:"SURVIVED",conf:88,col:K.g,desc:"$32B empire collapses overnight. Whale tracker detected outflows 4h before impact."},
-            {e:"LUNA DEPEG",d:"May 2022",drop:"-98%",dur:"72h",sol:"-44%",out:"CIRCUIT BREAK",conf:71,col:K.gold,desc:"$40B wiped in 72h. Circuit breaker triggered at -3.2% portfolio exposure."},
-            {e:"BTC FLASH CRASH",d:"May 2021",drop:"-30%",dur:"4h",sol:"-52%",out:"SURVIVED",conf:82,col:K.g,desc:"China mining ban triggers cascade. Shadow Sim flagged 68% crash probability."},
-            {e:"3AC COLLAPSE",d:"Jun 2022",drop:"-41%",dur:"96h",sol:"-38%",out:"SURVIVED",conf:79,col:K.g,desc:"$10B fund liquidation. Whale tracker reduced exposure 40min before cascade."},
-            {e:"BINANCE PANIC",d:"Nov 2022",drop:"-18%",dur:"12h",sol:"-22%",out:"CLEAN EXIT",conf:91,col:K.c,desc:"Anti-manipulation engine detected coordinated sell wall. Clean exit secured."},
-            {e:"BLACK SWAN X",d:"SIMULATED",drop:"-55%",dur:"6h",sol:"-71%",out:"PARTIAL LOSS",conf:54,col:K.r,desc:"Hypothetical: exchange hack + ban + whale dump simultaneously. 54% survival."},
-          ].map((s,i)=>(
-            <div key={i} className="panel" style={{padding:14,borderColor:s.col+"30",cursor:"pointer",transition:"border-color .2s"}} onMouseEnter={e=>(e.currentTarget as HTMLDivElement).style.borderColor=s.col} onMouseLeave={e=>(e.currentTarget as HTMLDivElement).style.borderColor=s.col+"30"}>
-              <div style={{fontSize:11,color:s.col,letterSpacing:".1em",marginBottom:2,fontWeight:900}}>{s.e}</div>
-              <div style={{fontSize:9,color:K.dim,marginBottom:6}}>{s.d}</div>
-              <p style={{fontSize:9,color:K.tx,lineHeight:1.5,marginBottom:9,fontStyle:"italic"}}>{s.desc}</p>
-              {([{l:"Drop",v:s.drop,c:K.r},{l:"Duration",v:s.dur,c:K.tx},{l:"SOL",v:s.sol,c:K.r},{l:"KYMIA",v:s.out,c:s.col}] as Array<{l:string,v:string,c:string}>).map((r,j)=>(
-                <div key={j} style={{display:"flex",justifyContent:"space-between",padding:"2px 0",borderBottom:"1px solid #040910",fontSize:10}}>
-                  <span style={{color:K.dim}}>{r.l}</span><span style={{color:r.c,fontWeight:600}}>{r.v}</span>
-                </div>
-              ))}
-              <div style={{marginTop:8}}>
-                <div style={{display:"flex",justifyContent:"space-between",fontSize:9,marginBottom:2}}>
-                  <span style={{color:K.tx}}>Survival</span><span style={{color:s.col}}>{s.conf}%</span>
-                </div>
-                <div style={{height:3,background:"#040910",borderRadius:2}}>
-                  <div style={{height:"100%",borderRadius:2,background:s.col,width:s.conf+"%"}}/>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
 
-      {tab==="dna"&&(
-        <div style={{flex:1,padding:10,display:"flex",alignItems:"center",justifyContent:"center"}}>
-          <div style={{maxWidth:480,width:"100%"}}>
-            {!dnaData?(
-              <div style={{textAlign:"center",padding:40}}>
-                <div style={{fontSize:32,marginBottom:16}}>🧬</div>
-                <div style={{color:K.hi,marginBottom:8,fontSize:14,letterSpacing:".1em"}}>SWARM DNA ANALYSIS</div>
-                <div style={{color:K.tx,fontSize:11,marginBottom:20,lineHeight:1.6}}>After trading, generate your performance DNA card — AI-powered analysis of your trading personality.</div>
-                <button className="btn" onClick={runDNA} disabled={dnaLoading||trades.length<3} style={{background:K.pu+"20",color:K.pu,border:"1px solid "+K.pu+"50",padding:"10px 24px",fontSize:11}}>{dnaLoading?"⟳ ANALYZING...":trades.length<3?"NEED 3+ TRADES":"🧬 GENERATE MY DNA"}</button>
-              </div>
-            ):(
-              <div className="panel" style={{padding:24,borderColor:K.pu+"40",background:"linear-gradient(135deg,"+K.pan+" 0%,"+K.pu+"10 100%)"}}>
-                <div style={{fontSize:13,color:K.pu,letterSpacing:".2em",fontWeight:900,marginBottom:4}}>◈ KYMIA PERFORMANCE DNA</div>
-                <div style={{marginBottom:12}}>
-                  <span style={{padding:"3px 10px",background:K.gold+"20",color:K.gold,border:"1px solid "+K.gold+"40",fontSize:11,borderRadius:2,fontWeight:700}}>{String(dnaData.tier||"GOLD")} TIER · {String(dnaData.score||74)}/100</span>
-                </div>
-                <div style={{fontSize:18,color:K.hi,fontWeight:900,marginBottom:8,letterSpacing:".05em"}}>&quot;{String(dnaData.traderTitle||"")}&quot;</div>
-                <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:12}}>
-                  {((dnaData.tradingDNA as string[])||[]).map((t,i)=>(
-                    <span key={i} style={{padding:"2px 9px",background:K.c+"15",color:K.c,border:"1px solid "+K.c+"30",fontSize:9,borderRadius:1}}>{t}</span>
-                  ))}
-                </div>
-                <div style={{marginBottom:8}}>
-                  <div style={{fontSize:9,color:K.dim,marginBottom:4}}>STRENGTHS</div>
-                  {((dnaData.strengths as string[])||[]).map((s,i)=><div key={i} style={{color:K.g,fontSize:10,marginBottom:2}}>✓ {s}</div>)}
-                </div>
-                <div style={{marginBottom:12}}>
-                  <div style={{fontSize:9,color:K.dim,marginBottom:4}}>WEAKNESS</div>
-                  <div style={{color:K.r,fontSize:10}}>⚠ {String(dnaData.weakness||"")}</div>
-                </div>
-                <div style={{padding:"10px 14px",background:K.pu+"12",border:"1px solid "+K.pu+"30",borderRadius:2,marginBottom:14}}>
-                  <div style={{fontSize:9,color:K.pu,marginBottom:3,letterSpacing:".1em"}}>KYMIA VERDICT</div>
-                  <p style={{fontSize:11,color:K.hi,lineHeight:1.5,fontStyle:"italic"}}>&quot;{String(dnaData.aiVerdict||"")}&quot;</p>
-                </div>
-                <button className="btn" onClick={()=>{const txt=`My KYMIA DNA: ${dnaData.traderTitle} | ${dnaData.tier} | Score:${dnaData.score}/100 | "${dnaData.aiVerdict}"`;navigator.clipboard?.writeText(txt);}} style={{background:K.pu+"20",color:K.pu,border:"1px solid "+K.pu+"50",padding:"8px 20px",fontSize:10,width:"100%"}}>[ SHARE YOUR DNA ]</button>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
 
       {tab==="onchain"&&<OnChainTab/>}
 
@@ -4551,51 +4516,72 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
         {edgeToasts.map(t=><EdgeToastEl key={t.id} toast={t} onDone={()=>setEdgeToasts(p=>p.filter(c=>c.id!==t.id))}/>)}
       </div>
 
-      {/* Debate Theater Modal */}
-      {modal==="debate"&&aiData&&(
+      {/* Debate Theater Modal — real agent deliberation */}
+      {modal==="debate"&&(
         <div style={{position:"fixed",inset:0,background:"rgba(2,4,10,.94)",zIndex:500,display:"flex",alignItems:"center",justifyContent:"center",backdropFilter:"blur(6px)"}} onClick={()=>setModal(null)}>
           <div style={{background:"#040810",border:"1px solid "+K.brd,borderRadius:4,padding:"22px 26px",width:640,maxHeight:"80vh",overflow:"auto"}} onClick={e=>e.stopPropagation()}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
-              <div style={{fontSize:13,color:K.c,letterSpacing:".2em",fontWeight:900}}>◈ SWARM DEBATE THEATER</div>
+              <div style={{fontSize:13,color:K.c,letterSpacing:".2em",fontWeight:900}}>◈ AGENT DELIBERATION</div>
               <button onClick={()=>setModal(null)} style={{background:"none",border:"none",color:K.tx,cursor:"pointer",fontSize:16}}>✕</button>
             </div>
-            <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:14}}>
-              {((aiData.debate as Array<{agent:string,thesis:string,signal:string,conf:number}>)||[]).map((d,i)=>{
-                const col=d.signal==="BUY"?K.g:d.signal==="SELL"?K.r:K.tx;
-                return(
-                  <div key={i} style={{display:"flex",gap:10,flexDirection:i%2===0?"row":"row-reverse",animation:"fi .4s ease forwards",opacity:0,animationDelay:(i*.15)+"s"}}>
-                    <div style={{width:48,height:48,borderRadius:3,background:col+"14",border:"1.5px solid "+col+"40",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-                      <div style={{fontSize:8,color:col,fontWeight:700}}>{String(d.agent||"").toUpperCase().slice(0,6)}</div>
-                      <div style={{fontSize:8,color:K.dim}}>{d.conf}%</div>
-                    </div>
-                    <div style={{flex:1,background:"#060C16",border:"1px solid "+col+"22",borderRadius:3,padding:"8px 12px"}}>
-                      <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
-                        <span style={{fontSize:9,color:K.dim}}>{String(d.agent||"").toUpperCase()}</span>
-                        <span style={{padding:"1px 6px",background:col+"20",color:col,fontSize:8,borderRadius:1}}>{d.signal} {d.conf}%</span>
-                      </div>
-                      <p style={{fontSize:11,color:K.hi,lineHeight:1.5}}>{d.thesis}</p>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-            {(aiData.consensus as {signal?:string})?.signal&&(()=>{
-              const cs=aiData.consensus as {signal:string,symbol:string,confidence:number,rationale:string,tp:number,sl:number};
-              const col=cs.signal==="BUY"?K.g:K.r;
-              return(
-                <div style={{background:col+"0E",border:"1.5px solid "+col+"40",borderRadius:3,padding:"13px 17px"}}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
-                    <span style={{fontSize:12,color:col,fontWeight:900}}>⟹ CONSENSUS</span>
-                    <span style={{fontSize:15,fontWeight:700,color:col}}>{cs.signal} {cs.symbol} · {cs.confidence}%</span>
-                  </div>
-                  <p style={{fontSize:11,color:K.tx,lineHeight:1.55,marginBottom:6}}>{cs.rationale}</p>
-                  <div style={{display:"flex",gap:16,fontSize:10}}>
-                    <span style={{color:K.g}}>TP: ${f2(cs.tp)}</span>
-                    <span style={{color:K.r}}>SL: ${f2(cs.sl)}</span>
-                  </div>
+            {/* Real deliberation — latest cycle, all 6 agents */}
+            {agentFeed&&(()=>{
+              const allV=Object.values(agentFeed.by_symbol).flat();
+              const latestCycle=allV.reduce((mx,v)=>v.cycle_ts>mx?v.cycle_ts:mx,"");
+              // Find symbol with most recent verdict
+              const latestSym=allV.find(v=>v.cycle_ts===latestCycle)?.symbol||"";
+              const byAgent:Record<string,AgentFeedVerdict>={};
+              allV.filter(v=>v.symbol===latestSym).forEach(v=>{const ex=byAgent[v.agent];if(!ex||v.cycle_ts>ex.cycle_ts)byAgent[v.agent]=v;});
+              const verdicts=REAL_AGENTS.filter(a=>a.id!=="confluence").map(a=>byAgent[a.id]).filter(Boolean);
+              const latestV=allV.find(v=>v.cycle_ts===latestCycle);
+              const confScore=latestV?.score_total!=null?Math.round(latestV.score_total):null;
+              const decision=latestV?.decision||null;
+              return(<>
+                <div style={{fontSize:9,color:K.dim,marginBottom:10,letterSpacing:".08em"}}>
+                  {latestSym} · {new Date(latestCycle).toLocaleTimeString("en-US",{hour12:false})} · cycle score: {confScore!=null?confScore:"—"}
                 </div>
-              );
+                <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:14}}>
+                  {verdicts.map((d,i)=>{
+                    const col=d.vote==="APPROVE"?K.g:d.vote==="REJECT"?K.r:K.tx;
+                    return(
+                      <div key={d.agent} style={{display:"flex",gap:10,flexDirection:i%2===0?"row":"row-reverse",animation:"fi .4s ease forwards",opacity:0,animationDelay:(i*.12)+"s"}}>
+                        <div style={{width:48,height:48,borderRadius:3,background:col+"14",border:"1.5px solid "+col+"40",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                          <div style={{fontSize:8,color:col,fontWeight:700}}>{d.agent.toUpperCase().slice(0,5)}</div>
+                          <div style={{fontSize:8,color:K.dim}}>{d.confidence}%</div>
+                        </div>
+                        <div style={{flex:1,background:"#060C16",border:"1px solid "+col+"22",borderRadius:3,padding:"8px 12px"}}>
+                          <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
+                            <span style={{fontSize:9,color:K.dim}}>{d.agent.toUpperCase()}</span>
+                            <span style={{padding:"1px 6px",background:col+"20",color:col,fontSize:8,borderRadius:1}}>{d.vote} {d.confidence}%</span>
+                          </div>
+                          <p style={{fontSize:11,color:K.hi,lineHeight:1.5}}>{d.reason}</p>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                {confScore!=null&&(()=>{
+                  const col=decision==="WOULD_EXECUTE"?K.g:decision?.startsWith("EPISODE_CLOSED")?K.gold:K.r;
+                  return(
+                    <div style={{background:col+"0E",border:"1.5px solid "+col+"40",borderRadius:3,padding:"13px 17px"}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                        <span style={{fontSize:12,color:col,fontWeight:900}}>⟹ CONFLUENCE</span>
+                        <span style={{fontSize:15,fontWeight:700,color:col}}>SCORE {confScore}/100</span>
+                      </div>
+                      <p style={{fontSize:11,color:K.tx,lineHeight:1.55}}>{decision?.replace(/_/g," ")||"—"}</p>
+                    </div>
+                  );
+                })()}
+              </>);
             })()}
+            {/* No data state */}
+            {!agentFeed&&(
+              <div style={{textAlign:"center",padding:"32px 0",color:K.dim,fontSize:11,fontFamily:"monospace"}}>
+                <div style={{fontSize:20,marginBottom:8,opacity:.4}}>◈</div>
+                <div style={{letterSpacing:".1em"}}>No deliberation data yet</div>
+                <div style={{fontSize:9,marginTop:6,color:"#0A1E30"}}>Agent verdicts appear here after the first cycle</div>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -4652,7 +4638,6 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
                   ?<div style={{padding:"14px",textAlign:"center",fontSize:16,fontWeight:900,color:beatResult.includes("WIN")&&!beatResult.includes("KYMIA")?K.g:K.r,background:(beatResult.includes("WIN")&&!beatResult.includes("KYMIA")?K.g:K.r)+"10",border:"1px solid "+(beatResult.includes("WIN")&&!beatResult.includes("KYMIA")?K.g:K.r)+"40",borderRadius:3}}>{beatResult}</div>
                   :<button className="btn" onClick={()=>{beatStart(beatChoice.sym,beatChoice.side);}} style={{width:"100%",background:K.gold+"15",color:K.gold,border:"1px solid "+K.gold+"40",padding:"10px 0",fontSize:11,letterSpacing:".1em"}}>⚡ START 30s RACE</button>
                 }
-                <div style={{marginTop:8,fontSize:8,color:K.dim,textAlign:"center"}}>2,842 observers online · KYMIA win rate: 67%</div>
               </>
             )}
           </div>
