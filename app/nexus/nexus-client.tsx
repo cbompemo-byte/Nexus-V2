@@ -2370,6 +2370,30 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
     load();const iv=setInterval(load,60_000);return()=>clearInterval(iv);
   },[]);
 
+  // ── Real decisions feed (HISTORY + REJECTED tabs, 60s refresh) ───────
+  interface DecisionRow{timestamp:string;symbol:string;decision:string;reason:string|null;pnl_pct:number|null;price_usd:number|null;regime:string|null;score_total:number|null;episode_virtual:boolean}
+  const [decisionsFeed,setDecisionsFeed]=useState<DecisionRow[]|null>(null);
+  useEffect(()=>{
+    const load=async()=>{try{const r=await fetch('/api/public/dashboard/decisions');if(r.ok){const j=await r.json();setDecisionsFeed(j.decisions??[])}}catch{}};
+    load();const iv=setInterval(load,60_000);return()=>clearInterval(iv);
+  },[]);
+
+  // ── Real benchmark feed (RISK panel + session stats, 60s refresh) ────
+  interface BenchmarkRow{symbol:string;hold_pct:number;agent_pct:number;alpha:number;exposure_pct:number;agent_max_dd_pct:number}
+  const [benchmarkFeed,setBenchmarkFeed]=useState<BenchmarkRow[]|null>(null);
+  useEffect(()=>{
+    const load=async()=>{try{const r=await fetch('/api/public/dashboard/benchmark');if(r.ok){const j=await r.json();setBenchmarkFeed(j.stats??[])}}catch{}};
+    load();const iv=setInterval(load,60_000);return()=>clearInterval(iv);
+  },[]);
+
+  // ── Real positions feed (POSITIONS panel, 60s refresh) ───────────────
+  interface PositionRowPublic{symbol:string;entry_price:number;opened_at:string;mode:'OBSERVATION'|'LIVE'}
+  const [positionsFeed,setPositionsFeed]=useState<PositionRowPublic[]|null>(null);
+  useEffect(()=>{
+    const load=async()=>{try{const r=await fetch('/api/public/dashboard/positions');if(r.ok){const j=await r.json();setPositionsFeed(j.positions??[])}}catch{}};
+    load();const iv=setInterval(load,60_000);return()=>clearInterval(iv);
+  },[]);
+
   // ── V2.1 State ───────────────────────────────────────────────────────
   const [regimeState,setRegimeState]=useState<RegimeState|null>(null);
   const regimeRef=useRef<RegimeState|null>(null);
@@ -2532,14 +2556,20 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
   // saveOpenPositions removed — positions/equity/cash owned exclusively by kymia_agent_state
 
   useEffect(()=>{
-    // FIX 1: handle OAuth redirect — Supabase puts access_token in URL hash
+    // Guard: skip all auth calls if real Supabase credentials are absent.
+    // NEXT_PUBLIC_SUPABASE_ANON_KEY is embedded at build time — if it resolves
+    // to the placeholder value, auth requests would fail against a non-existent host.
+    const hasRealCreds=!!(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY&&process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!=='placeholder-anon-key');
+    if(!hasRealCreds)return;   // anonymous session — page renders normally, no DB calls
+
+    // handle OAuth redirect — Supabase puts access_token in URL hash
     const hash=window.location.hash;
     if(hash&&hash.includes('access_token')){
       supabase.auth.getSession().then(({data:{session}})=>{
         if(session?.user){
           setUser(session.user);
           loadUserSession(session.user.id);
-          window.history.replaceState({},'','/nexus?mode=demo');
+          window.history.replaceState({},'','/nexus');
         }
       });
     }else{
@@ -2548,7 +2578,6 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
         if(session?.user)loadUserSession(session.user.id);
       });
     }
-    // FIX 4: handle SIGNED_IN event from OAuth callback
     const {data:{subscription}}=supabase.auth.onAuthStateChange((event,session)=>{
       setUser(session?.user||null);
       if(event==='SIGNED_IN'&&session?.user){
@@ -3760,16 +3789,23 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
             </div>
             <div className="panel" style={{padding:9}}>
               <div style={{fontSize:8,color:K.dim,marginBottom:6,letterSpacing:".12em"}}>◉ RISK</div>
-              {([{l:"CASH",v:f2(port.cash/port.equity*100,1)+"%",col:K.co,pct:port.cash/port.equity*100},{l:"DRAWDOWN",v:"-"+f2(dd,1)+"%",col:dd>5?K.r:K.gold,pct:dd}] as Array<{l:string,v:number|string,col:string,pct:number}>).map((r,i)=>(
-                <div key={i} style={{marginBottom:5}}>
-                  <div style={{display:"flex",justifyContent:"space-between",marginBottom:2,fontSize:8}}>
-                    <span style={{color:K.tx}}>{r.l}</span><span style={{color:r.col}}>{r.v}</span>
+              {(()=>{
+                const maxDd=benchmarkFeed&&benchmarkFeed.length>0?Math.max(...benchmarkFeed.map(r=>r.agent_max_dd_pct??0)):null;
+                const ddVal=maxDd!=null?maxDd:null;
+                const ddCol=ddVal!=null?(ddVal>10?K.r:ddVal>5?K.gold:K.g):K.dim;
+                return(
+                  <div style={{marginBottom:5}}>
+                    <div style={{display:"flex",justifyContent:"space-between",marginBottom:2,fontSize:8}}>
+                      <span style={{color:K.tx}}>DRAWDOWN</span>
+                      <span style={{color:ddCol}}>{ddVal!=null?`-${f2(ddVal,1)}%`:"—"}</span>
+                    </div>
+                    <div style={{height:3,background:"#050810",borderRadius:1}}>
+                      <div style={{height:"100%",borderRadius:1,background:ddCol,width:(ddVal!=null?Math.min(100,ddVal*2):0)+"%",transition:"width .5s"}}/>
+                    </div>
+                    {benchmarkFeed===null&&<div style={{fontSize:7,color:K.dim,marginTop:3}}>Loading…</div>}
                   </div>
-                  <div style={{height:3,background:"#050810",borderRadius:1}}>
-                    <div style={{height:"100%",borderRadius:1,background:r.col,width:Math.min(100,Math.max(0,r.pct))+"%",transition:"width .5s"}}/>
-                  </div>
-                </div>
-              ))}
+                );
+              })()}
             </div>
             {/* Portfolio Health + Mission Progress */}
             <div className="panel" style={{padding:"8px 10px"}}>
@@ -3917,15 +3953,17 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
               </div>
             )}
             <div className="panel" style={{padding:9,flex:1,overflow:"auto"}}>
-              {/* Session stats bar */}
+              {/* Session stats bar — real engine decisions */}
               {(()=>{
-                const ct=trades.filter((t:any)=>t.pnl!==0);
-                const cw=ct.filter((t:any)=>t.pnl>0);
-                const tp2=ct.reduce((s:number,t:any)=>s+t.pnl,0);
-                const wr2=ct.length>0?(cw.length/ct.length*100).toFixed(0):'—';
+                const CLOSED_CODES=['EPISODE_CLOSED','EPISODE_CLOSED_SL','EPISODE_CLOSED_TP'];
+                const closed=(decisionsFeed??[]).filter(d=>CLOSED_CODES.includes(d.decision)&&!d.reason?.includes('[BACKFILLED_SL'));
+                const wins=closed.filter(d=>(d.pnl_pct??0)>0);
+                const wr=closed.length>0?(wins.length/closed.length*100).toFixed(0):'—';
+                const netPnl=closed.reduce((s,d)=>s+(d.pnl_pct??0),0);
+                const netCol=netPnl>=0?K.g:K.r;
                 return(
-                  <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:6,padding:'8px 12px',background:'rgba(4,6,13,0.9)',border:'1px solid #0A1D33',borderRadius:6,marginBottom:12}}>
-                    {([{l:'TRADES',v:ct.length,c:K.c},{l:'WIN RATE',v:`${wr2}%`,c:K.g},{l:'NET P&L',v:`${tp2>=0?'+$':'-$'}${Math.abs(tp2).toFixed(0)}`,c:tp2>=0?K.g:K.r},{l:'EQUITY',v:`$${port.equity?.toFixed(0)}`,c:'white'}] as {l:string,v:string|number,c:string}[]).map((s,i)=>(
+                  <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:6,padding:'8px 12px',background:'rgba(4,6,13,0.9)',border:'1px solid #0A1D33',borderRadius:6,marginBottom:12}}>
+                    {([{l:'EPISODES',v:decisionsFeed===null?'…':closed.length,c:K.c},{l:'WIN RATE',v:decisionsFeed===null?'…':`${wr}%`,c:K.g},{l:'NET P&L',v:decisionsFeed===null?'…':`${netPnl>=0?'+':''}${netPnl.toFixed(1)}%`,c:netCol}] as {l:string,v:string|number,c:string}[]).map((s,i)=>(
                       <div key={i} style={{textAlign:'center'}}>
                         <div style={{fontSize:8,color:K.dim,fontFamily:'monospace'}}>{s.l}</div>
                         <div style={{fontSize:13,fontWeight:700,color:s.c,fontFamily:'monospace',marginTop:2}}>{s.v}</div>
@@ -3955,69 +3993,45 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
                 );
               })()}
               <div style={{fontSize:8,color:K.dim,marginBottom:6,letterSpacing:".12em"}}>◉ POSITIONS</div>
-              {Object.keys(port.pos).length===0
-                ?<div>
-                  {running&&<div style={{padding:'10px 14px',background:'rgba(0,242,254,0.04)',border:'1px solid rgba(0,242,254,0.1)',borderRadius:6,display:'flex',alignItems:'center',gap:10}}>
-                    <div style={{width:6,height:6,borderRadius:'50%',background:'#00F2FE',boxShadow:'0 0 8px #00F2FE',animation:'pulse 1s infinite',flexShrink:0}}/>
-                    <span style={{fontSize:11,color:'#00F2FE',fontFamily:'monospace'}}>{scanMsg}</span>
-                  </div>}
-                  {!running&&<div style={{textAlign:"center",color:"#0A1E30",padding:"12px 0",fontSize:9}}>No open positions</div>}
-                </div>
-                :Object.entries(port.pos).map(([sym,pos])=>{
-                  const p=pos as any;
-                  const priceEntry=prices[sym];
-                  const hasRealPrice=!!priceEntry?.isRealPrice;
-                  // For PnL calc: use real price if available, else fall back to entry (shows 0 PnL rather than garbage)
-                  const cur=hasRealPrice?priceEntry!.price:pos.avg;
-                  const isLong=pos.side!=="SHORT";
-                  const pnl=isLong?(cur-pos.avg)*pos.qty:(pos.avg-cur)*pos.qty;
-                  const pct2=p.size>0?pnl/p.size*100:((cur-pos.avg)/pos.avg*100*(isLong?1:-1));
-                  const col=pnl>=0?K.g:K.r;
-                  return(
-                    <div key={sym} onClick={()=>setChartTrade({trade:{sym,side:'BUY',price:(pos as any)?.avg||0,pnl:0,conf:0,t:'',ms:Date.now(),qty:0,id:'',agent:'HYBRID'} as any,position:pos as any,agentSignals:undefined})} style={{padding:'12px 16px',background:'rgba(6,10,18,0.9)',border:`1px solid ${col}30`,borderLeft:`3px solid ${col}`,borderRadius:8,marginBottom:8,cursor:'pointer'}}>
-                      {/* Header */}
-                      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
-                        <div style={{display:'flex',gap:8,alignItems:'center'}}>
-                          <span style={{fontSize:16,fontWeight:900,color:col,fontFamily:'monospace'}}>{sym}</span>
-                          <span style={{padding:'2px 8px',background:`${col}15`,border:`1px solid ${col}30`,borderRadius:4,fontSize:10,color:col,fontWeight:700}}>{pos.side||'LONG'}</span>
-                          {p.conf&&<span style={{fontSize:9,color:K.dim,fontFamily:'monospace'}}>{p.conf}% conf</span>}
-                        </div>
-                        <div style={{textAlign:'right'}}>
-                          <div style={{fontSize:18,fontWeight:900,color:col,fontFamily:'monospace',textShadow:`0 0 10px ${col}`}}>{pnl>=0?'+$':'-$'}{Math.abs(pnl).toFixed(2)}</div>
-                          <div style={{fontSize:10,color:col,fontFamily:'monospace'}}>{pct2>=0?'+':''}{pct2.toFixed(2)}%</div>
-                        </div>
-                      </div>
-                      {/* Trade levels */}
-                      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr',gap:6,marginBottom:8}}>
-                        {([{l:'ENTRY',v:`$${pos.avg?.toFixed(2)}`,c:K.c},{l:'CURRENT',v:hasRealPrice?`$${cur?.toFixed(2)}`:'—',c:'white'},{l:'TP',v:p.tp?`$${p.tp.toFixed(2)}`:'—',c:K.g},{l:'SL',v:p.sl?`$${p.sl.toFixed(2)}`:'—',c:K.r}] as {l:string,v:string,c:string}[]).map((item,i)=>(
-                          <div key={i} style={{padding:'6px 8px',background:'rgba(4,6,13,0.8)',borderRadius:4,textAlign:'center'}}>
-                            <div style={{fontSize:8,color:K.dim,fontFamily:'monospace'}}>{item.l}</div>
-                            <div style={{fontSize:11,color:item.c,fontWeight:700,fontFamily:'monospace',marginTop:2}}>{item.v}</div>
+              {positionsFeed===null
+                ?<div style={{textAlign:"center",color:K.dim,padding:"12px 0",fontSize:9}}>Loading…</div>
+                :positionsFeed.length===0
+                  ?<div style={{textAlign:"center",color:"#0A1E30",padding:"12px 0",fontSize:9}}>No open positions</div>
+                  :positionsFeed.map((pos)=>{
+                    const priceEntry=prices[pos.symbol];
+                    const hasRealPrice=!!priceEntry?.isRealPrice;
+                    const cur=hasRealPrice?priceEntry!.price:null;
+                    const pct2=cur!=null?((cur-pos.entry_price)/pos.entry_price*100):null;
+                    const col=pct2!=null?(pct2>=0?K.g:K.r):K.c;
+                    const openedAgo=Math.round((Date.now()-new Date(pos.opened_at).getTime())/60000);
+                    return(
+                      <div key={pos.symbol} style={{padding:'10px 12px',background:'rgba(6,10,18,0.9)',border:`1px solid ${col}30`,borderLeft:`3px solid ${col}`,borderRadius:8,marginBottom:8}}>
+                        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+                          <div style={{display:'flex',gap:8,alignItems:'center'}}>
+                            <span style={{fontSize:15,fontWeight:900,color:col,fontFamily:'monospace'}}>{pos.symbol}</span>
+                            <span style={{padding:'1px 6px',background:'#00F2FE15',border:'1px solid #00F2FE30',borderRadius:3,fontSize:8,color:K.c,fontWeight:700}}>{pos.mode}</span>
                           </div>
-                        ))}
-                      </div>
-                      {/* Capital */}
-                      <div style={{display:'flex',justifyContent:'space-between',fontSize:9,color:K.dim,fontFamily:'monospace',marginBottom:6}}>
-                        <span>Capital: ${p.size?.toFixed(0)||'—'}</span>
-                        <span>Qty: {pos.qty?.toFixed(4)} {sym}</span>
-                        <span>Agent: {p.agent||p.signal||'BOLLINGER'}</span>
-                      </div>
-                      {/* Progress bar to TP */}
-                      {p.tp&&p.sl&&(
-                        <div style={{marginBottom:6}}>
-                          <div style={{height:4,background:'#06090F',borderRadius:2,overflow:'hidden'}}>
-                            <div style={{height:'100%',width:`${Math.max(0,Math.min(100,isLong?(cur-p.sl)/(p.tp-p.sl)*100:(p.sl-cur)/(p.sl-p.tp)*100))}%`,background:`linear-gradient(90deg,${col}60,${col})`,borderRadius:2,transition:'width .3s'}}/>
-                          </div>
-                          <div style={{display:'flex',justifyContent:'space-between',fontSize:8,color:'#1A3050',fontFamily:'monospace',marginTop:3}}>
-                            <span style={{color:K.r}}>SL ${p.sl?.toFixed(2)}</span>
-                            <span style={{color:K.g}}>TP ${p.tp?.toFixed(2)}</span>
+                          <div style={{textAlign:'right'}}>
+                            {pct2!=null
+                              ?<div style={{fontSize:14,fontWeight:900,color:col,fontFamily:'monospace'}}>{pct2>=0?'+':''}{pct2.toFixed(2)}%</div>
+                              :<div style={{fontSize:11,color:K.dim,fontFamily:'monospace'}}>—</div>
+                            }
                           </div>
                         </div>
-                      )}
-                      {/* Close position handled server-side by /api/agents/cycle SL/TP */}
-                    </div>
-                  );
-                })}
+                        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6}}>
+                          <div style={{padding:'5px 7px',background:'rgba(4,6,13,0.8)',borderRadius:4}}>
+                            <div style={{fontSize:7,color:K.dim,fontFamily:'monospace'}}>ENTRY</div>
+                            <div style={{fontSize:10,color:K.c,fontWeight:700,fontFamily:'monospace',marginTop:1}}>{fPrice(pos.entry_price)}</div>
+                          </div>
+                          <div style={{padding:'5px 7px',background:'rgba(4,6,13,0.8)',borderRadius:4}}>
+                            <div style={{fontSize:7,color:K.dim,fontFamily:'monospace'}}>CURRENT</div>
+                            <div style={{fontSize:10,color:hasRealPrice?'white':K.dim,fontWeight:700,fontFamily:'monospace',marginTop:1}}>{cur!=null?fPrice(cur):'—'}</div>
+                          </div>
+                        </div>
+                        <div style={{fontSize:8,color:'#1A3050',fontFamily:'monospace',marginTop:5}}>{openedAgo}m ago · {new Date(pos.opened_at).toLocaleTimeString("en-US",{hour12:false})}</div>
+                      </div>
+                    );
+                  })}
             </div>
             {(()=>{
               const closed=trades.filter(t=>t.pnl!==0);
@@ -4076,7 +4090,7 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
                 return([
                   {l:"Execution",v:circuit?"LOCKED":traderIsPaused?"PAUSED":"ACTIVE",c:circuit?K.r:traderIsPaused?K.gold:K.g},
                   {l:"SL/TP",v:"Tiered Trail",c:K.tx},
-                  {l:"Agents",v:"6/6",c:K.g},
+                  {l:"Agents",v:(()=>{if(!agentFeed)return"…/6";const allV=Object.values(agentFeed.by_symbol).flat();const latestC=allV.reduce((mx,v)=>v.cycle_ts>mx?v.cycle_ts:mx,"");const n=new Set(allV.filter(v=>v.cycle_ts===latestC).map(v=>v.agent)).size;return`${n}/6`;})(),c:K.g},
                   {l:"Positions",v:Object.keys(port.pos).length+"/"+getMaxPositions(port.equity||port.cash),c:K.tx},
                   {l:"PEAK HOURS",v:peakStr,c:peakCol},
                   {l:"MACRO TREND",v:"BTC "+macroStr,c:macroCol},
@@ -4128,14 +4142,15 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
       })()}
 
       {tab==="trades"&&(()=>{
+        const CLOSED_CODES=['EPISODE_CLOSED','EPISODE_CLOSED_SL','EPISODE_CLOSED_TP'];
         const now2=Date.now();
         const periodMs2:Record<string,number>={"1H":36e5,"3H":108e5,"24H":864e5,"7D":6048e5,"ALL":Infinity};
         const cutoff2=periodMs2[histFilter];
-        const allClosed=trades.filter(t=>t.pnl!==0);
-        const filtered2=allClosed.filter(t=>!t.ms||now2-t.ms<cutoff2);
-        const sorted2=histSort==="pnl"?[...filtered2].sort((a,b)=>b.pnl-a.pnl):[...filtered2];
-        const periodPnL2=filtered2.reduce((s,t)=>s+t.pnl,0);
-        const wins2=filtered2.filter(t=>t.pnl>0);
+        const allClosed=(decisionsFeed??[]).filter(d=>CLOSED_CODES.includes(d.decision)&&!d.reason?.includes('[BACKFILLED_SL'));
+        const filtered2=allClosed.filter(d=>cutoff2===Infinity||now2-new Date(d.timestamp).getTime()<cutoff2);
+        const sorted2=histSort==="pnl"?[...filtered2].sort((a,b)=>(b.pnl_pct??0)-(a.pnl_pct??0)):[...filtered2];
+        const periodPnL2=filtered2.reduce((s,d)=>s+(d.pnl_pct??0),0);
+        const wins2=filtered2.filter(d=>(d.pnl_pct??0)>0);
         const wr2=filtered2.length?wins2.length/filtered2.length*100:0;
         return(
           <div style={{flex:1,padding:10,overflow:"auto",display:"flex",flexDirection:"column",gap:8}}>
@@ -4152,38 +4167,40 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
                 ))}
               </div>
               <div style={{marginLeft:"auto",display:"flex",gap:16,fontSize:10}}>
-                <div style={{textAlign:"right"}}><div style={{fontSize:7,color:K.dim}}>P&L</div><div style={{color:periodPnL2>=0?K.g:K.r,fontWeight:700}}>{periodPnL2>=0?"+":""}${f2(Math.abs(periodPnL2))}</div></div>
-                <div style={{textAlign:"right"}}><div style={{fontSize:7,color:K.dim}}>WIN RATE</div><div style={{color:wr2>=50?K.g:K.r,fontWeight:700}}>{f2(wr2,0)}%</div></div>
-                <div style={{textAlign:"right"}}><div style={{fontSize:7,color:K.dim}}>TRADES</div><div style={{color:K.c,fontWeight:700}}>{filtered2.length}</div></div>
+                <div style={{textAlign:"right"}}><div style={{fontSize:7,color:K.dim}}>NET P&L</div><div style={{color:periodPnL2>=0?K.g:K.r,fontWeight:700}}>{periodPnL2>=0?"+":""}{periodPnL2.toFixed(1)}%</div></div>
+                <div style={{textAlign:"right"}}><div style={{fontSize:7,color:K.dim}}>WIN RATE</div><div style={{color:wr2>=50?K.g:K.r,fontWeight:700}}>{filtered2.length?f2(wr2,0)+"%" :"—"}</div></div>
+                <div style={{textAlign:"right"}}><div style={{fontSize:7,color:K.dim}}>EPISODES</div><div style={{color:K.c,fontWeight:700}}>{decisionsFeed===null?"…":filtered2.length}</div></div>
               </div>
             </div>
-            {/* Trade list */}
+            {/* Episode list */}
             <div className="panel" style={{overflow:"auto",flex:1}}>
-              {sorted2.length===0
-                ?<div style={{padding:50,textAlign:"center",color:"#0A1E30",fontSize:10}}>No closed trades in this period. Activate swarm.</div>
-                :sorted2.map((t,i)=>{
-                  const col=t.pnl>=0?K.g:K.r;
-                  const ta=t as any;
-                  return(
-                    <div key={t.id||i} onClick={()=>setChartTrade({trade:t,position:null,agentSignals:t.agentSignals})} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 12px',borderBottom:'1px solid #06090F',borderLeft:`2px solid ${col}`,cursor:'pointer'}}>
-                      <div>
-                        <div style={{display:'flex',gap:6,alignItems:'center',marginBottom:3}}>
-                          <span style={{fontSize:12,fontWeight:700,color:col,fontFamily:'monospace'}}>{t.sym}</span>
-                          <span style={{fontSize:9,color:t.side==='LONG'||t.side==='BUY'?K.g:K.r,fontFamily:'monospace'}}>{t.side==='LONG'||t.side==='BUY'?'▲':'▼'} {t.side}</span>
+              {decisionsFeed===null
+                ?<div style={{padding:50,textAlign:"center",color:K.dim,fontSize:10}}>Loading…</div>
+                :sorted2.length===0
+                  ?<div style={{padding:50,textAlign:"center",color:"#0A1E30",fontSize:10}}>No closed episodes in this period</div>
+                  :sorted2.map((d,i)=>{
+                    const pnl=d.pnl_pct??0;
+                    const col=pnl>=0?K.g:K.r;
+                    const isSL=d.decision==="EPISODE_CLOSED_SL";
+                    const label=isSL?"SL":d.decision==="EPISODE_CLOSED_TP"?"TP":"CLOSE";
+                    return(
+                      <div key={i} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 12px',borderBottom:'1px solid #06090F',borderLeft:`2px solid ${col}`}}>
+                        <div>
+                          <div style={{display:'flex',gap:6,alignItems:'center',marginBottom:3}}>
+                            <span style={{fontSize:12,fontWeight:700,color:col,fontFamily:'monospace'}}>{d.symbol}</span>
+                            <span style={{fontSize:8,padding:'1px 5px',background:col+'18',border:`1px solid ${col}30`,borderRadius:2,color:col}}>{label}</span>
+                            {d.regime&&<span style={{fontSize:8,color:K.dim,fontFamily:'monospace'}}>{d.regime}</span>}
+                          </div>
+                          {d.price_usd!=null&&<div style={{fontSize:9,color:K.dim,fontFamily:'monospace'}}>{fPrice(d.price_usd)}</div>}
+                          <div style={{fontSize:8,color:'#1A3050',fontFamily:'monospace',marginTop:2}}>KYMIA · {new Date(d.timestamp).toLocaleString("en-US",{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit",hour12:false})}</div>
                         </div>
-                        {(ta.entry||0)>0&&(t.price||0)>0&&(
-                          <div style={{fontSize:9,color:K.dim,fontFamily:'monospace'}}>${f2(ta.entry)} → ${f2(t.price)}</div>
-                        )}
-                        <div style={{fontSize:8,color:'#1A3050',fontFamily:'monospace',marginTop:2}}>{t.agent||'KYMIA'} · {t.t}</div>
+                        <div style={{textAlign:'right'}}>
+                          <div style={{fontSize:16,fontWeight:900,color:col,fontFamily:'monospace',textShadow:`0 0 8px ${col}`}}>{pnl>=0?'+':''}{pnl.toFixed(2)}%</div>
+                          {d.score_total!=null&&<div style={{fontSize:8,color:K.dim,fontFamily:'monospace',marginTop:2}}>score {Math.round(d.score_total)}</div>}
+                        </div>
                       </div>
-                      <div style={{textAlign:'right'}}>
-                        <div style={{fontSize:16,fontWeight:900,color:col,fontFamily:'monospace',textShadow:`0 0 8px ${col}`}}>{t.pnl>=0?'+$':'-$'}{Math.abs(t.pnl).toFixed(2)}</div>
-                        <div style={{fontSize:10,color:col,fontFamily:'monospace'}}>{(t.pct||0)>=0?'+':''}{(t.pct||0).toFixed(2)}%</div>
-                        {ta.size&&<div style={{fontSize:8,color:K.dim,fontFamily:'monospace',marginTop:2}}>Capital: ${ta.size?.toFixed(0)}</div>}
-                      </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })}
             </div>
           </div>
         );
@@ -4414,51 +4431,66 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
       )}
 
       {/* ── Part 14: REJECTED TAB ── */}
-      {tab==="rejected"&&(
+      {tab==="rejected"&&(()=>{
+        const REJECT_CODES=['BEAR_REGIME_SKIP','GUARD_REFUSED','NO_SIGNAL','REJECTED_LOW_SCORE','CANDLES_UNAVAILABLE','NOT_IN_WHITELIST','EDGE_INSUFFICIENT','SIZE_ZERO'];
+        const rejected=(decisionsFeed??[]).filter(d=>REJECT_CODES.includes(d.decision));
+        // Breakdown by decision code
+        const byCode:Record<string,number>={};
+        rejected.forEach(d=>{byCode[d.decision]=(byCode[d.decision]||0)+1;});
+        const maxCount=Math.max(1,...Object.values(byCode));
+        return(
         <div style={{padding:16,display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,overflow:'auto'}}>
-          {/* Rejection Feed (Part 5) */}
+          {/* Rejection Feed */}
           <div className="panel" style={{padding:0,overflow:'hidden'}}>
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:6,padding:'8px 10px',borderBottom:'1px solid #0A1D33',background:'rgba(4,6,13,0.9)'}}>
-              {[{l:'EXECUTED',v:rejectionStats.executed,c:'#00FF88'},{l:'REJECTED',v:rejectionStats.rejected,c:'#FF3366'},{l:'PROTECTED',v:`$${rejectionStats.capitalProtected.toFixed(0)}`,c:K.gold}].map((s,i)=>(
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6,padding:'8px 10px',borderBottom:'1px solid #0A1D33',background:'rgba(4,6,13,0.9)'}}>
+              {[{l:'REJECTED',v:decisionsFeed===null?'…':rejected.length,c:K.r},{l:'DISTINCT SYMBOLS',v:decisionsFeed===null?'…':new Set(rejected.map(d=>d.symbol)).size,c:K.gold}].map((s,i)=>(
                 <div key={i} style={{textAlign:'center'}}>
                   <div style={{fontSize:7,color:K.dim,fontFamily:'monospace'}}>{s.l}</div>
                   <div style={{fontSize:13,fontWeight:700,color:s.c,fontFamily:'monospace'}}>{s.v}</div>
                 </div>
               ))}
             </div>
-            {rejectedTrades.length===0?(
-              <div style={{padding:'20px 10px',fontSize:9,color:'#0A1D33',fontFamily:'monospace',textAlign:'center'}}>No rejected trades yet</div>
-            ):rejectedTrades.map((r,i)=>(
+            {decisionsFeed===null?(
+              <div style={{padding:'20px 10px',fontSize:9,color:K.dim,fontFamily:'monospace',textAlign:'center'}}>Loading…</div>
+            ):rejected.length===0?(
+              <div style={{padding:'20px 10px',fontSize:9,color:'#0A1D33',fontFamily:'monospace',textAlign:'center'}}>No rejections in the last 500 decisions</div>
+            ):rejected.map((d,i)=>(
               <div key={i} style={{padding:'8px 10px',borderBottom:'1px solid #06090F',borderLeft:'2px solid #FF336640'}}>
-                <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}>
-                  <span style={{fontSize:11,fontWeight:700,color:'#2A5070',fontFamily:'monospace'}}>{r.sym}</span>
-                  <span style={{fontSize:9,color:'#FF3366',fontFamily:'monospace'}}>{r.confidence}% conf</span>
+                <div style={{display:'flex',justifyContent:'space-between',marginBottom:3}}>
+                  <span style={{fontSize:11,fontWeight:700,color:K.hi,fontFamily:'monospace'}}>{d.symbol}</span>
+                  <span style={{fontSize:8,padding:'1px 5px',background:'#FF336618',border:'1px solid #FF336640',borderRadius:2,color:K.r,fontFamily:'monospace'}}>{d.decision.replace(/_/g,' ')}</span>
                 </div>
-                {r.reasons.map((reason,j)=>(
-                  <div key={j} style={{fontSize:9,color:'#1A3050',fontFamily:'monospace'}}>· {reason}</div>
-                ))}
-                <div style={{fontSize:8,color:K.dim,fontFamily:'monospace',marginTop:3}}>Protected ~${r.capitalProtected.toFixed(0)} · {r.timestamp}</div>
+                {d.reason&&<div style={{fontSize:9,color:'#1A3050',fontFamily:'monospace'}}>· {d.reason.slice(0,80)}{d.reason.length>80?'…':''}</div>}
+                <div style={{fontSize:8,color:K.dim,fontFamily:'monospace',marginTop:2}}>{new Date(d.timestamp).toLocaleString("en-US",{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit",hour12:false})}{d.regime?` · ${d.regime}`:''}</div>
               </div>
             ))}
           </div>
-          {/* Missed Opportunities (Part 8) */}
+          {/* Rejection breakdown by code */}
           <div className="panel" style={{padding:0,overflow:'hidden'}}>
-            <div style={{padding:'6px 10px',fontSize:8,color:K.dim,letterSpacing:'.2em',fontFamily:'monospace',borderBottom:'1px solid #0A1D33'}}>◈ MISSED OPPORTUNITIES</div>
-            {missedOpps.length===0?(
-              <div style={{padding:'20px 10px',fontSize:9,color:'#0A1D33',fontFamily:'monospace',textAlign:'center'}}>No skipped opportunities yet</div>
-            ):missedOpps.map((m,i)=>(
-              <div key={i} style={{padding:'7px 10px',borderBottom:'1px solid #06090F',borderLeft:`2px solid ${m.wasRightToSkip?'#00FF88':'#FFD700'}`}}>
-                <div style={{display:'flex',justifyContent:'space-between',marginBottom:2}}>
-                  <span style={{fontSize:10,color:K.hi,fontFamily:'monospace',fontWeight:700}}>{m.sym}</span>
-                  <span style={{fontSize:10,color:m.move>0?(m.wasRightToSkip?'#2A5070':'#FF3366'):'#00FF88',fontFamily:'monospace'}}>{m.move>0?'+':''}{m.move}%</span>
-                </div>
-                <div style={{fontSize:9,color:K.dim,fontFamily:'monospace'}}>{m.wasRightToSkip?'✓ Correct skip':'⚠ Missed move'} · {m.reason}</div>
-                <div style={{fontSize:8,color:K.dim,fontFamily:'monospace',marginTop:2}}>{m.timestamp}</div>
+            <div style={{padding:'6px 10px',fontSize:8,color:K.dim,letterSpacing:'.2em',fontFamily:'monospace',borderBottom:'1px solid #0A1D33'}}>◈ REJECTION BREAKDOWN</div>
+            {decisionsFeed===null?(
+              <div style={{padding:'20px 10px',fontSize:9,color:K.dim,fontFamily:'monospace',textAlign:'center'}}>Loading…</div>
+            ):Object.keys(byCode).length===0?(
+              <div style={{padding:'20px 10px',fontSize:9,color:'#0A1D33',fontFamily:'monospace',textAlign:'center'}}>No rejections yet</div>
+            ):(
+              <div style={{padding:'8px 10px',display:'flex',flexDirection:'column',gap:6}}>
+                {Object.entries(byCode).sort((a,b)=>b[1]-a[1]).map(([code,count])=>(
+                  <div key={code}>
+                    <div style={{display:'flex',justifyContent:'space-between',marginBottom:2,fontSize:8}}>
+                      <span style={{color:K.tx,fontFamily:'monospace'}}>{code.replace(/_/g,' ')}</span>
+                      <span style={{color:K.r,fontFamily:'monospace',fontWeight:700}}>{count}</span>
+                    </div>
+                    <div style={{height:3,background:'#050810',borderRadius:1}}>
+                      <div style={{height:'100%',borderRadius:1,background:K.r,width:(count/maxCount*100)+'%',transition:'width .5s'}}/>
+                    </div>
+                  </div>
+                ))}
               </div>
-            ))}
+            )}
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* Performance Card Modal */}
       {modal==="share"&&<PerformanceCard trades={trades} totalPnL={totalPnL} allTimeStats={allTimeStats} onClose={()=>setModal(null)}/>}

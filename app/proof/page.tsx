@@ -7,7 +7,10 @@ import type { Metadata } from 'next'
 import { createClient } from '@supabase/supabase-js'
 import { EN, translateDecision, translateFailReason } from '@/lib/proof-i18n'
 
-export const revalidate = 60
+// force-dynamic: page fetches from Supabase at request time.
+// Without this Next.js attempts static prerender at build time, which fails
+// when NEXT_PUBLIC_SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY are absent.
+export const dynamic = 'force-dynamic'
 
 export const metadata: Metadata = {
   title:       'Proof — KYMIA',
@@ -33,37 +36,48 @@ const MONO = "'JetBrains Mono','Courier New',monospace"
 
 // ── Data fetching ──────────────────────────────────────────────────────────────
 
+const EMPTY_DATA = {
+  decisions:    [] as any[],
+  screens:      [] as any[],
+  coreStats:    {} as any,
+  memecoinStats:{} as any,
+}
+
 async function fetchProofData() {
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { auth: { persistSession: false } }
-  )
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY
+  if (!url || !key) return EMPTY_DATA          // env vars absent → render empty page, no crash
 
-  const [decisionsRes, screensRes, statsRes] = await Promise.all([
-    supabase
-      .from('kymia_dryrun_decisions')
-      .select('timestamp,symbol,regime,decision,reason')
-      .order('timestamp', { ascending: false })
-      .limit(30),
-    supabase
-      .from('kymia_memecoin_screens')
-      .select('screened_at,symbol,name,age_hours,volume_24h,eligible,first_failed_check,fail_reason')
-      .order('screened_at', { ascending: false })
-      .limit(20),
-    supabase.rpc('kymia_proof_stats'),
-  ])
+  try {
+    const supabase = createClient(url, key, { auth: { persistSession: false } })
 
-  const pgStats = (statsRes.data ?? {}) as {
-    core:     { total_decisions: number; depuis: string | null; par_decision: Record<string, number> }
-    memecoin: { total_analyses: number; bloques: number; eligibles: number; par_check: Record<string, number> }
-  }
+    const [decisionsRes, screensRes, statsRes] = await Promise.all([
+      supabase
+        .from('kymia_dryrun_decisions')
+        .select('timestamp,symbol,regime,decision,reason')
+        .order('timestamp', { ascending: false })
+        .limit(30),
+      supabase
+        .from('kymia_memecoin_screens')
+        .select('screened_at,symbol,name,age_hours,volume_24h,eligible,first_failed_check,fail_reason')
+        .order('screened_at', { ascending: false })
+        .limit(20),
+      supabase.rpc('kymia_proof_stats'),
+    ])
 
-  return {
-    decisions:    decisionsRes.data ?? [],
-    screens:      screensRes.data   ?? [],
-    coreStats:    pgStats.core      ?? {},
-    memecoinStats: pgStats.memecoin ?? {},
+    const pgStats = (statsRes.data ?? {}) as {
+      core:     { total_decisions: number; depuis: string | null; par_decision: Record<string, number> }
+      memecoin: { total_analyses: number; bloques: number; eligibles: number; par_check: Record<string, number> }
+    }
+
+    return {
+      decisions:    decisionsRes.data ?? [],
+      screens:      screensRes.data   ?? [],
+      coreStats:    pgStats.core      ?? {},
+      memecoinStats: pgStats.memecoin ?? {},
+    }
+  } catch {
+    return EMPTY_DATA
   }
 }
 

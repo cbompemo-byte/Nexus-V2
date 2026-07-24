@@ -8,28 +8,6 @@ const K = { c:"#00F2FE",g:"#00FF88",r:"#FF3366",gold:"#FFD700",pu:"#BD00FF",dim:
 const F = "'JetBrains Mono','Courier New',monospace";
 const PANEL = { background:"rgba(6,10,18,0.75)", backdropFilter:"blur(12px)", border:"1px solid rgba(0,242,254,0.08)", borderRadius:8 } as const;
 
-// Fire this from any sub-component to open the demo login modal
-const triggerDemoModal=()=>window.dispatchEvent(new CustomEvent('kymia:demo'));
-
-const DemoLoginModal=({onClose}:{onClose:()=>void})=>(
-  <div style={{position:'fixed',inset:0,zIndex:9999,background:'rgba(2,4,10,0.96)',backdropFilter:'blur(20px)',display:'flex',alignItems:'center',justifyContent:'center',padding:20}} onClick={onClose}>
-    <div onClick={e=>e.stopPropagation()} style={{background:'#060A12',border:'1px solid rgba(0,242,254,0.2)',borderRadius:16,padding:36,width:380,textAlign:'center',boxShadow:'0 0 60px rgba(0,242,254,0.1)'}}>
-      <div style={{fontSize:32,color:'#00F2FE',marginBottom:8,textShadow:'0 0 20px #00F2FE'}}>◈</div>
-      <h2 style={{fontSize:20,fontWeight:900,color:'white',margin:'0 0 8px',fontFamily:'monospace'}}>Start your free session</h2>
-      <p style={{fontSize:12,color:'#2A5070',lineHeight:1.7,margin:'0 0 28px'}}>Sign in to track your trading performance.<br/>$10,000 virtual capital. No credit card.</p>
-      <button onClick={()=>supabase.auth.signInWithOAuth({provider:'google',options:{redirectTo:'https://kymia.ai/nexus?mode=demo',queryParams:{access_type:'offline',prompt:'consent'}}})} style={{width:'100%',padding:'14px',background:'rgba(255,255,255,0.07)',border:'1px solid rgba(255,255,255,0.15)',borderRadius:8,color:'white',fontSize:13,fontWeight:700,cursor:'pointer',marginBottom:10,display:'flex',alignItems:'center',justifyContent:'center',gap:10,fontFamily:'monospace'}}>
-        <svg width="18" height="18" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
-        Continue with Google
-      </button>
-      <button onClick={()=>supabase.auth.signInWithOAuth({provider:'github',options:{redirectTo:'https://kymia.ai/nexus?mode=demo'}})} style={{width:'100%',padding:'14px',background:'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.1)',borderRadius:8,color:'white',fontSize:13,fontWeight:700,cursor:'pointer',marginBottom:24,display:'flex',alignItems:'center',justifyContent:'center',gap:10,fontFamily:'monospace'}}>
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="white"><path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/></svg>
-        Continue with GitHub
-      </button>
-      <button onClick={()=>{window.location.href='/nexus?mode=demo';}} style={{background:'none',border:'none',color:'#2A5070',cursor:'pointer',fontSize:11,fontFamily:'monospace',textDecoration:'underline'}}>Skip — trade without saving</button>
-      <div style={{marginTop:20,padding:'10px 14px',background:'rgba(0,242,254,0.04)',border:'1px solid rgba(0,242,254,0.1)',borderRadius:6,fontSize:10,color:'#2A5070',lineHeight:1.7}}>◈ We only use your email to save your<br/>trading history. No spam. No card required.</div>
-    </div>
-  </div>
-);
 
 const BOOT_LINES = [
   { prefix:"[SYSTEM]", text:"Initializing KYMIA Swarm Protocols...", delay:0 },
@@ -556,13 +534,13 @@ function DemoVideoSection() {
 
       {/* CTA */}
       <div style={{ textAlign:"center", marginTop:28 }}>
-        <button onClick={triggerDemoModal} style={{
+        <a href="/nexus" style={{
           display:"inline-block", padding:"12px 32px",
           background:"rgba(0,255,136,0.12)", border:"1.5px solid rgba(0,255,136,0.4)",
           color:K.g, borderRadius:6, fontFamily:"monospace", fontSize:12,
-          fontWeight:700, cursor:"pointer", letterSpacing:".1em",
+          fontWeight:700, cursor:"pointer", letterSpacing:".1em", textDecoration:"none",
           boxShadow:"0 0 24px rgba(0,255,136,0.12)", transition:"all .3s",
-        }}>▶ TRY FREE DEMO — NO SIGNUP</button>
+        }}>▶ TRY FREE DEMO — NO SIGNUP</a>
       </div>
     </div>
   );
@@ -638,7 +616,7 @@ function Nav() {
       </div>
       <div style={{display:"flex",gap:8}}>
         <a href="/leaderboard" style={{padding:"5px 14px",background:"rgba(255,215,0,0.08)",border:"1px solid rgba(255,215,0,0.3)",color:"#FFD700",fontSize:9,borderRadius:3,textDecoration:"none",letterSpacing:".1em",fontFamily:F}}>🏆 LEADERBOARD</a>
-        <button onClick={triggerDemoModal} style={{padding:"5px 14px",background:"rgba(0,255,136,0.12)",border:"1px solid rgba(0,255,136,0.4)",color:K.g,fontSize:9,borderRadius:3,cursor:"pointer",letterSpacing:".1em",fontFamily:F}}>▶ FREE DEMO</button>
+        <a href="/nexus" style={{padding:"5px 14px",background:"rgba(0,255,136,0.12)",border:"1px solid rgba(0,255,136,0.4)",color:K.g,fontSize:9,borderRadius:3,cursor:"pointer",letterSpacing:".1em",fontFamily:F,textDecoration:"none"}}>▶ FREE DEMO</a>
         <a href="/nexus?mode=live" style={{padding:"5px 14px",background:"rgba(0,242,254,0.12)",border:"1px solid rgba(0,242,254,0.4)",color:K.c,fontSize:9,borderRadius:3,textDecoration:"none",letterSpacing:".1em",fontFamily:F}}>⚡ LIVE →</a>
       </div>
     </div>
@@ -1142,7 +1120,7 @@ function DebateTerminal({onSignalChange}:{onSignalChange?:(s:string)=>void}={}) 
       </div>
       {/* CTAs */}
       <div style={{marginTop:28,display:'flex',gap:12}}>
-        <button onClick={triggerDemoModal} style={{flex:1,padding:14,background:'rgba(0,255,136,0.12)',border:'1.5px solid rgba(0,255,136,0.4)',borderRadius:8,textAlign:'center',color:K.g,fontSize:13,fontFamily:'monospace',fontWeight:700,cursor:'pointer',letterSpacing:'.08em',display:'block'}}>Watch AI Trade Live →</button>
+        <a href="/nexus" style={{flex:1,padding:14,background:'rgba(0,255,136,0.12)',border:'1.5px solid rgba(0,255,136,0.4)',borderRadius:8,textAlign:'center',color:K.g,fontSize:13,fontFamily:'monospace',fontWeight:700,cursor:'pointer',letterSpacing:'.08em',display:'block',textDecoration:'none'}}>Watch AI Trade Live →</a>
         <a href="/nexus?mode=live" style={{flex:1,padding:14,background:'rgba(0,242,254,0.08)',border:'1px solid rgba(0,242,254,0.3)',borderRadius:8,textAlign:'center',color:K.c,fontSize:13,fontFamily:'monospace',fontWeight:700,textDecoration:'none',letterSpacing:'.08em',display:'block'}}>⚡ Connect Phantom</a>
       </div>
     </div>
@@ -1852,9 +1830,9 @@ function ProofSection() {
                     <span style={{color:c,fontWeight:700,fontFamily:'monospace'}}>{v}</span>
                   </div>
                 ))}
-                <button onClick={triggerDemoModal} style={{display:'block',width:'100%',marginTop:8,padding:'11px',textAlign:'center',background:`${K.gold}15`,border:`1px solid ${K.gold}40`,color:K.gold,borderRadius:6,fontSize:10,cursor:'pointer',letterSpacing:'.1em',fontFamily:'monospace',fontWeight:700}}>
+                <a href="/nexus" style={{display:'block',width:'100%',marginTop:8,padding:'11px',textAlign:'center',background:`${K.gold}15`,border:`1px solid ${K.gold}40`,color:K.gold,borderRadius:6,fontSize:10,cursor:'pointer',letterSpacing:'.1em',fontFamily:'monospace',fontWeight:700,textDecoration:'none'}}>
                   ▶ GENERATE YOUR DNA →
-                </button>
+                </a>
               </div>
             </div>
           )}
@@ -2064,7 +2042,7 @@ function DisclaimerSection() {
 // ── Footer ────────────────────────────────────────────────────────────────────
 function PricingPreview() {
   const MINI_PLANS=[
-    {name:"SANDBOX",price:"Free",col:K.g,cta:"Start Now",link:"/nexus?mode=demo",demo:true},
+    {name:"SANDBOX",price:"Free",col:K.g,cta:"Start Now",link:"/nexus"},
     {name:"ALPHA",price:"$39.99/mo",col:K.c,cta:"7 Days Free",link:"/nexus?mode=live&plan=alpha",popular:true},
     {name:"PERFORMANCE",price:"10% wins",col:K.gold,cta:"7 Days Free",link:"/nexus?mode=live&plan=performance"},
     {name:"INSTITUTIONAL",price:"$499/mo",col:"#BD00FF",cta:"Contact Us",link:"mailto:contact@kymia.ai"},
@@ -2081,7 +2059,7 @@ function PricingPreview() {
               {p.popular&&<div style={{position:"absolute",top:-11,left:"50%",transform:"translateX(-50%)",padding:"3px 14px",background:"linear-gradient(90deg,#00F2FE,#0051FF)",borderRadius:20,fontSize:8,color:"white",fontWeight:700,letterSpacing:".12em",whiteSpace:"nowrap"}}>MOST POPULAR</div>}
               <div style={{fontSize:11,color:p.col,fontWeight:700,letterSpacing:".15em",marginBottom:8,fontFamily:F}}>{p.name}</div>
               <div style={{fontSize:17,fontWeight:900,color:"white",marginBottom:14,fontFamily:F}}>{p.price}</div>
-              {'demo' in p&&p.demo?<button onClick={triggerDemoModal} style={{display:"block",width:"100%",padding:"9px",background:`${p.col}15`,border:`1px solid ${p.col}35`,borderRadius:5,fontSize:10,color:p.col,cursor:"pointer",fontFamily:F,fontWeight:700}}>{p.cta}</button>:<a href={p.link} style={{display:"block",padding:"9px",background:`${p.col}15`,border:`1px solid ${p.col}35`,borderRadius:5,fontSize:10,color:p.col,textDecoration:"none",fontFamily:F,fontWeight:700,transition:"all .2s"}}>{p.cta}</a>}
+              <a href={p.link} style={{display:"block",padding:"9px",background:`${p.col}15`,border:`1px solid ${p.col}35`,borderRadius:5,fontSize:10,color:p.col,textDecoration:"none",fontFamily:F,fontWeight:700,transition:"all .2s"}}>{p.cta}</a>
             </div>
           ))}
         </div>
@@ -2160,13 +2138,6 @@ function Footer() {
 export default function LandingPage() {
   const [booted,setBooted]=useState(false);
   const [feedIdx,setFeedIdx]=useState(0);
-  const [showDemoLogin,setShowDemoLogin]=useState(false);
-
-  useEffect(()=>{
-    const h=()=>setShowDemoLogin(true);
-    window.addEventListener('kymia:demo',h);
-    return()=>window.removeEventListener('kymia:demo',h);
-  },[]);
   const [debateStep,setDebateStep]=useState(0);
   const [consensus,setConsensus]=useState(false);
   const [wordIdx,setWordIdx]=useState(0);
@@ -2265,11 +2236,11 @@ export default function LandingPage() {
           <div style={{display:"flex",flexDirection:"column",gap:10,marginBottom:14}}>
             <div className="kymia-cta-row" style={{display:"flex",gap:10,flexWrap:"wrap"}}>
               <div>
-                <button className="kymia-cta" onClick={triggerDemoModal} style={{display:"block",padding:"13px 24px",background:"rgba(0,255,136,0.12)",border:"1.5px solid rgba(0,255,136,0.5)",color:K.g,borderRadius:6,fontSize:14,cursor:"pointer",letterSpacing:".03em",fontFamily:F,fontWeight:700,transition:"all .25s"}}
+                <a className="kymia-cta" href="/nexus" style={{display:"block",padding:"13px 24px",background:"rgba(0,255,136,0.12)",border:"1.5px solid rgba(0,255,136,0.5)",color:K.g,borderRadius:6,fontSize:14,cursor:"pointer",letterSpacing:".03em",fontFamily:F,fontWeight:700,transition:"all .25s",textDecoration:"none"}}
                   onMouseEnter={e=>(e.currentTarget.style.boxShadow=`0 0 30px rgba(0,255,136,0.3)`)}
                   onMouseLeave={e=>(e.currentTarget.style.boxShadow="none")}>
                   Watch AI Trade Live →
-                </button>
+                </a>
                 <div style={{fontSize:9,color:K.dim,marginTop:5,letterSpacing:".1em"}}>Free · No signup · $10K virtual capital</div>
               </div>
               <div>
@@ -2518,9 +2489,9 @@ export default function LandingPage() {
             <div>
               <div style={{fontSize:15,color:K.hi,lineHeight:1.9,marginBottom:20}}>After every session, KYMIA generates your personal trading DNA — your execution speed, risk profile, behavioral bias, and swarm compatibility score.</div>
               <div style={{fontSize:13,color:K.dim,lineHeight:1.9,marginBottom:28}}>Share it on X. Compare with others.<br/><span style={{color:K.hi}}>Prove your alpha.</span></div>
-              <button onClick={triggerDemoModal} style={{display:"inline-block",padding:"12px 24px",background:"rgba(0,255,136,0.12)",border:"1.5px solid rgba(0,255,136,0.4)",color:K.g,borderRadius:6,fontSize:11,cursor:"pointer",letterSpacing:".08em",fontWeight:700}}>
+              <a href="/nexus" style={{display:"inline-block",padding:"12px 24px",background:"rgba(0,255,136,0.12)",border:"1.5px solid rgba(0,255,136,0.4)",color:K.g,borderRadius:6,fontSize:11,cursor:"pointer",letterSpacing:".08em",fontWeight:700,textDecoration:"none"}}>
                 ▶ LAUNCH SANDBOX TO GENERATE YOUR DNA
-              </button>
+              </a>
             </div>
           </Fade>
         </div>
@@ -2546,7 +2517,7 @@ export default function LandingPage() {
             <div style={{...PANEL,padding:"24px 32px",textAlign:"center",borderColor:`${K.gold}20`,background:`linear-gradient(135deg,rgba(6,10,18,.9) 0%,rgba(255,215,0,.03) 100%)`}}>
               <div style={{fontSize:20,fontWeight:900,color:K.gold,marginBottom:8}}>🎯 Can you beat the swarm?</div>
               <div style={{fontSize:12,color:K.dim,marginBottom:16}}>847 users tried. 23% won.</div>
-              <button onClick={triggerDemoModal} style={{display:"inline-block",padding:"10px 28px",background:`${K.gold}15`,border:`1px solid ${K.gold}40`,color:K.gold,borderRadius:4,fontSize:11,cursor:"pointer",letterSpacing:".1em",fontWeight:700}}>LAUNCH CHALLENGE →</button>
+              <a href="/nexus" style={{display:"inline-block",padding:"10px 28px",background:`${K.gold}15`,border:`1px solid ${K.gold}40`,color:K.gold,borderRadius:4,fontSize:11,cursor:"pointer",letterSpacing:".1em",fontWeight:700,textDecoration:"none"}}>LAUNCH CHALLENGE →</a>
             </div>
           </Fade>
         </div>
@@ -2580,7 +2551,7 @@ export default function LandingPage() {
           ))}
         </div>
         <div style={{textAlign:"center"}}>
-          <button onClick={triggerDemoModal} style={{fontSize:11,color:K.c,background:"none",border:"none",cursor:"pointer",letterSpacing:".12em",borderBottom:`1px solid ${K.c}40`,paddingBottom:2,fontFamily:F}}>→ VIEW FULL CRISIS REPLAY</button>
+          <a href="/nexus" style={{fontSize:11,color:K.c,background:"none",border:"none",cursor:"pointer",letterSpacing:".12em",borderBottom:`1px solid ${K.c}40`,paddingBottom:2,fontFamily:F,textDecoration:"none"}}>→ VIEW FULL CRISIS REPLAY</a>
         </div>
       </section>
 
@@ -2600,18 +2571,13 @@ export default function LandingPage() {
         <Fade delay={.18}>
           <div className="kymia-cta-row" style={{display:"flex",gap:16,justifyContent:"center",marginBottom:16,flexWrap:"wrap",position:"relative"}}>
             {[
-              {href:"/nexus?mode=demo",txt:"Watch AI Trade Live →",sub:"Free · No signup · $10K virtual capital",col:K.g,bg:"rgba(0,255,136,0.12)",brd:"2px solid rgba(0,255,136,0.5)",glow:"rgba(0,255,136,0.3)",demo:true},
+              {href:"/nexus",txt:"Watch AI Trade Live →",sub:"Free · No signup · $10K virtual capital",col:K.g,bg:"rgba(0,255,136,0.12)",brd:"2px solid rgba(0,255,136,0.5)",glow:"rgba(0,255,136,0.3)"},
               {href:"/nexus?mode=live",txt:"⚡ Connect Phantom → Real Trading",sub:"Non-custodial · Your keys · Real Solana",col:K.c,bg:"rgba(0,242,254,0.12)",brd:"2px solid rgba(0,242,254,0.5)",glow:"rgba(0,242,254,0.3)"},
             ].map(b=>(
               <div key={b.href}>
-                {'demo' in b&&b.demo
-                  ?<button className="kymia-cta" onClick={triggerDemoModal} style={{display:"block",padding:"16px 36px",background:b.bg,border:b.brd,color:b.col,borderRadius:8,fontSize:15,cursor:"pointer",letterSpacing:".04em",fontFamily:F,fontWeight:700,transition:"all .25s"}}
-                    onMouseEnter={e=>(e.currentTarget.style.boxShadow=`0 0 40px ${b.glow}`)}
-                    onMouseLeave={e=>(e.currentTarget.style.boxShadow="")}>{b.txt}</button>
-                  :<a className="kymia-cta" href={b.href} style={{display:"block",padding:"16px 36px",background:b.bg,border:b.brd,color:b.col,borderRadius:8,fontSize:15,textDecoration:"none",letterSpacing:".04em",fontFamily:F,fontWeight:700,transition:"all .25s"}}
+                <a className="kymia-cta" href={b.href} style={{display:"block",padding:"16px 36px",background:b.bg,border:b.brd,color:b.col,borderRadius:8,fontSize:15,textDecoration:"none",letterSpacing:".04em",fontFamily:F,fontWeight:700,transition:"all .25s"}}
                     onMouseEnter={e=>(e.currentTarget.style.boxShadow=`0 0 40px ${b.glow}`)}
                     onMouseLeave={e=>(e.currentTarget.style.boxShadow="")}>{b.txt}</a>
-                }
                 <div style={{fontSize:9,color:K.dim,marginTop:7,letterSpacing:".1em"}}>{b.sub}</div>
               </div>
             ))}
@@ -2633,7 +2599,6 @@ export default function LandingPage() {
       <PricingPreview/>
       <DisclaimerSection/>
       <Footer/>
-      {showDemoLogin&&<DemoLoginModal onClose={()=>setShowDemoLogin(false)}/>}
 
       <style>{`
         @keyframes agentPop{0%{opacity:0;transform:translateX(-50%) translateY(-10px)}15%{opacity:1;transform:translateX(-50%) translateY(0)}75%{opacity:1}100%{opacity:0;transform:translateX(-50%) translateY(-15px)}}
