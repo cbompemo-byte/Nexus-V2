@@ -4,7 +4,6 @@ import { closeLiveTrade } from "../../lib/closeLiveTrade";
 import { openLiveTrade } from "../../lib/openLiveTrade";
 import { supabase } from "../../lib/supabase";
 import { motion, useAnimationControls } from "framer-motion";
-import * as THREE from "three";
 
 const K={c:"#00F2FE",r:"#FF3366",g:"#00FF88",gold:"#FFD700",pu:"#BD00FF",co:"#0044EE",bg:"#04060D",pan:"#060A12",brd:"#0A1D33",dim:"#2A5070",hi:"#A8D0EC",tx:"#4A7090"};
 const CAP=10000;
@@ -915,7 +914,7 @@ function ConfirmCloseModal({sym,onCancel,onConfirm}:{sym:string,onCancel:()=>voi
 }
 
 function Globe3D({trades,blackSwan,whaleAlert,totalPnL,tradeCount,agSt,running}:{trades:Trade[],blackSwan:boolean,whaleAlert:boolean,totalPnL:number,tradeCount:number,agSt:{[k:string]:AgentState},running:boolean}){
-  const mountRef=useRef<HTMLDivElement>(null);
+  const canvasRef=useRef<HTMLCanvasElement|null>(null);
   const [moneyLabels,setMoneyLabels]=useState<MoneyLabel[]>([]);
   const [activeAgentLabel,setActiveAgentLabel]=useState<{agentId:string,signal:string,conf:number,col:string}|null>(null);
   const agStGlobeRef=useRef(agSt);
@@ -941,15 +940,12 @@ function Globe3D({trades,blackSwan,whaleAlert,totalPnL,tradeCount,agSt,running}:
   },[running,showAgentOnGlobe]);
   const W=280,H=248;
   const prevLen=useRef(0);
-  const arcsRef=useRef<THREE.Line[]>([]);
-  const rendererRef=useRef<THREE.WebGLRenderer|null>(null);
-  const sceneRef=useRef<THREE.Scene|null>(null);
 
   // Session: which market is open by UTC hour
   const h=new Date().getUTCHours();
   const session=h<8?{name:"ASIA",col:K.gold}:h<15?{name:"EU",col:K.c}:{name:"US",col:K.g};
 
-  // Trade fires → money label + arc
+  // Trade fires → money label
   useEffect(()=>{
     if(trades.length>prevLen.current){
       const t=trades[0];
@@ -967,155 +963,177 @@ function Globe3D({trades,blackSwan,whaleAlert,totalPnL,tradeCount,agSt,running}:
     return()=>clearInterval(iv);
   },[]);
 
-  // Three.js Earth setup
+  // Canvas 2D globe — pure trig, no WebGL, no eval
   useEffect(()=>{
-    const mount=mountRef.current;if(!mount)return;
-    const scene=new THREE.Scene();
-    sceneRef.current=scene;
-    const camera=new THREE.PerspectiveCamera(45,W/H,.1,1000);
-    camera.position.z=2.8;
-    const renderer=new THREE.WebGLRenderer({antialias:true,alpha:true});
-    rendererRef.current=renderer;
-    renderer.setSize(W,H);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
-    renderer.setClearColor(0x000000,0);
-    mount.appendChild(renderer.domElement);
+    const canvas=canvasRef.current;if(!canvas)return;
+    const ctx=canvas.getContext('2d');if(!ctx)return;
+    const cx=W/2,cy=H/2-8,R=92;
+    const CITIES:[number,number,string][]=[
+      [40.7,-74,"NYC"],[51.5,0,"LON"],[35.7,139.7,"TYO"],
+      [1.3,103.8,"SGP"],[25.2,55.3,"DXB"],[22.3,114.2,"HKG"],
+    ];
+    const CITY_COLS=[K.g,K.c,K.gold,K.c,K.pu,K.c];
+    const arcColor=blackSwan?K.r:K.c;
 
-    // Globe group with tilt
-    const globeGroup=new THREE.Group();
-    globeGroup.rotation.z=0.2;
-    scene.add(globeGroup);
-
-    // Earth sphere with Phong material + texture
-    const earthGeo=new THREE.SphereGeometry(1,64,64);
-    const loader=new THREE.TextureLoader();
-    const earthMat=new THREE.MeshPhongMaterial({color:0x1a3a5c,shininess:8,specular:new THREE.Color(0x112244)});
-    const earthMesh=new THREE.Mesh(earthGeo,earthMat);
-    globeGroup.add(earthMesh);
-    // Load texture async — won't block render
-    loader.load("https://unpkg.com/three-globe/example/img/earth-blue-marble.jpg",(tex)=>{earthMat.map=tex;earthMat.needsUpdate=true;});
-
-    // City markers via lat/lng → sphere surface
-    const CITIES:Array<[number,number,string]>=[[40.7,-74,"NYC"],[51.5,0,"LON"],[35.7,139.7,"TYO"],[1.3,103.8,"SGP"],[25.2,55.3,"DXB"],[22.3,114.2,"HKG"]];
-    const latLonToVec3=(lat:number,lon:number,r=1.02)=>{
-      const phi=(90-lat)*Math.PI/180,th=(lon+180)*Math.PI/180;
-      return new THREE.Vector3(r*Math.sin(phi)*Math.cos(th),r*Math.cos(phi),r*Math.sin(phi)*Math.sin(th));
+    // Orthographic projection: lat/lon+rotY → {x,y,z(depth)}
+    const proj=(lat:number,lon:number,rotDeg:number)=>{
+      const phi=(90-lat)*Math.PI/180;
+      const theta=(lon-rotDeg)*Math.PI/180;
+      const x3=Math.sin(phi)*Math.cos(theta);
+      const y3=Math.cos(phi);
+      const z3=Math.sin(phi)*Math.sin(theta);
+      return {x:cx+R*x3,y:cy-R*y3,z:z3,vis:z3>=-0.08};
     };
-    const cityPositions=new Float32Array(CITIES.length*3);
-    const cityColors=new Float32Array(CITIES.length*3);
-    CITIES.forEach(([lat,lon],i)=>{
-      const v=latLonToVec3(lat,lon);
-      cityPositions[i*3]=v.x;cityPositions[i*3+1]=v.y;cityPositions[i*3+2]=v.z;
-      const cc=new THREE.Color(blackSwan?K.r:K.g);
-      cityColors[i*3]=cc.r;cityColors[i*3+1]=cc.g;cityColors[i*3+2]=cc.b;
-    });
-    const cityGeo=new THREE.BufferGeometry();
-    cityGeo.setAttribute("position",new THREE.BufferAttribute(cityPositions,3));
-    cityGeo.setAttribute("color",new THREE.BufferAttribute(cityColors,3));
-    const cityMat=new THREE.PointsMaterial({size:.06,vertexColors:true,transparent:true,opacity:.95,depthWrite:false});
-    globeGroup.add(new THREE.Points(cityGeo,cityMat));
 
-    // Atmosphere glow — BackSide shell
-    const atmoGeo=new THREE.SphereGeometry(1.08,32,32);
-    const atmoMat=new THREE.MeshBasicMaterial({color:blackSwan?new THREE.Color(K.r):new THREE.Color(0x0044ff),transparent:true,opacity:.06,side:THREE.BackSide,depthWrite:false});
-    scene.add(new THREE.Mesh(atmoGeo,atmoMat));
-    const atmoGeo2=new THREE.SphereGeometry(1.14,32,32);
-    const atmoMat2=new THREE.MeshBasicMaterial({color:blackSwan?new THREE.Color(K.r):new THREE.Color(0x0066ff),transparent:true,opacity:.025,side:THREE.BackSide,depthWrite:false});
-    scene.add(new THREE.Mesh(atmoGeo2,atmoMat2));
+    // Stars — fixed random positions (pre-computed once)
+    const STARS=Array.from({length:120},()=>({
+      x:Math.random()*W,y:Math.random()*H,
+      r:Math.random()*1.1+0.3,a:Math.random()*0.6+0.1,
+    }));
 
-    // Star field — 3000 points in a large sphere
-    const starPos=new Float32Array(3000*3);
-    for(let i=0;i<3000;i++){
-      const r=80+Math.random()*120;
-      const th2=Math.random()*Math.PI*2,ph=Math.acos(2*Math.random()-1);
-      starPos[i*3]=r*Math.sin(ph)*Math.cos(th2);starPos[i*3+1]=r*Math.sin(ph)*Math.sin(th2);starPos[i*3+2]=r*Math.cos(ph);
-    }
-    const starGeo=new THREE.BufferGeometry();
-    starGeo.setAttribute("position",new THREE.BufferAttribute(starPos,3));
-    const starMat=new THREE.PointsMaterial({size:.4,color:0xffffff,transparent:true,opacity:.55,depthWrite:false});
-    scene.add(new THREE.Points(starGeo,starMat));
+    interface ArcState{a:number;b:number;prog:number;op:number}
+    let arcs:ArcState[]=[];
+    let rotDeg=0,af:number,lastArc=0;
+    // Staggered ping phases per city
+    const pingT=CITIES.map((_,i)=>i/CITIES.length);
 
-    // Sun directional light (from upper-right)
-    const sun=new THREE.DirectionalLight(0xfff0cc,1.4);
-    sun.position.set(5,3,5);
-    scene.add(sun);
-    // Rim light (opposite)
-    const rim=new THREE.DirectionalLight(blackSwan?0xff2244:0x0044ff,0.3);
-    rim.position.set(-5,-2,-4);
-    scene.add(rim);
-    scene.add(new THREE.AmbientLight(0x111122,.5));
+    const draw=(ts:number)=>{
+      ctx.clearRect(0,0,W,H);
+      rotDeg=(rotDeg+0.17)%360;
 
-    // City ping rings — permanent pulsing radar waves per city
-    const PING_COLORS=[K.g,K.c,K.gold,K.c,K.pu,K.c];
-    const pingRings:{mesh:THREE.Mesh,mat:THREE.MeshBasicMaterial}[]=[];
-    CITIES.forEach(([lat,lon],i)=>{
-      const v=latLonToVec3(lat,lon,1.03);
-      const ringGeo=new THREE.RingGeometry(0.001,0.04,24);
-      const ringMat=new THREE.MeshBasicMaterial({color:new THREE.Color(PING_COLORS[i]||K.c),transparent:true,opacity:0,side:THREE.DoubleSide,depthWrite:false});
-      const ring=new THREE.Mesh(ringGeo,ringMat);
-      ring.position.copy(v);
-      ring.lookAt(new THREE.Vector3(0,0,0));
-      ring.rotateX(Math.PI/2);
-      globeGroup.add(ring);
-      pingRings.push({mesh:ring,mat:ringMat});
-    });
-
-    // Trade arc spawner — fires every 2s between random city pairs
-    const addArc=()=>{
-      const a=CITIES[Math.floor(Math.random()*CITIES.length)];
-      const b=CITIES[Math.floor(Math.random()*CITIES.length)];
-      if(a===b)return;
-      const va=latLonToVec3(a[0],a[1],1.02);
-      const vb=latLonToVec3(b[0],b[1],1.02);
-      const mid=va.clone().add(vb).multiplyScalar(0.5).normalize().multiplyScalar(1.5);
-      const curve=new THREE.QuadraticBezierCurve3(va,mid,vb);
-      const pts=curve.getPoints(40);
-      const arcGeo=new THREE.BufferGeometry().setFromPoints(pts);
-      const arcMat=new THREE.LineBasicMaterial({color:blackSwan?new THREE.Color(K.r):new THREE.Color(K.c),transparent:true,opacity:.7});
-      const arc=new THREE.Line(arcGeo,arcMat);
-      globeGroup.add(arc);
-      arcsRef.current.push(arc);
-      // Fade out and remove after 1.5s
-      let op=.7;
-      const fade=setInterval(()=>{op-=.05;arcMat.opacity=Math.max(0,op);if(op<=0){clearInterval(fade);globeGroup.remove(arc);arcGeo.dispose();arcMat.dispose();arcsRef.current=arcsRef.current.filter(l=>l!==arc);}},50);
-    };
-    const arcIv=setInterval(addArc,2000);
-
-    let af:number,angle=0;
-    const tick=()=>{
-      af=requestAnimationFrame(tick);
-      angle+=.003;
-      globeGroup.rotation.y=angle;
-      // Animate city ping rings
-      const now=performance.now();
-      pingRings.forEach(({mesh,mat},idx)=>{
-        const period=3000;
-        const offset=idx*(period/CITIES.length);
-        const t=((now+offset)%period)/period;
-        mesh.scale.setScalar(t*18+0.01);
-        mat.opacity=Math.max(0,0.7*(1-t*1.4));
+      // Stars behind globe
+      STARS.forEach(s=>{
+        ctx.beginPath();
+        ctx.arc(s.x,s.y,s.r,0,Math.PI*2);
+        ctx.fillStyle=`rgba(255,255,255,${s.a})`;
+        ctx.fill();
       });
-      renderer.render(scene,camera);
+
+      // Sphere body — radial gradient
+      const grad=ctx.createRadialGradient(cx-R*0.28,cy-R*0.28,2,cx,cy,R);
+      grad.addColorStop(0,blackSwan?'#2a0010':'#0d2a4a');
+      grad.addColorStop(0.55,blackSwan?'#12000a':'#041828');
+      grad.addColorStop(1,'#010408');
+      ctx.beginPath();ctx.arc(cx,cy,R,0,Math.PI*2);
+      ctx.fillStyle=grad;ctx.fill();
+
+      // Atmosphere glow rings
+      for(let g=0;g<4;g++){
+        const alpha=blackSwan?0.04-g*0.008:0.05-g*0.01;
+        if(alpha<=0)break;
+        ctx.beginPath();ctx.arc(cx,cy,R+3+g*5,0,Math.PI*2);
+        ctx.strokeStyle=blackSwan?`rgba(255,30,60,${alpha})`:`rgba(0,80,255,${alpha})`;
+        ctx.lineWidth=4;ctx.stroke();
+      }
+
+      // Grid lines — latitude (horizontal ellipses)
+      ctx.setLineDash([2,5]);ctx.lineWidth=0.4;
+      for(let lat=-60;lat<=60;lat+=30){
+        const phi=(90-lat)*Math.PI/180;
+        const ry=R*Math.cos(phi);
+        const rx=R*Math.sin(phi);
+        if(rx<1)continue;
+        ctx.beginPath();
+        ctx.ellipse(cx,cy-ry,rx,rx*0.14,0,0,Math.PI*2);
+        ctx.strokeStyle='rgba(0,120,200,0.14)';ctx.stroke();
+      }
+      // Grid lines — longitude (vertical great-circle segments, front hemisphere only)
+      ctx.setLineDash([]);
+      for(let lon=0;lon<360;lon+=30){
+        const effLon=(lon-rotDeg+360)%360;
+        const front=effLon<90||effLon>270;
+        ctx.beginPath();
+        let first=true;
+        for(let lat2=-85;lat2<=85;lat2+=5){
+          const p=proj(lat2,lon,rotDeg);
+          if(!p.vis){first=true;continue;}
+          if(first){ctx.moveTo(p.x,p.y);first=false;}
+          else ctx.lineTo(p.x,p.y);
+        }
+        ctx.strokeStyle=front?'rgba(0,120,200,0.10)':'rgba(0,80,140,0.04)';
+        ctx.lineWidth=0.4;ctx.stroke();
+      }
+
+      // Projected city positions for this frame
+      const cityPos=CITIES.map((c,i)=>({...proj(c[0],c[1],rotDeg),col:CITY_COLS[i],idx:i}));
+
+      // Spawn arc every 2s
+      if(ts-lastArc>2000){
+        const a=Math.floor(Math.random()*CITIES.length);
+        let b=a;while(b===a)b=Math.floor(Math.random()*CITIES.length);
+        arcs.push({a,b,prog:0,op:0.75});lastArc=ts;
+      }
+
+      // Draw + update arcs (great-circle interpolation in 3D, then project)
+      arcs=arcs.map(arc=>{
+        arc.prog=Math.min(1,arc.prog+0.014);
+        if(arc.prog>=0.98)arc.op=Math.max(0,arc.op-0.035);
+        return arc;
+      }).filter(arc=>arc.op>0);
+
+      arcs.forEach(arc=>{
+        const ci=CITIES[arc.a],cj=CITIES[arc.b];
+        const steps=Math.ceil(arc.prog*32);if(steps<2)return;
+        // 3D unit vectors for both cities (with current rotation)
+        const toV=(lat:number,lon:number)=>{
+          const phi=(90-lat)*Math.PI/180,th=(lon-rotDeg)*Math.PI/180;
+          return [Math.sin(phi)*Math.cos(th),Math.cos(phi),Math.sin(phi)*Math.sin(th)] as [number,number,number];
+        };
+        const va=toV(ci[0],ci[1]),vb=toV(cj[0],cj[1]);
+        ctx.beginPath();let first2=true;
+        for(let s=0;s<=steps;s++){
+          const t=s/32;
+          const ix=va[0]+(vb[0]-va[0])*t,iy=va[1]+(vb[1]-va[1])*t,iz=va[2]+(vb[2]-va[2])*t;
+          const len=Math.sqrt(ix*ix+iy*iy+iz*iz)||1;
+          // Lift arc slightly off surface (1.06x) for visibility
+          const px=cx+R*1.06*(ix/len),py=cy-R*1.06*(iy/len),pz=iz/len;
+          if(pz<-0.05){first2=true;continue;}
+          if(first2){ctx.moveTo(px,py);first2=false;}else ctx.lineTo(px,py);
+        }
+        ctx.strokeStyle=arcColor;ctx.lineWidth=0.9;
+        ctx.globalAlpha=arc.op;ctx.stroke();
+        // Soft glow pass
+        ctx.lineWidth=3;ctx.globalAlpha=arc.op*0.12;ctx.stroke();
+        ctx.globalAlpha=1;
+      });
+
+      // City ping rings (pulsing radar)
+      CITIES.forEach((_,i)=>{
+        const p=cityPos[i];if(!p.vis)return;
+        pingT[i]=(pingT[i]+0.004)%1;
+        const rs=pingT[i]*22+1;
+        const alpha=Math.max(0,0.65*(1-pingT[i]*1.45));
+        if(alpha<=0)return;
+        ctx.beginPath();ctx.arc(p.x,p.y,rs,0,Math.PI*2);
+        ctx.strokeStyle=p.col;ctx.lineWidth=0.7;
+        ctx.globalAlpha=alpha;ctx.stroke();ctx.globalAlpha=1;
+      });
+
+      // City dots (visible hemisphere only)
+      cityPos.forEach(p=>{
+        if(!p.vis)return;
+        // Glow halo
+        const hg=ctx.createRadialGradient(p.x,p.y,0,p.x,p.y,7);
+        hg.addColorStop(0,p.col+'60');hg.addColorStop(1,'transparent');
+        ctx.beginPath();ctx.arc(p.x,p.y,7,0,Math.PI*2);
+        ctx.fillStyle=hg;ctx.fill();
+        // Dot
+        ctx.beginPath();ctx.arc(p.x,p.y,2.5,0,Math.PI*2);
+        ctx.fillStyle=p.col;ctx.globalAlpha=0.95;ctx.fill();ctx.globalAlpha=1;
+      });
+
+      af=requestAnimationFrame(draw);
     };
-    tick();
-    return()=>{
-      cancelAnimationFrame(af);
-      clearInterval(arcIv);
-      if(mount.contains(renderer.domElement))mount.removeChild(renderer.domElement);
-      renderer.dispose();
-      earthGeo.dispose();earthMat.dispose();cityGeo.dispose();cityMat.dispose();
-      atmoGeo.dispose();atmoMat.dispose();atmoGeo2.dispose();atmoMat2.dispose();
-      starGeo.dispose();starMat.dispose();
-      pingRings.forEach(({mat})=>mat.dispose());
-    };
+    af=requestAnimationFrame(draw);
+    return()=>cancelAnimationFrame(af);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[blackSwan]);
 
   const pnl=totalPnL;
   return(
     <div style={{position:"relative",width:W,height:270}}>
-      {/* Three.js canvas */}
-      <div ref={mountRef} style={{position:"absolute",top:0,left:0,width:W,height:H}}/>
+      {/* Canvas globe — 2D, no WebGL */}
+      <canvas ref={canvasRef} width={W} height={H} style={{position:"absolute",top:0,left:0,display:"block"}}/>
 
       {/* HUD overlay */}
       <svg width={W} height={H} style={{position:"absolute",top:0,left:0,pointerEvents:"none",overflow:"visible"}}>
