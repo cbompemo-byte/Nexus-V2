@@ -2511,7 +2511,7 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
     lastLoggedCycleRef.current=all.reduce((mx,v)=>v.cycle_ts>mx?v.cycle_ts:mx,"");
     fresh.slice(0,8).forEach(v=>{
       const col=v.vote==='APPROVE'?K.g:v.vote==='REJECT'?K.r:K.tx;
-      log(v.agent.toUpperCase().slice(0,5),`[${v.symbol}] ${v.reason}`.slice(0,90),col);
+      log((v.agent??'').toUpperCase().slice(0,5),`[${v.symbol??''}] ${v.reason??''}`.slice(0,90),col);
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[agentFeed]);
@@ -2659,7 +2659,7 @@ export default function KYMIA({isLive=false}:{isLive?:boolean}){
       .on('postgres_changes',{event:'INSERT',schema:'public',table:'kymia_signals',filter:`user_id=eq.${user.id}`},payload=>{
         const s=payload.new as any;
         setAgSt(prev=>({...prev,[s.agent_id]:{...prev[s.agent_id],sig:s.signal,conf:s.confidence,th:s.reasoning,on:true,real:true}}));
-        log(s.agent_id.toUpperCase(),s.reasoning,s.signal==='BUY'?K.g:s.signal==='SELL'?K.r:K.dim);
+        log((s.agent_id??'').toUpperCase(),s.reasoning??'',s.signal==='BUY'?K.g:s.signal==='SELL'?K.r:K.dim);
       })
       .subscribe();
     const tradeChannel=supabase.channel('agent-trades')
@@ -4593,15 +4593,16 @@ Stats: $${CAP} → $${f2(port.equity)}, P&L: ${fU(pnl)}, Trades: ${trades.length
                 <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:14}}>
                   {verdicts.map((d,i)=>{
                     const col=d.vote==="APPROVE"?K.g:d.vote==="REJECT"?K.r:K.tx;
+                    const agentLabel=(d.agent??'').toUpperCase();
                     return(
-                      <div key={d.agent} style={{display:"flex",gap:10,flexDirection:i%2===0?"row":"row-reverse",animation:"fi .4s ease forwards",opacity:0,animationDelay:(i*.12)+"s"}}>
+                      <div key={d.agent??i} style={{display:"flex",gap:10,flexDirection:i%2===0?"row":"row-reverse",animation:"fi .4s ease forwards",opacity:0,animationDelay:(i*.12)+"s"}}>
                         <div style={{width:48,height:48,borderRadius:3,background:col+"14",border:"1.5px solid "+col+"40",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-                          <div style={{fontSize:8,color:col,fontWeight:700}}>{d.agent.toUpperCase().slice(0,5)}</div>
+                          <div style={{fontSize:8,color:col,fontWeight:700}}>{agentLabel.slice(0,5)}</div>
                           <div style={{fontSize:8,color:K.dim}}>{d.confidence}%</div>
                         </div>
                         <div style={{flex:1,background:"#060C16",border:"1px solid "+col+"22",borderRadius:3,padding:"8px 12px"}}>
                           <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
-                            <span style={{fontSize:9,color:K.dim}}>{d.agent.toUpperCase()}</span>
+                            <span style={{fontSize:9,color:K.dim}}>{agentLabel}</span>
                             <span style={{padding:"1px 6px",background:col+"20",color:col,fontSize:8,borderRadius:1}}>{d.vote} {d.confidence}%</span>
                           </div>
                           <p style={{fontSize:11,color:K.hi,lineHeight:1.5}}>{d.reason}</p>
