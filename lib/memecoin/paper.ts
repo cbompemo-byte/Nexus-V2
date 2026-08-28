@@ -2,19 +2,28 @@
 // KYMIA Phase 1 — Trades fictifs memecoin (R9 — observation uniquement).
 // Aucun swap réel. Taille fictive : 4 USDC (2% de 200 USDC de référence).
 //
-// SL ladder (R9) :
+// SL ladder (R9 — INCHANGÉE) :
 //   Ouverture   : SL = entry × 0.85  (-15%)
 //   Après TP1   : SL → entry         (breakeven)
 //   Après TP2   : SL → entry × 1.20  (+20%)
 //   Après TP3   : SL → entry × 1.50  (+50%)
-//   TP4         : trailing stop 22% sous le high depuis l'entrée
+//
+// Sortie trailing (V2-C ACTIF depuis 2026-08-29) :
+//   Remplace le trailing V1 fixe à 22% (TP4).
+//   Activation dès mfeRatio >= 1.30 (+30%), avant même TP3.
+//   Distances : +30–60% → 18% | +60–100% → 20% | +100–200% → 25% | ≥+200% → 35%
+//   Status de fermeture : V2C_TRAIL_HIT (distingué de SL_HIT dans les stats)
+//
+// Positions migrées : celles ouvertes AVANT ce déploiement (ex. GASSPAS)
+//   sont taguées migrated_to_v2c=true en base — à exclure des stats propres.
 
 import { SupabaseClient } from '@supabase/supabase-js'
+import { trailDistC }     from './shadow'
 
 const DEXSCREENER    = 'https://api.dexscreener.com'
 const RUGCHECK       = 'https://api.rugcheck.xyz/v1'
 const PAPER_SIZE     = 4      // USDC fictifs par trade (2% × 200 ref)
-const TRAILING_PCT   = 0.22   // trailing stop TP4
+// TRAILING_PCT = 0.22   ← V1 legacy, remplacé par trailDistC (shadow V1 dans shadow.ts)
 
 // Facteurs de la ladder (par rapport à entry_price)
 const SL_INIT        = 0.85
@@ -200,24 +209,39 @@ export async function updatePaperTrades(supabase: SupabaseClient): Promise<void>
         tp3Hit = true
         console.log(`[paper] ${trade.symbol} TP3 +100% @ $${cur.toFixed(6)} — SL → +50% $${slNew.toFixed(6)}`)
       }
-      // ── Trailing stop TP4 (après TP3, 25% restant) ───────────────────────
-      else if (tp3Hit) {
-        const trailSl = trailHigh * (1 - TRAILING_PCT)
-        slNew = trailSl   // mis à jour pour l'affichage
-        if (cur <= trailSl) {
-          status      = 'TP4_TRAIL_HIT'
-          closeReason = `trailing SL $${trailSl.toFixed(6)} (high $${trailHigh.toFixed(6)})`
-          pnl        += (cur - entry) / entry * PAPER_SIZE * qty
+      // ── V2-C dynamic trailing (actif dès mfeRatio >= 1.30 = +30%) ──────
+      // Remplace le trailing V1 fixe à 22%. Couvre la qty restante après
+      // partials TP1/TP2/TP3. Peut se déclencher avant TP3 (capture les
+      // +30–90% que V1 laissait courir jusqu'au SL ladder).
+      else {
+        const mfeRatio = trailHigh / entry
+        const dist     = trailDistC(mfeRatio)
+        if (dist !== null) {
+          const v2cSl = trailHigh * (1 - dist)
+          slNew = v2cSl   // reflété dans sl_current pour l'affichage dashboard
+          if (cur <= v2cSl) {
+            status      = 'V2C_TRAIL_HIT'
+            closeReason = `V2-C trail $${v2cSl.toFixed(6)} (high $${trailHigh.toFixed(6)}, dist=${(dist * 100).toFixed(0)}%, mfe=+${((mfeRatio - 1) * 100).toFixed(0)}%)`
+            pnl        += (cur - entry) / entry * PAPER_SIZE * qty
+            console.log(
+              `[paper] ${trade.symbol} V2C_TRAIL_HIT @ $${cur.toFixed(6)}` +
+              ` | mfe=+${((mfeRatio - 1) * 100).toFixed(0)}%` +
+              ` | dist=${(dist * 100).toFixed(0)}%` +
+              ` | SL=$${v2cSl.toFixed(6)}` +
+              ` | pnl=${(pnl >= 0 ? '+' : '')}${pnl.toFixed(4)} USDC`
+            )
+          }
         }
       }
 
-      const isClosed = ['SL_HIT', 'TP4_TRAIL_HIT', 'TIME_STOP_48H', 'RUGGED', 'EXIT_CHECK_FAILED'].includes(status)
+      const isClosed = ['SL_HIT', 'TP4_TRAIL_HIT', 'V2C_TRAIL_HIT', 'TIME_STOP_48H', 'RUGGED', 'EXIT_CHECK_FAILED'].includes(status)
 
       await supabase
         .from('kymia_memecoin_paper')
         .update({
           current_price:    cur,
           high_since_entry: Math.max(Number(trade.high_since_entry ?? entry), cur),
+          low_since_entry:  Math.min(Number(trade.low_since_entry  ?? cur),   cur),
           sl_current:       slNew,
           qty_remaining:    Math.max(0, qty),
           trailing_high:    trailHigh,

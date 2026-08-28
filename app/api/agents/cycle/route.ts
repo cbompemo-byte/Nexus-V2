@@ -4,6 +4,7 @@ import { getQuote, toRawAmount } from '@/lib/solana/jupiter'
 import { MINTS as SOL_MINTS, getTokenBalance } from '@/lib/solana/wallet'
 import { runMemeScreening } from '@/lib/memecoin/screen'
 import { updatePaperTrades, recheckOpenPositions } from '@/lib/memecoin/paper'
+import { updateShadowTrailing }                   from '@/lib/memecoin/shadow'
 import { CycleContext, AgentVerdict } from '@/lib/agents/types'
 import { computeConfluence, ConfluenceResult } from '@/lib/agents/confluence'
 import { regimeAgent }   from '@/lib/agents/regime'
@@ -503,10 +504,19 @@ function scoreAndAppend(
 // (5 min). Screening complet limité à 1× par 15 min pour ménager les APIs.
 async function runMemecoinsModule(supabase: SupabaseClient) {
   // Position updates + hourly rechecks — chaque cycle (5 min)
-  await Promise.allSettled([
+  const memecoinSettled = await Promise.allSettled([
     updatePaperTrades(supabase),
     recheckOpenPositions(supabase),
+    updateShadowTrailing(supabase),   // shadows V1/V2-A/V2-B — non-fatal, write-only
   ])
+  // Inspecter les rejets — sans ça les exceptions sont avalées silencieusement
+  const memecoinLabels = ['updatePaperTrades', 'recheckOpenPositions', 'updateShadowTrailing']
+  for (let i = 0; i < memecoinSettled.length; i++) {
+    const r = memecoinSettled[i]
+    if (r.status === 'rejected') {
+      console.error(`[memecoin] ${memecoinLabels[i]} REJECTED:`, r.reason?.message ?? r.reason)
+    }
+  }
 
   // Rate-limit screening via DB — une seule requête, indépendant du cold start
   const { data: lastRow } = await supabase
