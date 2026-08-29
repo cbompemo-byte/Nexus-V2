@@ -352,7 +352,8 @@ function computeMetrics(events: SwapEvent[], windowDays: number): WalletMetrics 
 function applyBotFilters(
   swapCount:   number,
   m:           WalletMetrics,
-): { verdict: 'VERIFIED' | 'REJECTED'; reason: string | null } {
+): { verdict: 'VERIFIED' | 'REJECTED' | 'INSUFFICIENT_DATA' | 'QUALIFIED'; reason: string | null } {
+  // ── 1. Détection bot (prioritaire — rejette même si données insuffisantes) ──
   if (swapCount > BOT_SWAP_COUNT_MAX) {
     return { verdict: 'REJECTED', reason: `swap_count_90d=${swapCount} > ${BOT_SWAP_COUNT_MAX} (fréquence bot)` }
   }
@@ -365,6 +366,26 @@ function applyBotFilters(
   if (m.uniqueTokensPerDay > BOT_TOKENS_PER_DAY_MAX) {
     return { verdict: 'REJECTED', reason: `unique_tokens_per_day=${m.uniqueTokensPerDay.toFixed(1)} > ${BOT_TOKENS_PER_DAY_MAX} (scatter bot)` }
   }
+
+  // ── 2. Données suffisantes ────────────────────────────────────────────────
+  if (swapCount === 0) {
+    return { verdict: 'INSUFFICIENT_DATA', reason: 'no_swap_detected (DEX possiblement non reconnu par Helius type=SWAP)' }
+  }
+  if (m.tradesClosed < 5) {
+    return { verdict: 'INSUFFICIENT_DATA', reason: `trades_closed=${m.tradesClosed} < 5 (positions ouvertes ou historique insuffisant)` }
+  }
+  if (m.pnl90dSol === null && m.pnl90dUsdc === null) {
+    return { verdict: 'INSUFFICIENT_DATA', reason: 'pnl_non_calculable (dénominations mixtes sur tous les trades)' }
+  }
+
+  // ── 3. Performance — QUALIFIED ────────────────────────────────────────────
+  const pnlPositive = (m.pnl90dSol !== null && m.pnl90dSol > 0) ||
+                      (m.pnl90dUsdc !== null && m.pnl90dUsdc > 0)
+  if (m.tradesClosed >= 10 && m.winRate !== null && m.winRate > 0.5 && pnlPositive) {
+    return { verdict: 'QUALIFIED', reason: null }
+  }
+
+  // ── 4. Non-bot, données suffisantes, mais pas encore qualifié ────────────
   return { verdict: 'VERIFIED', reason: null }
 }
 
@@ -426,6 +447,26 @@ async function auditWallet(
     ` credits=${totalCredits}${partial ? ' (partial)' : ''}`
   )
 
+  // ── Diagnostic : 0 swap détecté malgré type=SWAP → inspecte les types bruts
+  if (totalFetched === 0) {
+    try {
+      const diagUrl = new URL(`${HELIUS_BASE}/addresses/${address}/transactions`)
+      diagUrl.searchParams.set('api-key', HELIUS_API_KEY)
+      diagUrl.searchParams.set('limit',   '5')   // sans filtre type=SWAP
+      const diagRes = await fetch(diagUrl.toString(), {
+        headers: { 'User-Agent': 'KYMIA/1.0' },
+        signal:  AbortSignal.timeout(8_000),
+      })
+      if (diagRes.ok) {
+        const diagTxs: HeliusTx[] = await diagRes.json()
+        const types = diagTxs.length > 0
+          ? diagTxs.map(t => t.type).join(', ')
+          : 'aucune tx trouvée'
+        console.warn(`[smartmoney] ${address.slice(0, 8)}… DIAG 0-swap — types des 5 dernières tx brutes: [${types}]`)
+      }
+    } catch { /* diagnostic only — non bloquant */ }
+  }
+
   const metrics = computeMetrics(allSwaps, 90)
   metrics.failedSwapRatio = totalFetched > 0
     ? parseFloat((failedSwaps / totalFetched).toFixed(4))
@@ -433,11 +474,11 @@ async function auditWallet(
 
   const { verdict, reason } = applyBotFilters(totalFetched, metrics)
 
-  if (verdict === 'REJECTED') {
-    console.log(`[smartmoney] ${address.slice(0, 8)}… REJECTED — ${reason}`)
+  if (verdict === 'REJECTED' || verdict === 'INSUFFICIENT_DATA') {
+    console.log(`[smartmoney] ${address.slice(0, 8)}… ${verdict} — ${reason}`)
   } else {
     console.log(
-      `[smartmoney] ${address.slice(0, 8)}… VERIFIED` +
+      `[smartmoney] ${address.slice(0, 8)}… ${verdict}` +
       ` | win=${metrics.winRate !== null ? (metrics.winRate * 100).toFixed(0) + '%' : 'n/a'}` +
       ` | trades=${metrics.tradesClosed}` +
       ` | medHold=${metrics.medianHoldSeconds !== null ? (metrics.medianHoldSeconds / 3600).toFixed(1) + 'h' : 'n/a'}` +
@@ -503,11 +544,11 @@ export async function runSmartMoneyAudit(
     }
   }
 
-  // ── Sélection wallets (CANDIDATE ou VERIFIED, plus ancien en premier) ──────
+  // ── Sélection wallets (CANDIDATE, VERIFIED, INSUFFICIENT_DATA, plus ancien en premier) ──
   const { data: wallets, error } = await supabase
     .from('kymia_smart_wallets')
     .select('address')
-    .in('status', ['CANDIDATE', 'VERIFIED'])
+    .in('status', ['CANDIDATE', 'VERIFIED', 'INSUFFICIENT_DATA'])
     .order('last_audited', { ascending: true, nullsFirst: true })
     .limit(WALLETS_PER_RUN)
 
