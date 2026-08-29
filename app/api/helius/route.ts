@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-const HELIUS_API_KEY = process.env.HELIUS_API_KEY || "";
+const HELIUS_API_KEY = process.env.NEXT_PUBLIC_HELIEUS_KEY || "";
 const HELIUS_BASE = "https://api.helius.xyz/v0";
 
 export async function GET(req: Request) {

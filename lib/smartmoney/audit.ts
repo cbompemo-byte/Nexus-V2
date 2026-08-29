@@ -17,7 +17,7 @@ import { SupabaseClient } from '@supabase/supabase-js'
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-const HELIUS_API_KEY     = process.env.HELIUS_API_KEY ?? ''
+const HELIUS_API_KEY     = process.env.NEXT_PUBLIC_HELIEUS_KEY ?? ''
 const HELIUS_BASE        = 'https://api.helius.xyz/v0'
 const USDC_MINT          = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
 const WSOL_MINT          = 'So11111111111111111111111111111111111111112'
