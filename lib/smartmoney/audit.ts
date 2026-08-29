@@ -66,7 +66,8 @@ interface WalletMetrics {
   medianHoldSeconds:  number | null
   avgHoldHours:       number | null
   winRate:            number | null
-  tradesClosed:       number
+  tradesClosed:       number   // paires BUY/SELL avec PnL mesurable (SOL-SOL ou USDC-USDC)
+  tradesMixedDenom:   number   // paires matchées FIFO mais devise incompatible — observation seule
   pnl90dSol:         number | null
   pnl90dUsdc:        number | null
 }
@@ -277,7 +278,8 @@ function computeMetrics(events: SwapEvent[], windowDays: number): WalletMetrics 
   // Note: failed count computed upstream from tx.transactionError
 
   const holdSeconds: number[] = []
-  let tradesClosed = 0
+  let tradesClosed    = 0   // paires avec PnL mesurable uniquement
+  let tradesMixedDenom = 0  // paires matchées mais devise incompatible
   let wins = 0
   let pnlSol  = 0
   let pnlUsdc = 0
@@ -310,8 +312,10 @@ function computeMetrics(events: SwapEvent[], windowDays: number): WalletMetrics 
         if (gain > 0) wins++
         tradesClosed++
       } else {
-        // Dénominations mixtes — trade compté, PnL non calculable
-        tradesClosed++
+        // Devise incompatible (achat SOL / vente USDC ou inverse) — PnL non calculable,
+        // jamais estimé (pas de prix midpoint). Comptabilisé séparément comme signal
+        // de style de trading (agrégateur, arbitrage cross-devise).
+        tradesMixedDenom++
       }
     }
   }
@@ -342,6 +346,7 @@ function computeMetrics(events: SwapEvent[], windowDays: number): WalletMetrics 
     avgHoldHours:       avgHoldHours !== null ? parseFloat(avgHoldHours.toFixed(2)) : null,
     winRate:            winRate !== null ? parseFloat(winRate.toFixed(4)) : null,
     tradesClosed,
+    tradesMixedDenom,
     pnl90dSol:         hasSolPnl  ? parseFloat(pnlSol.toFixed(6))  : null,
     pnl90dUsdc:        hasUsdcPnl ? parseFloat(pnlUsdc.toFixed(4)) : null,
   }
@@ -481,6 +486,7 @@ async function auditWallet(
       `[smartmoney] ${address.slice(0, 8)}… ${verdict}` +
       ` | win=${metrics.winRate !== null ? (metrics.winRate * 100).toFixed(0) + '%' : 'n/a'}` +
       ` | trades=${metrics.tradesClosed}` +
+      ` | mixed=${metrics.tradesMixedDenom}` +
       ` | medHold=${metrics.medianHoldSeconds !== null ? (metrics.medianHoldSeconds / 3600).toFixed(1) + 'h' : 'n/a'}` +
       ` | pnl_sol=${metrics.pnl90dSol !== null ? metrics.pnl90dSol.toFixed(3) + ' SOL' : 'n/a'}` +
       ` | pnl_usdc=${metrics.pnl90dUsdc !== null ? '$' + metrics.pnl90dUsdc.toFixed(2) : 'n/a'}`
@@ -501,6 +507,7 @@ async function auditWallet(
     avg_hold_hours:          metrics.avgHoldHours,
     win_rate:                metrics.winRate,
     trades_closed:           metrics.tradesClosed,
+    trades_mixed_denom:      metrics.tradesMixedDenom,
     pnl_90d_sol:             metrics.pnl90dSol,
     pnl_90d_usdc:            metrics.pnl90dUsdc,
     credits_used_last_audit: totalCredits,
