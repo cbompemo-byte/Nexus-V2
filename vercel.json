@@ -3,6 +3,10 @@
     {
       "path": "/api/agents/cycle",
       "schedule": "0 9 * * *"
+    },
+    {
+      "path": "/api/smartmoney/audit",
+      "schedule": "0 */8 * * *"
     }
   ]
 }
