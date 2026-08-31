@@ -26,6 +26,18 @@ const PERIOD   = '30d'
 const ORDER_BY = 'realized_profit_30d'
 const TOP_N    = 20
 
+// ── Pré-filtres bot (avant insertion) ─────────────────────────────────────────
+// But : éviter de consommer des crédits Helius sur des wallets évidemment bots.
+// Ces seuils sont VOLONTAIREMENT généreux (on laisse le pipeline d'audit
+// trancher les cas ambigus). On pré-filtre uniquement l'évident.
+//
+// Logique :
+//   buy_1d > 100  → >100 achats/jour = ~3 000/mois — clairement automatisé
+//   buy_30d > 1500 → plus de swaps en 30j que notre seuil bot sur 90j
+//                    (même si buy ≈ moitié des swaps, c'est > 3 000 swaps/90d)
+const BOT_BUY_1D_MAX  = 100
+const BOT_BUY_30D_MAX = 1500
+
 // ── Auth helper ────────────────────────────────────────────────────────────────
 
 function isAuthorized(req: NextRequest): boolean {
@@ -34,22 +46,41 @@ function isAuthorized(req: NextRequest): boolean {
   return req.headers.get('x-admin-key') === adminKey
 }
 
-// ── Parse.bot response shape (défensive) ──────────────────────────────────────
+// ── Parse.bot / GMGN response shape ───────────────────────────────────────────
+// Structure confirmée : { status: "success", data: { rank: [...] } }
+// Champs observés sur le leaderboard realized_profit_30d.
 
 interface ParseBotWallet {
-  // Parse.bot peut renvoyer différents noms de champ selon la version
-  wallet_address?: string
-  address?:        string
+  address:          string
+  arc_balance?:     string | number
+  avg_cost_30d?:    string | number
+  buy?:             number   // total achats (toutes périodes)
+  buy_1d?:          number   // achats sur les dernières 24h
+  buy_30d?:         number   // achats sur les 30 derniers jours
+  sell?:            number
+  sell_1d?:         number
+  sell_30d?:        number
   realized_profit?: number
   realized_profit_30d?: number
-  pnl_30d?:        number
-  win_rate?:       number
-  winrate?:        number
-  tags?:           string[]
+  winrate?:         number
+  win_rate?:        number
+  tags?:            string[]
+  [key: string]:    unknown  // champs supplémentaires non documentés
 }
 
-function extractAddress(w: ParseBotWallet): string | null {
-  return w.wallet_address ?? w.address ?? null
+// ── Pré-filtre bot ─────────────────────────────────────────────────────────────
+
+function preFilterBot(w: ParseBotWallet): string | null {
+  const buy1d  = typeof w.buy_1d  === 'number' ? w.buy_1d  : null
+  const buy30d = typeof w.buy_30d === 'number' ? w.buy_30d : null
+
+  if (buy1d !== null && buy1d > BOT_BUY_1D_MAX) {
+    return `buy_1d=${buy1d} > ${BOT_BUY_1D_MAX} (bot évident)`
+  }
+  if (buy30d !== null && buy30d > BOT_BUY_30D_MAX) {
+    return `buy_30d=${buy30d} > ${BOT_BUY_30D_MAX} (volume bot 30j)`
+  }
+  return null
 }
 
 // ── Handler ────────────────────────────────────────────────────────────────────
@@ -103,11 +134,11 @@ export async function GET(req: NextRequest) {
     }
 
     const json = await res.json()
-    // Parse.bot peut envelopper dans { data: [...] } ou renvoyer directement un array
-    rawWallets = Array.isArray(json) ? json : (json.data ?? json.wallets ?? json.results ?? [])
+    // Structure confirmée : { status: "success", data: { rank: [...] } }
+    rawWallets = json?.data?.rank ?? []
 
     if (!Array.isArray(rawWallets) || rawWallets.length === 0) {
-      console.warn('[collect] Parse.bot returned empty or unexpected shape:', JSON.stringify(json).slice(0, 200))
+      console.warn('[collect] Parse.bot shape inattendu ou vide:', JSON.stringify(json).slice(0, 300))
       return NextResponse.json({ error: 'Parse.bot returned no wallets', raw: JSON.stringify(json).slice(0, 500) }, { status: 502 })
     }
   } catch (e: any) {
@@ -121,22 +152,38 @@ export async function GET(req: NextRequest) {
 
   // ── 2. Insertion dans kymia_smart_wallets ────────────────────────────────────
 
-  const now      = new Date().toISOString()
-  let inserted   = 0
-  let skipped    = 0
-  const details: Array<{ label: string; address: string; action: 'inserted' | 'skipped' }> = []
+  const now         = new Date().toISOString()
+  let inserted      = 0
+  let skipped       = 0
+  let preFiltered   = 0
+  let errors        = 0
+  let gmgnRank      = 0   // rang dans le leaderboard GMGN (bot exclus non comptés)
+  const details: Array<{ label: string; address: string; action: 'inserted' | 'skipped' | 'pre_filtered' | 'error'; reason?: string }> = []
 
   for (let i = 0; i < top.length; i++) {
     const w       = top[i]
-    const address = extractAddress(w)
-    const rank    = i + 1
-    const label   = `gmgn_${String(rank).padStart(2, '0')}`   // gmgn_01 … gmgn_20
+    const address = w.address ?? null
+    const rawRank = i + 1   // rang brut dans la réponse Parse.bot
 
     if (!address || address.length < 32) {
-      console.warn(`[collect] rang ${rank} — adresse manquante ou invalide:`, JSON.stringify(w).slice(0, 100))
+      console.warn(`[collect] rang brut ${rawRank} — adresse manquante ou invalide:`, JSON.stringify(w).slice(0, 100))
       skipped++
       continue
     }
+
+    // ── Pré-filtre bot ──────────────────────────────────────────────────────
+    const botReason = preFilterBot(w)
+    if (botReason) {
+      console.log(`[collect] rang ${rawRank} ${address.slice(0, 8)}… PRE_FILTERED — ${botReason}`)
+      preFiltered++
+      details.push({ label: `gmgn_raw${rawRank}`, address, action: 'pre_filtered', reason: botReason })
+      continue
+    }
+
+    // Rang effectif = position dans le leaderboard après exclusion des bots évidents
+    gmgnRank++
+    if (gmgnRank > TOP_N) break
+    const label = `gmgn_${String(gmgnRank).padStart(2, '0')}`   // gmgn_01 … gmgn_20
 
     // upsert avec ignoreDuplicates=true = ON CONFLICT (address) DO NOTHING
     // Ne modifie PAS les wallets existants (préserve w01-w09 et leur statut).
@@ -149,8 +196,9 @@ export async function GET(req: NextRequest) {
       .select('address')
 
     if (error) {
-      console.error(`[collect] ${label} upsert error:`, error.message)
-      skipped++
+      console.error(`[collect] ${label} ${address.slice(0, 8)}… upsert error:`, error.message, error.code)
+      errors++
+      details.push({ label, address, action: 'error', reason: `${error.code}: ${error.message}` })
     } else if (!upserted || upserted.length === 0) {
       // ignoreDuplicates=true + row existante → upserted vide = déjà en base
       console.log(`[collect] ${label} ${address.slice(0, 8)}… already exists — skipped`)
@@ -163,17 +211,19 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  console.log(`[collect] done — inserted=${inserted} skipped=${skipped}`)
+  console.log(`[collect] done — inserted=${inserted} skipped=${skipped} pre_filtered=${preFiltered} errors=${errors}`)
 
   return NextResponse.json({
-    ok:       true,
-    source:   'GMGN',
-    period:   PERIOD,
-    orderby:  ORDER_BY,
+    ok:           true,
+    source:       'GMGN',
+    period:       PERIOD,
+    orderby:      ORDER_BY,
     inserted,
     skipped,
-    total:    top.length,
-    wallets:  details,
-    timestamp: now,
+    pre_filtered: preFiltered,
+    errors,
+    total_raw:    top.length,
+    wallets:      details,   // contient TOUS les wallets traités, quelle que soit l'issue
+    timestamp:    now,
   })
 }
