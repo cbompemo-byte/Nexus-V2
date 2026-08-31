@@ -193,7 +193,7 @@ export async function discoverCandidates(
 
 // ── RugCheck — fetch unique (partagé par checks 2, 3, 6, 7) ──────────────────
 
-async function fetchRugCheck(mint: string): Promise<any | null> {
+export async function fetchRugCheck(mint: string): Promise<any | null> {
   try {
     const res = await fetch(`${RUGCHECK}/tokens/${mint}/report/summary`, {
       headers: { 'User-Agent': 'KYMIA/1.0' },
@@ -205,9 +205,28 @@ async function fetchRugCheck(mint: string): Promise<any | null> {
   }
 }
 
+// ── fetchPairForMint — récupère la meilleure pair DexScreener pour un mint ────
+
+export async function fetchPairForMint(mint: string): Promise<DexPair | null> {
+  try {
+    const res = await fetch(`${DEXSCREENER}/latest/dex/tokens/${mint}`, {
+      headers: { 'User-Agent': 'KYMIA/1.0' },
+      signal:  AbortSignal.timeout(8_000),
+    })
+    if (!res.ok) return null
+    const data  = await res.json()
+    const pairs = (data.pairs || []) as DexPair[]
+    return pairs
+      .filter(p => p.quoteToken?.symbol === 'USDC' || p.quoteToken?.symbol === 'SOL')
+      .sort((a, b) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0))[0] ?? null
+  } catch {
+    return null
+  }
+}
+
 // ── CHECK 1 — Mint / Freeze authority (RPC) ───────────────────────────────────
 
-async function runCheck1(mint: string): Promise<CheckEntry> {
+export async function runCheck1(mint: string): Promise<CheckEntry> {
   try {
     const conn = getConnection()
     const info = await conn.getParsedAccountInfo(new PublicKey(mint))
@@ -231,7 +250,7 @@ async function runCheck1(mint: string): Promise<CheckEntry> {
 
 // ── CHECK 2 — Liquidity + LP locked ──────────────────────────────────────────
 
-function runCheck2(pair: DexPair, rug: any | null): CheckEntry {
+export function runCheck2(pair: DexPair, rug: any | null): CheckEntry {
   const liqUsd = pair.liquidity?.usd ?? 0
 
   if (liqUsd < 50_000) {
@@ -275,7 +294,7 @@ function runCheck2(pair: DexPair, rug: any | null): CheckEntry {
 
 // ── CHECK 3 — Holder distribution ────────────────────────────────────────────
 
-function runCheck3(rug: any | null): CheckEntry {
+export function runCheck3(rug: any | null): CheckEntry {
   if (!rug) {
     return { result: 'skipped', detail: { reason: 'rugcheck unavailable' } }
   }
@@ -296,7 +315,7 @@ function runCheck3(rug: any | null): CheckEntry {
 
 // ── CHECK 4 — Honeypot / sellability (Jupiter SELL quote) ────────────────────
 
-async function runCheck4(mint: string, pair: DexPair): Promise<CheckEntry> {
+export async function runCheck4(mint: string, pair: DexPair): Promise<CheckEntry> {
   try {
     // Estimate $10 worth of the token in raw units (assume 6 decimals)
     const priceUsd = parseFloat(pair.priceUsd || '0')
@@ -321,7 +340,7 @@ async function runCheck4(mint: string, pair: DexPair): Promise<CheckEntry> {
 
 // ── CHECK 5 — Âge + volume + holders ────────────────────────────────────────
 
-function runCheck5(pair: DexPair): CheckEntry {
+export function runCheck5(pair: DexPair): CheckEntry {
   const ageHours = (Date.now() - pair.pairCreatedAt) / 3_600_000
   const vol24h   = pair.volume?.h24 ?? 0
   const holders  = pair.info?.holders ?? null
@@ -343,7 +362,7 @@ function runCheck5(pair: DexPair): CheckEntry {
 
 // ── CHECK 6 — Score RugCheck global ──────────────────────────────────────────
 
-function runCheck6(rug: any | null): CheckEntry {
+export function runCheck6(rug: any | null): CheckEntry {
   if (!rug) {
     return { result: 'skipped', detail: { reason: 'rugcheck unavailable' } }
   }
@@ -369,7 +388,7 @@ function runCheck6(rug: any | null): CheckEntry {
 
 // ── CHECK 7 — Bundle / insiders (RugCheck partial + SKIPPED pour RPC) ────────
 
-function runCheck7(rug: any | null): CheckEntry {
+export function runCheck7(rug: any | null): CheckEntry {
   // Parts covered by RPC/Helius — deferred to Phase D
   const SKIPPED_PARTS = [
     'first-block-bundle-rpc',

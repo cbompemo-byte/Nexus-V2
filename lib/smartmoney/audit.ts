@@ -357,8 +357,9 @@ function computeMetrics(events: SwapEvent[], windowDays: number): WalletMetrics 
 function applyBotFilters(
   swapCount:   number,
   m:           WalletMetrics,
-): { verdict: 'VERIFIED' | 'REJECTED' | 'INSUFFICIENT_DATA' | 'QUALIFIED'; reason: string | null } {
-  // ── 1. Détection bot (prioritaire — rejette même si données insuffisantes) ──
+): { verdict: 'VERIFIED' | 'REJECTED'; reason: string | null } {
+  // VERIFIED = non-bot uniquement. Aucune exigence de PnL ou trades_closed.
+  // La qualification viendra du taux de succès des signaux a posteriori.
   if (swapCount > BOT_SWAP_COUNT_MAX) {
     return { verdict: 'REJECTED', reason: `swap_count_90d=${swapCount} > ${BOT_SWAP_COUNT_MAX} (fréquence bot)` }
   }
@@ -371,26 +372,6 @@ function applyBotFilters(
   if (m.uniqueTokensPerDay > BOT_TOKENS_PER_DAY_MAX) {
     return { verdict: 'REJECTED', reason: `unique_tokens_per_day=${m.uniqueTokensPerDay.toFixed(1)} > ${BOT_TOKENS_PER_DAY_MAX} (scatter bot)` }
   }
-
-  // ── 2. Données suffisantes ────────────────────────────────────────────────
-  if (swapCount === 0) {
-    return { verdict: 'INSUFFICIENT_DATA', reason: 'no_swap_detected (DEX possiblement non reconnu par Helius type=SWAP)' }
-  }
-  if (m.tradesClosed < 5) {
-    return { verdict: 'INSUFFICIENT_DATA', reason: `trades_closed=${m.tradesClosed} < 5 (positions ouvertes ou historique insuffisant)` }
-  }
-  if (m.pnl90dSol === null && m.pnl90dUsdc === null) {
-    return { verdict: 'INSUFFICIENT_DATA', reason: 'pnl_non_calculable (dénominations mixtes sur tous les trades)' }
-  }
-
-  // ── 3. Performance — QUALIFIED ────────────────────────────────────────────
-  const pnlPositive = (m.pnl90dSol !== null && m.pnl90dSol > 0) ||
-                      (m.pnl90dUsdc !== null && m.pnl90dUsdc > 0)
-  if (m.tradesClosed >= 10 && m.winRate !== null && m.winRate > 0.5 && pnlPositive) {
-    return { verdict: 'QUALIFIED', reason: null }
-  }
-
-  // ── 4. Non-bot, données suffisantes, mais pas encore qualifié ────────────
   return { verdict: 'VERIFIED', reason: null }
 }
 
@@ -479,11 +460,11 @@ async function auditWallet(
 
   const { verdict, reason } = applyBotFilters(totalFetched, metrics)
 
-  if (verdict === 'REJECTED' || verdict === 'INSUFFICIENT_DATA') {
-    console.log(`[smartmoney] ${address.slice(0, 8)}… ${verdict} — ${reason}`)
+  if (verdict === 'REJECTED') {
+    console.log(`[smartmoney] ${address.slice(0, 8)}… REJECTED — ${reason}`)
   } else {
     console.log(
-      `[smartmoney] ${address.slice(0, 8)}… ${verdict}` +
+      `[smartmoney] ${address.slice(0, 8)}… VERIFIED` +
       ` | win=${metrics.winRate !== null ? (metrics.winRate * 100).toFixed(0) + '%' : 'n/a'}` +
       ` | trades=${metrics.tradesClosed}` +
       ` | mixed=${metrics.tradesMixedDenom}` +
@@ -555,7 +536,7 @@ export async function runSmartMoneyAudit(
   const { data: wallets, error } = await supabase
     .from('kymia_smart_wallets')
     .select('address')
-    .in('status', ['CANDIDATE', 'VERIFIED', 'INSUFFICIENT_DATA'])
+    .in('status', ['CANDIDATE', 'VERIFIED'])
     .order('last_audited', { ascending: true, nullsFirst: true })
     .limit(WALLETS_PER_RUN)
 
