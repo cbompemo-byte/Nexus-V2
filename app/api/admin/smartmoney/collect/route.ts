@@ -190,7 +190,8 @@ export async function GET(req: NextRequest) {
     const { data: upserted, error } = await supabase
       .from('kymia_smart_wallets')
       .upsert(
-        { address, label, source: 'GMGN', status: 'CANDIDATE', created_at: now, updated_at: now },
+        { address, label, source: 'GMGN', status: 'CANDIDATE', updated_at: now },
+        // first_seen omis volontairement : DEFAULT now() côté DB, pas de created_at dans le schéma
         { onConflict: 'address', ignoreDuplicates: true },
       )
       .select('address')
