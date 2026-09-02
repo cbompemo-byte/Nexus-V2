@@ -1144,6 +1144,73 @@ async function runDryRunCycle(supabase: SupabaseClient) {
         continue
       }
 
+      // ── Cooldown post-SL (12h) ────────────────────────────────────────────
+      // Empêche la réouverture sur le même symbole dans les 12h suivant un
+      // EPISODE_CLOSED_SL. Cooldown aveugle : aucun override régime.
+      // Pattern identique au cooldown memecoin (lib/memecoin/paper.ts).
+      const REENTRY_COOLDOWN_H = 12
+      const since12h = new Date(Date.now() - REENTRY_COOLDOWN_H * 3600_000).toISOString()
+      const { data: recentSl } = await supabase
+        .from('kymia_dryrun_decisions')
+        .select('timestamp')
+        .eq('symbol', sym)
+        .eq('decision', 'EPISODE_CLOSED_SL')
+        .gt('timestamp', since12h)
+        .limit(1)
+        .maybeSingle()
+
+      if (recentSl) {
+        const agoH = ((Date.now() - new Date(recentSl.timestamp).getTime()) / 3600_000).toFixed(1)
+        console.log(`[dryrun] ${sym} COOLDOWN_SKIP — SL_HIT ${agoH}h ago, cooldown ${REENTRY_COOLDOWN_H}h`)
+        await logDryRun(supabase, {
+          symbol:    sym,
+          regime,
+          signal:    'BUY',
+          decision:  'COOLDOWN_SKIP',
+          reason:    `EPISODE_CLOSED_SL ${agoH}h ago — cooldown ${REENTRY_COOLDOWN_H}h`,
+          price_usd: price,
+        })
+        continue
+      }
+
+      // ── Limite d'exposition par groupe corrélé ────────────────────────────
+      // Calibré sur l'historique réel (max=4, pire cas cbBTC+WETH+SOL+bêta Solana).
+      // Objectif : réduire d'un cran — max 3 positions totales implicitement.
+      //
+      //   CRYPTO_MAJOR  (cbBTC, WETH)            → max 1 simultané
+      //   SOL_ECO       (SOL, JUP, JTO, PYTH, RAY) → max 2 simultanés
+      //
+      // Le check utilise posMap (chargé en mémoire en début de cycle) —
+      // aucune requête DB supplémentaire.
+      const EXPOSURE_GROUPS: Record<string, { symbols: string[]; max: number }> = {
+        CRYPTO_MAJOR: { symbols: ['cbBTC', 'WETH'],              max: 1 },
+        SOL_ECO:      { symbols: ['SOL', 'JUP', 'JTO', 'PYTH', 'RAY'], max: 2 },
+      }
+
+      let exposureBlock: { group: string; count: number; max: number } | null = null
+      for (const [groupName, { symbols, max }] of Object.entries(EXPOSURE_GROUPS)) {
+        if (!symbols.includes(sym)) continue          // sym n'appartient pas à ce groupe
+        const openInGroup = symbols.filter(s => posMap.has(s)).length
+        if (openInGroup >= max) {
+          exposureBlock = { group: groupName, count: openInGroup, max }
+          break
+        }
+      }
+
+      if (exposureBlock) {
+        const { group, count, max } = exposureBlock
+        console.log(`[dryrun] ${sym} EXPOSURE_LIMIT_SKIP — groupe ${group} ${count}/${max} positions ouvertes`)
+        await logDryRun(supabase, {
+          symbol:    sym,
+          regime,
+          signal:    'BUY',
+          decision:  'EXPOSURE_LIMIT_SKIP',
+          reason:    `groupe ${group}: ${count}/${max} positions ouvertes`,
+          price_usd: price,
+        })
+        continue
+      }
+
       // ── Sizing déjà calculé par Agent 3 ──────────────────────────────────
       const sizeCalculee = (sizingV.data as { sizeCalculee: number }).sizeCalculee
       const atr14        = (sizingV.data as { atr14: number }).atr14
