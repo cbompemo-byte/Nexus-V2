@@ -53,6 +53,8 @@ export interface DexPair {
   volume?:       { h24: number; h1?: number }
   pairCreatedAt: number   // ms epoch
   info?:         { holders?: number }
+  marketCap?:    number   // USD — présent dans la réponse DexScreener mais optionnel
+  fdv?:          number   // fully-diluted valuation USD
 }
 
 // ── DexScreener — découverte + déduplication ──────────────────────────────────
