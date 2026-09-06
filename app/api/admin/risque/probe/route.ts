@@ -107,7 +107,7 @@ async function probeWallet(address: string, includeRawTx: boolean) {
 
   // Résultats du parsing — toutes les txs fetchées (cohérence avec distinct_mints)
   const path_results = txs.map((tx: any) => {
-    const { mint, path } = extractMintOut(tx, address)
+    const { mint, path, net_debug } = extractMintOut(tx, address)
     // Détail des transfers impliquant ce wallet (pour diagnostic de direction)
     const myTransfers = (tx.tokenTransfers ?? [])
       .filter((t: any) => t.toUserAccount === address || t.fromUserAccount === address)
@@ -125,6 +125,7 @@ async function probeWallet(address: string, includeRawTx: boolean) {
       source:     tx.source ?? null,
       mint_found: mint,
       path_used:  path,
+      net_debug,
       has_tokenTransfers: (tx.tokenTransfers ?? []).length > 0,
       my_transfers: myTransfers,
     }
