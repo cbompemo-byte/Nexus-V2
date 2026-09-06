@@ -103,81 +103,49 @@ function parseBuyEvent(tx: HeliusTx, walletAddress: string): BuyEvent | null {
   // ── Chemin C ────────────────────────────────────────────────────────────────
   const transfers = tx.tokenTransfers ?? []
 
-  if (transfers.length > 0) {
-    // Tokens non-stables reçus par le wallet
-    const received = transfers.filter(
-      t => t.toUserAccount === walletAddress && !STABLES.has(t.mint) && t.tokenAmount > 0
-    )
-    if (received.length === 0) return null   // rien reçu → pas un achat
+  if (transfers.length === 0) return null
 
-    // Si le wallet envoie aussi un non-stable → swap TOKEN→TOKEN, skip
-    const sellsNonStable = transfers.some(
-      t => t.fromUserAccount === walletAddress && !STABLES.has(t.mint) && t.tokenAmount > 0
-    )
-    if (sellsNonStable) return null
-
-    // Pas de vérification de paiement : le filtre type=SWAP (Helius) garantit
-    // que toute réception de non-stable est un achat. La jambe SOL natif
-    // (pump.fun via bonding curve) transite par des comptes intermédiaires
-    // et n'est pas visible via fromUserAccount === walletAddress dans nativeTransfers.
-
-    // Token final = dernier non-stable reçu (multi-hop : position finale du routing)
-    const finalToken = received[received.length - 1]
-
-    // Montant payé — meilleur effort, null si invisible (SOL natif multi-hop)
-    const stablePaid = transfers
-      .filter(t => t.fromUserAccount === walletAddress && (t.mint === USDC_MINT || t.mint === USDT_MINT))
-      .reduce((s, t) => s + t.tokenAmount / 1_000_000, 0)
-    const nativeOuts   = tx.nativeTransfers ?? []
-    const lamportsPaid = nativeOuts
-      .filter(t => t.fromUserAccount === walletAddress)
-      .reduce((s, t) => s + t.amount, 0)
-
-    return {
-      signature:  tx.signature,
-      timestamp:  tx.timestamp,
-      mint:       finalToken.mint,
-      solAmount:  lamportsPaid > 0 ? lamportsPaid / LAMPORTS_PER_SOL : null,
-      usdcAmount: stablePaid  > 0 ? stablePaid                       : null,
+  // ── Solde net par mint pour CE wallet ────────────────────────────────────────
+  // Somme des entrées (toUserAccount) moins sorties (fromUserAccount).
+  // Fix BUG routing : un token reçu puis renvoyé dans la même tx → net = 0 → ignoré.
+  // Fix BUG path A  : events.swap.tokenOutputs supprimé — ne vérifie pas l'adresse
+  //                   wallet et génère des faux positifs sur txs RAYDIUM multi-hop.
+  const netByMint = new Map<string, number>()
+  for (const t of transfers) {
+    if (t.toUserAccount === walletAddress && t.tokenAmount > 0) {
+      netByMint.set(t.mint, (netByMint.get(t.mint) ?? 0) + t.tokenAmount)
+    }
+    if (t.fromUserAccount === walletAddress && t.tokenAmount > 0) {
+      netByMint.set(t.mint, (netByMint.get(t.mint) ?? 0) - t.tokenAmount)
     }
   }
 
-  // ── Chemin A (fallback) — events.swap ────────────────────────────────────────
-  if (!tx.events?.swap) return null
-  const s = tx.events.swap
+  // Tokens non-stables avec solde net positif = effectivement acquis dans ce tx
+  const acquired = [...netByMint.entries()]
+    .filter(([mint, net]) => !STABLES.has(mint) && net > 0)
+    .sort((a, b) => b[1] - a[1])   // tri par net décroissant
 
-  const inputs  = s.tokenInputs  ?? []
-  const outputs = s.tokenOutputs ?? []
+  if (acquired.length === 0) return null
 
-  const tokenOut = outputs.find(t => !STABLES.has(t.mint))
-  const tokenIn  = inputs.find(t  => !STABLES.has(t.mint))
+  const [finalMint] = acquired[0]
 
-  // BUY = non-stable en sortie, aucun non-stable en entrée
-  if (!tokenOut || tokenIn) return null
+  // Montant payé — meilleur effort (tokenTransfers normalisés, pas de /1e6)
+  const stablePaid = [...netByMint.entries()]
+    .filter(([mint, net]) => (mint === USDC_MINT || mint === USDT_MINT) && net < 0)
+    .reduce((s, [, net]) => s + Math.abs(net), 0)
 
-  const usdcIn = inputs.find(t => t.mint === USDC_MINT)
-  const wsolIn = inputs.find(t => t.mint === WSOL_MINT)
-  const mint   = tokenOut.mint
+  const nativeOuts   = tx.nativeTransfers ?? []
+  const lamportsPaid = nativeOuts
+    .filter(t => t.fromUserAccount === walletAddress)
+    .reduce((s, t) => s + t.amount, 0)
 
-  if (usdcIn) {
-    return {
-      signature: tx.signature, timestamp: tx.timestamp, mint,
-      solAmount: null, usdcAmount: usdcIn.tokenAmount / 1_000_000,
-    }
+  return {
+    signature:  tx.signature,
+    timestamp:  tx.timestamp,
+    mint:       finalMint,
+    solAmount:  lamportsPaid > 0 ? lamportsPaid / LAMPORTS_PER_SOL : null,
+    usdcAmount: stablePaid  > 0 ? stablePaid                       : null,
   }
-
-  const lamports = s.nativeInput?.amount
-    ? Number(s.nativeInput.amount)
-    : (wsolIn?.tokenAmount ?? 0)
-
-  if (lamports > 0) {
-    return {
-      signature: tx.signature, timestamp: tx.timestamp, mint,
-      solAmount: lamports / LAMPORTS_PER_SOL, usdcAmount: null,
-    }
-  }
-
-  return null
 }
 
 // ── fetchNewBuys — txs SWAP depuis le dernier curseur ─────────────────────────

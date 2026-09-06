@@ -42,29 +42,34 @@ function median(values: number[]): number | null {
 // VENTE = wallet est fromUserAccount pour un non-stable → ignoré.
 // Multi-hop : dernier non-stable reçu = token final.
 
-function extractMintOut(tx: any, walletAddress: string): { mint: string | null; path: string } {
-  // Chemin C (primaire) — tokenTransfers top-level, direction uniquement
-  // Pas de vérification de paiement : SOL natif pump.fun transite via comptes
-  // intermédiaires, invisible dans nativeTransfers.fromUserAccount === wallet.
+function extractMintOut(tx: any, walletAddress: string): { mint: string | null; path: string; net_debug?: Record<string, number> } {
   const transfers: any[] = tx.tokenTransfers ?? []
-  if (transfers.length > 0) {
-    const received = transfers.filter(
-      (t: any) => t.toUserAccount === walletAddress && !STABLE.has(t.mint) && t.tokenAmount > 0
-    )
-    const sellsNonStable = transfers.some(
-      (t: any) => t.fromUserAccount === walletAddress && !STABLE.has(t.mint) && t.tokenAmount > 0
-    )
-    if (received.length > 0 && !sellsNonStable) {
-      return { mint: received[received.length - 1].mint, path: 'C:tokenTransfers+direction' }
+  if (transfers.length === 0) return { mint: null, path: 'no_transfers' }
+
+  // Solde net par mint — même logique que watch.ts parseBuyEvent
+  const netByMint = new Map<string, number>()
+  for (const t of transfers) {
+    if (t.toUserAccount === walletAddress && t.tokenAmount > 0) {
+      netByMint.set(t.mint, (netByMint.get(t.mint) ?? 0) + t.tokenAmount)
+    }
+    if (t.fromUserAccount === walletAddress && t.tokenAmount > 0) {
+      netByMint.set(t.mint, (netByMint.get(t.mint) ?? 0) - t.tokenAmount)
     }
   }
 
-  // Chemin A (fallback) — events.swap.tokenOutputs
-  const outA = (tx.events?.swap?.tokenOutputs ?? [])
-    .find((o: any) => o.mint && !STABLE.has(o.mint))
-  if (outA) return { mint: outA.mint, path: 'A:events.swap.tokenOutputs' }
+  // Expose net_debug pour diagnostic (tous les mints impliquant le wallet)
+  const net_debug: Record<string, number> = {}
+  for (const [mint, net] of netByMint) {
+    net_debug[mint.slice(0, 12)] = parseFloat(net.toFixed(6))
+  }
 
-  return { mint: null, path: 'none' }
+  const acquired = [...netByMint.entries()]
+    .filter(([mint, net]) => !STABLE.has(mint) && net > 0)
+    .sort((a, b) => b[1] - a[1])
+
+  if (acquired.length === 0) return { mint: null, path: 'net_zero_or_sell', net_debug }
+
+  return { mint: acquired[0][0], path: 'C:net_positive', net_debug }
 }
 
 async function probeWallet(address: string, includeRawTx: boolean) {
