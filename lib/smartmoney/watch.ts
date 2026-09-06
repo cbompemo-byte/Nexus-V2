@@ -110,41 +110,34 @@ function parseBuyEvent(tx: HeliusTx, walletAddress: string): BuyEvent | null {
     )
     if (received.length === 0) return null   // rien reçu → pas un achat
 
-    // Si le wallet envoie aussi un non-stable dans cette tx → swap TOKEN→TOKEN, skip
+    // Si le wallet envoie aussi un non-stable → swap TOKEN→TOKEN, skip
     const sellsNonStable = transfers.some(
       t => t.fromUserAccount === walletAddress && !STABLES.has(t.mint) && t.tokenAmount > 0
     )
     if (sellsNonStable) return null
 
-    // Paiement : stable envoyé en token, ou SOL natif
-    const paidStable = transfers.some(
-      t => t.fromUserAccount === walletAddress && STABLES.has(t.mint) && t.tokenAmount > 0
-    )
-    const nativeOuts  = tx.nativeTransfers ?? []
-    const paidSol     = nativeOuts.some(
-      t => t.fromUserAccount === walletAddress && t.amount > 1_000_000   // > 0.001 SOL
-    )
-    if (!paidStable && !paidSol) return null   // pas de paiement → probablement un airdrop
+    // Pas de vérification de paiement : le filtre type=SWAP (Helius) garantit
+    // que toute réception de non-stable est un achat. La jambe SOL natif
+    // (pump.fun via bonding curve) transite par des comptes intermédiaires
+    // et n'est pas visible via fromUserAccount === walletAddress dans nativeTransfers.
 
-    // Token final = dernier non-stable reçu (multi-hop : position finale dans le routing)
+    // Token final = dernier non-stable reçu (multi-hop : position finale du routing)
     const finalToken = received[received.length - 1]
 
-    // Montant stable payé (USDC + USDT, 6 décimales)
+    // Montant payé — meilleur effort, null si invisible (SOL natif multi-hop)
     const stablePaid = transfers
       .filter(t => t.fromUserAccount === walletAddress && (t.mint === USDC_MINT || t.mint === USDT_MINT))
       .reduce((s, t) => s + t.tokenAmount / 1_000_000, 0)
-
-    const lampartsPaid = paidSol
-      ? nativeOuts
-          .filter(t => t.fromUserAccount === walletAddress)
-          .reduce((s, t) => s + t.amount, 0)
-      : 0
+    const nativeOuts   = tx.nativeTransfers ?? []
+    const lamportsPaid = nativeOuts
+      .filter(t => t.fromUserAccount === walletAddress)
+      .reduce((s, t) => s + t.amount, 0)
 
     return {
       signature:  tx.signature,
       timestamp:  tx.timestamp,
       mint:       finalToken.mint,
-      solAmount:  lampartsPaid > 0 ? lampartsPaid / LAMPORTS_PER_SOL : null,
+      solAmount:  lamportsPaid > 0 ? lamportsPaid / LAMPORTS_PER_SOL : null,
       usdcAmount: stablePaid  > 0 ? stablePaid                       : null,
     }
   }

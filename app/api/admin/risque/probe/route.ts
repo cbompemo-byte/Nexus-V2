@@ -43,27 +43,19 @@ function median(values: number[]): number | null {
 // Multi-hop : dernier non-stable reçu = token final.
 
 function extractMintOut(tx: any, walletAddress: string): { mint: string | null; path: string } {
-  // Chemin C (primaire) — tokenTransfers top-level avec sens du flux
+  // Chemin C (primaire) — tokenTransfers top-level, direction uniquement
+  // Pas de vérification de paiement : SOL natif pump.fun transite via comptes
+  // intermédiaires, invisible dans nativeTransfers.fromUserAccount === wallet.
   const transfers: any[] = tx.tokenTransfers ?? []
   if (transfers.length > 0) {
     const received = transfers.filter(
       (t: any) => t.toUserAccount === walletAddress && !STABLE.has(t.mint) && t.tokenAmount > 0
     )
-    if (received.length > 0) {
-      const sellsNonStable = transfers.some(
-        (t: any) => t.fromUserAccount === walletAddress && !STABLE.has(t.mint) && t.tokenAmount > 0
-      )
-      if (!sellsNonStable) {
-        const paidStable = transfers.some(
-          (t: any) => t.fromUserAccount === walletAddress && STABLE.has(t.mint) && t.tokenAmount > 0
-        )
-        const paidSol = (tx.nativeTransfers ?? []).some(
-          (t: any) => t.fromUserAccount === walletAddress && t.amount > 1_000_000
-        )
-        if (paidStable || paidSol) {
-          return { mint: received[received.length - 1].mint, path: 'C:tokenTransfers+direction' }
-        }
-      }
+    const sellsNonStable = transfers.some(
+      (t: any) => t.fromUserAccount === walletAddress && !STABLE.has(t.mint) && t.tokenAmount > 0
+    )
+    if (received.length > 0 && !sellsNonStable) {
+      return { mint: received[received.length - 1].mint, path: 'C:tokenTransfers+direction' }
     }
   }
 
@@ -108,30 +100,32 @@ async function probeWallet(address: string, includeRawTx: boolean) {
   }
   const med = median(gaps)
 
-  // Résultats du parsing par les 4 chemins
-  const path_results = txs.slice(0, 5).map((tx: any) => {
+  // Résultats du parsing — toutes les txs fetchées (cohérence avec distinct_mints)
+  const path_results = txs.map((tx: any) => {
     const { mint, path } = extractMintOut(tx, address)
+    // Détail des transfers impliquant ce wallet (pour diagnostic de direction)
+    const myTransfers = (tx.tokenTransfers ?? [])
+      .filter((t: any) => t.toUserAccount === address || t.fromUserAccount === address)
+      .slice(0, 4)
+      .map((t: any) => ({
+        mint:      t.mint?.slice(0, 12),
+        to_me:     t.toUserAccount === address,
+        from_me:   t.fromUserAccount === address,
+        amount:    t.tokenAmount,
+        is_stable: STABLE.has(t.mint),
+      }))
     return {
-      sig:     tx.signature?.slice(0, 12),
-      ts:      new Date(tx.timestamp * 1000).toISOString(),
-      source:  tx.source ?? null,   // ex: "PUMP_FUN", "RAYDIUM", "ORCA"
-      type:    tx.type   ?? null,
+      sig:        tx.signature?.slice(0, 12),
+      ts:         new Date(tx.timestamp * 1000).toISOString(),
+      source:     tx.source ?? null,
       mint_found: mint,
       path_used:  path,
-      // Diagnostic des sous-structures présentes
-      has_events_swap:         !!tx.events?.swap,
-      has_tokenOutputs:        (tx.events?.swap?.tokenOutputs ?? []).length > 0,
-      has_innerSwaps:          (tx.events?.swap?.innerSwaps   ?? []).length > 0,
-      has_tokenTransfers:      (tx.tokenTransfers ?? []).length > 0,
-      has_accountData:         (tx.accountData ?? []).length > 0,
-      tokenTransfers_count:    (tx.tokenTransfers ?? []).length,
-      innerSwaps_count:        (tx.events?.swap?.innerSwaps ?? []).length,
+      has_tokenTransfers: (tx.tokenTransfers ?? []).length > 0,
+      my_transfers: myTransfers,
     }
   })
 
-  const mints = new Set(
-    txs.map((tx: any) => extractMintOut(tx, address).mint).filter(Boolean)
-  )
+  const mints = new Set(path_results.map(r => r.mint_found).filter(Boolean))
 
   // Première tx brute — uniquement pour le wallet demandé (le plus actif)
   let raw_tx_debug: any = undefined
