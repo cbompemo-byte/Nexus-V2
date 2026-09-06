@@ -24,8 +24,14 @@ const WSOL_MINT         = 'So11111111111111111111111111111111111111112'
 const USDT_MINT         = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB'
 const STABLES           = new Set([USDC_MINT, WSOL_MINT, USDT_MINT])
 const LAMPORTS_PER_SOL  = 1_000_000_000
-const MAX_TXS_PER_WATCH = 50
 const MARKET_CAP_MAX    = 30_000   // USD — filtre d'affichage principal
+// Limites Helius :
+//   Premier run (cursor=null)  : 50 txs — initialise l'historique récent
+//   Runs incrémentaux          : 3 txs  — 0.3 swap/30min en moyenne, 3 = 10× le besoin typique
+// Budget : 18 wallets × 3 × 48 runs/jour × 30j = 77 760 crédits/mois (+ 18K SM watch = 95 760)
+// Si quota tendu : passer le cron à 60 min → 38 880 crédits/mois pour ce module.
+const MAX_TXS_INITIAL       = 50   // cursor=null, premier run
+const MAX_TXS_INCREMENTAL   = 3    // cursor set, runs suivants
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -110,10 +116,11 @@ async function fetchNewBuys(
   address:    string,
   lastCursor: string | null,
 ): Promise<{ buys: BuyEvent[]; newCursor: string | null; credits: number }> {
+  const limit = lastCursor ? MAX_TXS_INCREMENTAL : MAX_TXS_INITIAL
   const url = new URL(`${HELIUS_BASE}/addresses/${address}/transactions`)
   url.searchParams.set('api-key', HELIUS_API_KEY)
   url.searchParams.set('type',    'SWAP')
-  url.searchParams.set('limit',   String(MAX_TXS_PER_WATCH))
+  url.searchParams.set('limit',   String(limit))
 
   const res = await fetch(url.toString(), {
     headers: { 'User-Agent': 'KYMIA-RISQUE/1.0' },
