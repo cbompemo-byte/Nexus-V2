@@ -35,6 +35,8 @@ const HELIUS_API_KEY        = process.env.NEXT_PUBLIC_HELIEUS_KEY ?? ''
 const HELIUS_BASE           = 'https://api.helius.xyz/v0'
 const USDC_MINT             = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
 const WSOL_MINT             = 'So11111111111111111111111111111111111111112'
+const USDT_MINT             = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB'
+const STABLES               = new Set([USDC_MINT, WSOL_MINT, USDT_MINT])
 const LAMPORTS_PER_SOL      = 1_000_000_000
 const MAX_TXS_PER_WATCH     = 50                // crédits max par wallet par run
 const CONVERGENCE_WINDOW_MS = 6 * 3600_000      // fenêtre 6h
@@ -42,11 +44,26 @@ const CONVERGENCE_MIN       = 3                 // 3+ wallets distincts = conver
 
 // ── Types internes ─────────────────────────────────────────────────────────────
 
+interface TokenTransfer {
+  mint:            string
+  fromUserAccount: string
+  toUserAccount:   string
+  tokenAmount:     number   // montant brut (non normalisé)
+}
+
+interface NativeTransfer {
+  fromUserAccount: string
+  toUserAccount:   string
+  amount:          number   // lamports
+}
+
 interface HeliusTx {
   signature:        string
   timestamp:        number
   transactionError: unknown
   type:             string
+  tokenTransfers?:  TokenTransfer[]
+  nativeTransfers?: NativeTransfer[]
   events?: {
     swap?: {
       nativeInput?:   { amount: string }
@@ -65,20 +82,84 @@ interface BuyEvent {
   usdcAmount: number | null
 }
 
-// ── parseBuyEvent — détecte uniquement les BUY (SOL/USDC → token) ──────────────
+// ── parseBuyEvent — détecte uniquement les BUY (SOL/USDC/USDT → token) ──────────
+//
+// Deux chemins par ordre de priorité :
+//
+//   Chemin C (primaire) — tokenTransfers top-level
+//     Présent dans toutes les txs Helius enrichies, y compris PUMP_FUN
+//     sans events.swap. On vérifie le SENS du flux :
+//       BUY  = wallet reçoit un non-stable (toUserAccount === address)
+//              ET envoie un stable OU paie en SOL natif
+//       VENTE = wallet envoie un non-stable (fromUserAccount === address) → ignoré
+//     Multi-hop : on prend le DERNIER non-stable reçu (token final).
+//
+//   Chemin A (fallback) — events.swap.tokenOutputs
+//     Pour les txs non-PUMP_FUN qui ont la structure enrichie complète.
 
-function parseBuyEvent(tx: HeliusTx): BuyEvent | null {
+function parseBuyEvent(tx: HeliusTx, walletAddress: string): BuyEvent | null {
   if (tx.transactionError !== null) return null
+
+  // ── Chemin C ────────────────────────────────────────────────────────────────
+  const transfers = tx.tokenTransfers ?? []
+
+  if (transfers.length > 0) {
+    // Tokens non-stables reçus par le wallet
+    const received = transfers.filter(
+      t => t.toUserAccount === walletAddress && !STABLES.has(t.mint) && t.tokenAmount > 0
+    )
+    if (received.length === 0) return null   // rien reçu → pas un achat
+
+    // Si le wallet envoie aussi un non-stable dans cette tx → swap TOKEN→TOKEN, skip
+    const sellsNonStable = transfers.some(
+      t => t.fromUserAccount === walletAddress && !STABLES.has(t.mint) && t.tokenAmount > 0
+    )
+    if (sellsNonStable) return null
+
+    // Paiement : stable envoyé en token, ou SOL natif
+    const paidStable = transfers.some(
+      t => t.fromUserAccount === walletAddress && STABLES.has(t.mint) && t.tokenAmount > 0
+    )
+    const nativeOuts  = tx.nativeTransfers ?? []
+    const paidSol     = nativeOuts.some(
+      t => t.fromUserAccount === walletAddress && t.amount > 1_000_000   // > 0.001 SOL
+    )
+    if (!paidStable && !paidSol) return null   // pas de paiement → probablement un airdrop
+
+    // Token final = dernier non-stable reçu (multi-hop : position finale dans le routing)
+    const finalToken = received[received.length - 1]
+
+    // Montant stable payé (USDC + USDT, 6 décimales)
+    const stablePaid = transfers
+      .filter(t => t.fromUserAccount === walletAddress && (t.mint === USDC_MINT || t.mint === USDT_MINT))
+      .reduce((s, t) => s + t.tokenAmount / 1_000_000, 0)
+
+    const lampartsPaid = paidSol
+      ? nativeOuts
+          .filter(t => t.fromUserAccount === walletAddress)
+          .reduce((s, t) => s + t.amount, 0)
+      : 0
+
+    return {
+      signature:  tx.signature,
+      timestamp:  tx.timestamp,
+      mint:       finalToken.mint,
+      solAmount:  lampartsPaid > 0 ? lampartsPaid / LAMPORTS_PER_SOL : null,
+      usdcAmount: stablePaid  > 0 ? stablePaid                       : null,
+    }
+  }
+
+  // ── Chemin A (fallback) — events.swap ────────────────────────────────────────
   if (!tx.events?.swap) return null
   const s = tx.events.swap
 
   const inputs  = s.tokenInputs  ?? []
   const outputs = s.tokenOutputs ?? []
 
-  const tokenOut = outputs.find(t => t.mint !== USDC_MINT && t.mint !== WSOL_MINT)
-  const tokenIn  = inputs.find(t  => t.mint !== USDC_MINT && t.mint !== WSOL_MINT)
+  const tokenOut = outputs.find(t => !STABLES.has(t.mint))
+  const tokenIn  = inputs.find(t  => !STABLES.has(t.mint))
 
-  // BUY = un token non-stable en sortie, aucun token non-stable en entrée
+  // BUY = non-stable en sortie, aucun non-stable en entrée
   if (!tokenOut || tokenIn) return null
 
   const usdcIn = inputs.find(t => t.mint === USDC_MINT)
@@ -112,6 +193,7 @@ async function fetchNewBuys(
   address:    string,
   lastCursor: string | null,
 ): Promise<{ buys: BuyEvent[]; newCursor: string | null; credits: number }> {
+  // `address` est passé à parseBuyEvent pour vérifier la direction du flux
   const url = new URL(`${HELIUS_BASE}/addresses/${address}/transactions`)
   url.searchParams.set('api-key', HELIUS_API_KEY)
   url.searchParams.set('type',    'SWAP')
@@ -139,7 +221,7 @@ async function fetchNewBuys(
 
   const buys: BuyEvent[] = []
   for (const tx of newTxs) {
-    const buy = parseBuyEvent(tx)
+    const buy = parseBuyEvent(tx, address)
     if (buy) buys.push(buy)
   }
 

@@ -13,7 +13,8 @@ const HELIUS_BASE    = 'https://api.helius.xyz/v0'
 
 const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
 const WSOL_MINT = 'So11111111111111111111111111111111111111112'
-const STABLE    = new Set([USDC_MINT, WSOL_MINT])
+const USDT_MINT = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB'
+const STABLE    = new Set([USDC_MINT, WSOL_MINT, USDT_MINT])
 
 const PROBE_WALLETS = [
   'J23qr98GjGJJqKq9CBEnyRhHbmkaVxtTJNNxKu597wsA',
@@ -36,41 +37,40 @@ function median(values: number[]): number | null {
     : sorted[mid]
 }
 
-// ── Extraction du mint acheté — 4 chemins alternatifs ───────────────────────
-// Pump.fun ne remplit pas toujours events.swap.tokenOutputs.
-// On teste tous les chemins connus et on rapporte lequel fonctionne.
+// ── Extraction du mint acheté — chemin C avec vérification de direction ────────
+// BUY  = wallet est toUserAccount pour un non-stable ET envoie un stable ou SOL natif.
+// VENTE = wallet est fromUserAccount pour un non-stable → ignoré.
+// Multi-hop : dernier non-stable reçu = token final.
 
-function extractMintOut(tx: any): { mint: string | null; path: string } {
-  // Chemin A — Helius enrichi classique : events.swap.tokenOutputs
+function extractMintOut(tx: any, walletAddress: string): { mint: string | null; path: string } {
+  // Chemin C (primaire) — tokenTransfers top-level avec sens du flux
+  const transfers: any[] = tx.tokenTransfers ?? []
+  if (transfers.length > 0) {
+    const received = transfers.filter(
+      (t: any) => t.toUserAccount === walletAddress && !STABLE.has(t.mint) && t.tokenAmount > 0
+    )
+    if (received.length > 0) {
+      const sellsNonStable = transfers.some(
+        (t: any) => t.fromUserAccount === walletAddress && !STABLE.has(t.mint) && t.tokenAmount > 0
+      )
+      if (!sellsNonStable) {
+        const paidStable = transfers.some(
+          (t: any) => t.fromUserAccount === walletAddress && STABLE.has(t.mint) && t.tokenAmount > 0
+        )
+        const paidSol = (tx.nativeTransfers ?? []).some(
+          (t: any) => t.fromUserAccount === walletAddress && t.amount > 1_000_000
+        )
+        if (paidStable || paidSol) {
+          return { mint: received[received.length - 1].mint, path: 'C:tokenTransfers+direction' }
+        }
+      }
+    }
+  }
+
+  // Chemin A (fallback) — events.swap.tokenOutputs
   const outA = (tx.events?.swap?.tokenOutputs ?? [])
     .find((o: any) => o.mint && !STABLE.has(o.mint))
   if (outA) return { mint: outA.mint, path: 'A:events.swap.tokenOutputs' }
-
-  // Chemin B — innerSwaps (swaps multi-hop, courant chez pump.fun via Raydium)
-  const inners: any[] = tx.events?.swap?.innerSwaps ?? []
-  for (const inner of inners) {
-    const outB = (inner.tokenOutputs ?? [])
-      .find((o: any) => o.mint && !STABLE.has(o.mint))
-    if (outB) return { mint: outB.mint, path: 'B:events.swap.innerSwaps[].tokenOutputs' }
-  }
-
-  // Chemin C — tokenTransfers top-level (présent sur toutes les txs Helius enrichies)
-  // Cherche un transfert vers le wallet appelant (toUserAccount = address) d'un token non-stable
-  const transfers: any[] = tx.tokenTransfers ?? []
-  const outC = transfers.find(
-    (t: any) => t.mint && !STABLE.has(t.mint) && t.tokenAmount > 0
-  )
-  if (outC) return { mint: outC.mint, path: 'C:tokenTransfers[].mint' }
-
-  // Chemin D — accountData (présent quand les autres champs sont absents)
-  const accounts: any[] = tx.accountData ?? []
-  for (const acc of accounts) {
-    const tokenChanges: any[] = acc.tokenBalanceChanges ?? []
-    const outD = tokenChanges.find(
-      (c: any) => c.mint && !STABLE.has(c.mint) && parseFloat(c.rawTokenAmount?.tokenAmount ?? '0') > 0
-    )
-    if (outD) return { mint: outD.mint, path: 'D:accountData[].tokenBalanceChanges[].mint' }
-  }
 
   return { mint: null, path: 'none' }
 }
@@ -110,7 +110,7 @@ async function probeWallet(address: string, includeRawTx: boolean) {
 
   // Résultats du parsing par les 4 chemins
   const path_results = txs.slice(0, 5).map((tx: any) => {
-    const { mint, path } = extractMintOut(tx)
+    const { mint, path } = extractMintOut(tx, address)
     return {
       sig:     tx.signature?.slice(0, 12),
       ts:      new Date(tx.timestamp * 1000).toISOString(),
@@ -130,7 +130,7 @@ async function probeWallet(address: string, includeRawTx: boolean) {
   })
 
   const mints = new Set(
-    txs.map((tx: any) => extractMintOut(tx).mint).filter(Boolean)
+    txs.map((tx: any) => extractMintOut(tx, address).mint).filter(Boolean)
   )
 
   // Première tx brute — uniquement pour le wallet demandé (le plus actif)
