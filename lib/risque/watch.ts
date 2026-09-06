@@ -162,30 +162,52 @@ async function processSignal(
     return 'filtered_mcap'
   }
 
-  // Checks sécurité — screenToken réutilisé tel quel
-  // check5 (âge/volume) est informatif : pump.fun tokens sont toujours < 24h
-  const rug    = await fetchRugCheck(mint)
-  const screen = await screenToken(mint, pair, rug)
+  const symbol = pair.baseToken.symbol ?? mint.slice(0, 8)
 
-  const securityChecks = {
-    check1: screen.check1,
-    check2: screen.check2,
-    check3: screen.check3,
-    check4: screen.check4,
-    check5: { ...screen.check5, note: 'informatif — pas de filtre âge en mode Risque' },
-    check6: screen.check6,
-    check7: screen.check7,
-    eligible_grade: screen.eligible_grade,
-    first_failed:   screen.first_failed_check ?? null,
+  // ── Checks sécurité ──────────────────────────────────────────────────────────
+  // screenToken réutilisé tel quel. check5 (âge/volume) est informatif :
+  // les tokens pump.fun < 30K mcap sont systématiquement < 24h → fail check5 attendu.
+  //
+  // memecoin_score :
+  //   FULL / PARTIAL / WEAK  — éligible (grade de screenToken)
+  //   INELIGIBLE:<check>     — au moins un check échoue (ex: INELIGIBLE:check2)
+  //   DATA_UNAVAILABLE       — screenToken a levé une exception (RPC, Jupiter, etc.)
+  //
+  // null ne doit plus apparaître — il signifiait auparavant "éligible_grade null"
+  // ce qui était indiscernable de "check non exécuté".
+
+  let securityChecks: Record<string, unknown> | null = null
+  let memeScore: string = 'DATA_UNAVAILABLE'
+
+  console.log(`[risque] ${symbol} — lancement screenToken (mcap=$${marketCap.toFixed(0)})`)
+  try {
+    const rug    = await fetchRugCheck(mint)
+    const screen = await screenToken(mint, pair, rug)
+
+    securityChecks = {
+      check1: screen.check1,
+      check2: screen.check2,
+      check3: screen.check3,
+      check4: screen.check4,
+      check5: { ...screen.check5, note: 'informatif — pas de filtre âge en mode Risque' },
+      check6: screen.check6,
+      check7: screen.check7,
+      first_failed: screen.first_failed_check ?? null,
+    }
+
+    memeScore = screen.eligible_grade
+      ?? `INELIGIBLE:${screen.first_failed_check ?? 'unknown'}`
+
+    console.log(
+      `[risque] ${walletLabel} BUY ${symbol}` +
+      ` mcap=$${marketCap.toFixed(0)} score=${memeScore}`
+    )
+  } catch (e: any) {
+    console.error(`[risque] screenToken ${symbol} (${mint.slice(0, 8)}…):`, e.message)
+    // memeScore reste 'DATA_UNAVAILABLE', securityChecks reste null
   }
 
-  const symbol = pair.baseToken.symbol ?? mint.slice(0, 8)
-  console.log(
-    `[risque] ${walletLabel} BUY ${symbol}` +
-    ` mcap=$${marketCap.toFixed(0)} grade=${screen.eligible_grade ?? 'FAIL'}`
-  )
-
-  // Upsert : 1 ligne par token, buyer_count incrémenté à chaque nouveau wallet
+  // ── Upsert : 1 ligne par token, buyer_count incrémenté par wallet ────────────
   const { data: existing } = await supabase
     .from('kymia_risque_signals')
     .select('id, buyer_count, buyer_wallets')
@@ -194,7 +216,7 @@ async function processSignal(
 
   if (existing) {
     const wallets: string[] = existing.buyer_wallets ?? []
-    if (wallets.includes(walletLabel)) return 'updated'   // déjà compté pour ce wallet
+    if (wallets.includes(walletLabel)) return 'updated'
     await supabase
       .from('kymia_risque_signals')
       .update({
@@ -215,7 +237,7 @@ async function processSignal(
     buyer_count:       1,
     buyer_wallets:     [walletLabel],
     security_checks:   securityChecks,
-    memecoin_score:    screen.eligible_grade,
+    memecoin_score:    memeScore,
     first_detected_at: new Date().toISOString(),
     updated_at:        new Date().toISOString(),
   })
