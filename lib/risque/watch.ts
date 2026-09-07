@@ -13,7 +13,18 @@
 // ni kymia_memecoin_paper. Observation uniquement.
 
 import { SupabaseClient }            from '@supabase/supabase-js'
-import { fetchPairForMint, fetchRugCheck, screenToken, type DexPair } from '@/lib/memecoin/screen'
+import {
+  fetchPairForMint,
+  fetchRugCheck,
+  runCheck1,
+  runCheck2,
+  runCheck3,
+  runCheck4,
+  runCheck5,
+  runCheck6,
+  runCheck7,
+  type DexPair,
+} from '@/lib/memecoin/screen'
 
 // ── Config ─────────────────────────────────────────────────────────────────────
 
@@ -183,34 +194,66 @@ async function processSignal(
   // null ne doit plus apparaître — il signifiait auparavant "éligible_grade null"
   // ce qui était indiscernable de "check non exécuté".
 
+  // ── Checks sécurité — évaluation indépendante, sans fail-fast ───────────────
+  // Checks BLOQUANTS (contribuent au score) : 1, 3, 4, 6, 7
+  // Checks INFORMATIFS (affichés, non bloquants) : 2, 5
+  //
+  // check2 (liquidity + LP locked) est inapplicable pré-graduation pump.fun :
+  //   la liquidité est dans la bonding curve, invisible pour DexScreener/RugCheck.
+  //   Un token avec mcap < 30K n'a pas de AMM pool — check2 échouerait toujours.
+  // check5 (âge + volume) est inapplicable : les tokens < 30K mcap sont < 24h.
+
   let securityChecks: Record<string, unknown> | null = null
   let memeScore: string = 'DATA_UNAVAILABLE'
 
-  console.log(`[risque] ${symbol} — lancement screenToken (mcap=$${marketCap.toFixed(0)})`)
+  console.log(`[risque] ${symbol} — checks (mcap=$${marketCap.toFixed(0)})`)
   try {
-    const rug    = await fetchRugCheck(mint)
-    const screen = await screenToken(mint, pair, rug)
+    const rug = await fetchRugCheck(mint)
+
+    const check1 = await runCheck1(mint)
+    const check2 = runCheck2(pair, rug)
+    const check3 = runCheck3(rug)
+    const check4 = await runCheck4(mint, pair)
+    const check5 = runCheck5(pair)
+    const check6 = runCheck6(rug)
+    const check7 = runCheck7(rug)
 
     securityChecks = {
-      check1: screen.check1,
-      check2: screen.check2,
-      check3: screen.check3,
-      check4: screen.check4,
-      check5: { ...screen.check5, note: 'informatif — pas de filtre âge en mode Risque' },
-      check6: screen.check6,
-      check7: screen.check7,
-      first_failed: screen.first_failed_check ?? null,
+      check1,
+      check2: { ...check2, note: 'informatif — LP classique inapplicable pré-graduation pump.fun' },
+      check3,
+      check4,
+      check5: { ...check5, note: 'informatif — tokens < 30K mcap sont < 24h structurellement' },
+      check6,
+      check7,
+      blocking_checks:    ['check1', 'check3', 'check4', 'check6', 'check7'],
+      informative_checks: ['check2', 'check5'],
     }
 
-    memeScore = screen.eligible_grade
-      ?? `INELIGIBLE:${screen.first_failed_check ?? 'unknown'}`
+    // Score basé sur checks bloquants uniquement (1, 3, 4, 6, 7), tous évalués
+    const blocking = [
+      { key: 'check1', c: check1 },
+      { key: 'check3', c: check3 },
+      { key: 'check4', c: check4 },
+      { key: 'check6', c: check6 },
+      { key: 'check7', c: check7 },
+    ]
+    const firstFail = blocking.find(({ c }) => c.result === 'failed')
+
+    if (firstFail) {
+      memeScore = `INELIGIBLE:${firstFail.key}`
+    } else {
+      const genuineSkips = blocking.filter(({ c }) => c.result === 'skipped').length
+      memeScore = genuineSkips === 0 ? 'FULL' : genuineSkips <= 2 ? 'PARTIAL' : 'WEAK'
+    }
 
     console.log(
       `[risque] ${walletLabel} BUY ${symbol}` +
-      ` mcap=$${marketCap.toFixed(0)} score=${memeScore}`
+      ` mcap=$${marketCap.toFixed(0)} score=${memeScore}` +
+      ` [1:${check1.result} 3:${check3.result} 4:${check4.result} 6:${check6.result} 7:${check7.result}]`
     )
   } catch (e: any) {
-    console.error(`[risque] screenToken ${symbol} (${mint.slice(0, 8)}…):`, e.message)
+    console.error(`[risque] checks ${symbol} (${mint.slice(0, 8)}…):`, e.message)
     // memeScore reste 'DATA_UNAVAILABLE', securityChecks reste null
   }
 
