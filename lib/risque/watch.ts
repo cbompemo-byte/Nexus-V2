@@ -35,7 +35,7 @@ const WSOL_MINT         = 'So11111111111111111111111111111111111111112'
 const USDT_MINT         = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB'
 const STABLES           = new Set([USDC_MINT, WSOL_MINT, USDT_MINT])
 const LAMPORTS_PER_SOL  = 1_000_000_000
-const MARKET_CAP_MAX    = 30_000   // USD — filtre d'affichage principal
+const MARKET_CAP_MAX    = 50_000   // USD — filtre d'affichage principal
 // Limites Helius :
 //   Premier run (cursor=null)  : 50 txs — initialise l'historique récent
 //   Runs incrémentaux          : 3 txs  — 0.3 swap/30min en moyenne, 3 = 10× le besoin typique
