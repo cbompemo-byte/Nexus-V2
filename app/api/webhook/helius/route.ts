@@ -83,6 +83,7 @@ export async function POST(req: NextRequest) {
           processed_at:   new Date().toISOString(),
           buys_inserted:  buysInserted,
           sells_inserted: sellsInserted,
+          // Note : buyErrors non persistées — visibles dans les logs Vercel
         })
         .eq('id', rawId)
     } catch (e: any) {

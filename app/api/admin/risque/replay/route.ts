@@ -53,19 +53,26 @@ async function replaySingle(
   )
 
   try {
-    const { buysInserted, sellsInserted } = await processWebhookEvent(rawId, raw.payload, supabase)
+    const { buysInserted, sellsInserted, buyErrors } = await processWebhookEvent(rawId, raw.payload, supabase)
     await supabase
       .from('kymia_risque_webhooks_raw')
       .update({
         processed:      true,
         processed_at:   new Date().toISOString(),
-        error:          null,
+        error:          buyErrors.length > 0 ? buyErrors[0] : null,
         buys_inserted:  buysInserted,
         sells_inserted: sellsInserted,
       })
       .eq('id', rawId)
 
-    return NextResponse.json({ ok: true, raw_id: rawId, buys_inserted: buysInserted, sells_inserted: sellsInserted })
+    return NextResponse.json({
+      ok:             true,
+      raw_id:         rawId,
+      buys_inserted:  buysInserted,
+      sells_inserted: sellsInserted,
+      // Retourner les erreurs brutes Supabase pour diagnostic immédiat
+      buy_errors:     buyErrors.length > 0 ? buyErrors : undefined,
+    })
   } catch (e: any) {
     await supabase
       .from('kymia_risque_webhooks_raw')

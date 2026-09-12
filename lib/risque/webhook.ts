@@ -146,11 +146,14 @@ function analyzeNetBalances(
 
 // ── Traitement d'un achat ─────────────────────────────────────────────────────
 
-// processBuy retourne les données de marché pour que processWebhookEvent
-// puisse appeler checkEntry sans refetch.
+// processBuy retourne les données de marché + le résultat de l'insert.
+// inserted=true uniquement si l'INSERT a réussi (pas duplicate, pas erreur).
+// lastError : message Supabase brut si l'insert a échoué (pour diagnostic).
 interface BuyMarketData {
   priceUsd:     number | null
   marketCapUsd: number | null
+  inserted:     boolean
+  lastError:    string | null
 }
 
 async function processBuy(
@@ -220,10 +223,12 @@ async function processBuy(
   if (buyErr) {
     if (buyErr.code === '23505') {
       console.log(`[webhook] buy ${tx.signature.slice(0, 8)}… déjà présent — skip`)
-      return { priceUsd: marketData?.priceUsd ?? null, marketCapUsd: marketData?.marketCapUsd ?? null }
+      return { priceUsd: marketData?.priceUsd ?? null, marketCapUsd: marketData?.marketCapUsd ?? null, inserted: false, lastError: null }
     }
-    console.error(`[webhook] buy insert ${tx.signature.slice(0, 8)}…: ${buyErr.message}`)
-    return { priceUsd: null, marketCapUsd: null }
+    // Erreur non-duplicate : remonte le message brut Supabase pour diagnostic
+    const errDetail = `buy insert: ${buyErr.message} (code=${buyErr.code ?? 'none'}) hint=${buyErr.hint ?? ''} detail=${buyErr.details ?? ''}`
+    console.error(`[webhook] ${tx.signature.slice(0, 8)}… ${errDetail}`)
+    return { priceUsd: null, marketCapUsd: null, inserted: false, lastError: errDetail }
   }
 
   // ── Mise à jour buyer_count (distinct wallets depuis kymia_risque_buys) ─
@@ -249,7 +254,7 @@ async function processBuy(
     ` buyers=${distinctBuyers}`
   )
 
-  return { priceUsd: marketData?.priceUsd ?? null, marketCapUsd: marketData?.marketCapUsd ?? null }
+  return { priceUsd: marketData?.priceUsd ?? null, marketCapUsd: marketData?.marketCapUsd ?? null, inserted: true, lastError: null }
 }
 
 // ── Traitement d'une vente ────────────────────────────────────────────────────
@@ -310,10 +315,10 @@ export async function processWebhookEvent(
   rawId:   string,
   payload: unknown,
   supabase: SupabaseClient,
-): Promise<{ buysInserted: number; sellsInserted: number }> {
+): Promise<{ buysInserted: number; sellsInserted: number; buyErrors: string[] }> {
   if (!Array.isArray(payload) || payload.length === 0) {
     console.log(`[webhook] raw ${rawId.slice(0, 8)}: payload vide ou invalide`)
-    return { buysInserted: 0, sellsInserted: 0 }
+    return { buysInserted: 0, sellsInserted: 0, buyErrors: [] }
   }
 
   // ── Charger les wallets surveillés ──────────────────────────────────────
@@ -324,7 +329,7 @@ export async function processWebhookEvent(
   if (walletErr) throw new Error(`wallet select: ${walletErr.message}`)
   if (!wallets?.length) {
     console.warn('[webhook] kymia_risque_wallets vide')
-    return { buysInserted: 0, sellsInserted: 0 }
+    return { buysInserted: 0, sellsInserted: 0, buyErrors: [] }
   }
 
   const walletMap = new Map<string, string>(
@@ -344,6 +349,7 @@ export async function processWebhookEvent(
   const txs = payload as HeliusTx[]
   let buysInserted  = 0
   let sellsInserted = 0
+  const buyErrors: string[] = []
 
   for (const tx of txs) {
     if (tx.transactionError !== null) continue
@@ -381,17 +387,23 @@ export async function processWebhookEvent(
         analyzeNetBalances(tx, walletAddress)
 
       for (const buy of buys) {
-        let marketResult: { priceUsd: number | null; marketCapUsd: number | null } =
-          { priceUsd: null, marketCapUsd: null }
+        let marketResult: BuyMarketData =
+          { priceUsd: null, marketCapUsd: null, inserted: false, lastError: null }
         try {
           marketResult = await processBuy(
             supabase, tx, buy.mint,
             walletAddress, walletLabel,
             lamportsPaid, stablePaid, maxMcUsd,
           )
-          buysInserted++
+          // N'incrémente QUE si l'INSERT Supabase a effectivement réussi
+          if (marketResult.inserted) {
+            buysInserted++
+          } else if (marketResult.lastError) {
+            buyErrors.push(marketResult.lastError)
+          }
         } catch (e: any) {
           console.error(`[webhook] processBuy ${buy.mint.slice(0, 8)}… ${walletLabel}:`, e.message)
+          buyErrors.push(`processBuy threw: ${e.message}`)
         }
 
         // Vérifier les conditions d'entrée après chaque buy
@@ -431,8 +443,12 @@ export async function processWebhookEvent(
 
   console.log(
     `[webhook] raw ${rawId.slice(0, 8)}: ${txs.length} txs` +
-    ` → buys=${buysInserted} sells=${sellsInserted}`
+    ` → buys=${buysInserted} sells=${sellsInserted}` +
+    (buyErrors.length > 0 ? ` buy_errors=${buyErrors.length}` : '')
   )
+  if (buyErrors.length > 0) {
+    console.error(`[webhook] buy errors raw ${rawId.slice(0, 8)}:`, buyErrors)
+  }
 
-  return { buysInserted, sellsInserted }
+  return { buysInserted, sellsInserted, buyErrors }
 }
