@@ -45,6 +45,19 @@ interface NativeTransfer {
   amount:          number   // lamports
 }
 
+interface TokenBalanceChange {
+  userAccount:    string   // wallet (résolu depuis l'ATA par Helius)
+  tokenAccount:   string   // ATA
+  mint:           string
+  rawTokenAmount: { tokenAmount: string; decimals: number }
+}
+
+interface AccountData {
+  account:             string
+  nativeBalanceChange: number
+  tokenBalanceChanges: TokenBalanceChange[]
+}
+
 interface HeliusTx {
   signature:        string
   timestamp:        number
@@ -52,6 +65,7 @@ interface HeliusTx {
   transactionError: unknown
   tokenTransfers?:  TokenTransfer[]
   nativeTransfers?: NativeTransfer[]
+  accountData?:     AccountData[]   // Helius Enhanced — userAccount résolu (pas ATA)
 }
 
 interface SwapSide {
@@ -60,8 +74,14 @@ interface SwapSide {
 }
 
 // ── Analyse du solde net par mint pour un wallet donné ────────────────────────
-// Même logique que lib/risque/watch.ts (dupliquée intentionnellement —
-// les deux modules peuvent évoluer indépendamment).
+//
+// Source primaire : accountData[].tokenBalanceChanges (Helius Enhanced).
+//   → userAccount = wallet (résolu), pas l'ATA.
+//   → Fix du bug pump.fun : tokenTransfers[].toUserAccount = ATA pour les achats
+//     → le wallet n'était jamais détecté comme receveur → 0 achats enregistrés.
+//
+// Fallback : tokenTransfers net-balance (payloads sans accountData).
+//   → Ventes fonctionnaient déjà (fromUserAccount = wallet pour les envois).
 
 function analyzeNetBalances(
   tx:            HeliusTx,
@@ -71,19 +91,35 @@ function analyzeNetBalances(
   sells:            SwapSide[]
   lamportsPaid:     number    // SOL sortant (pour un achat)
   lamportsReceived: number    // SOL entrant (pour une vente)
-  stablePaid:       number    // USDC/USDT sortant
+  stablePaid:       number    // USDC/USDT sortant (décimales ajustées)
 } {
   const empty = { buys: [], sells: [], lamportsPaid: 0, lamportsReceived: 0, stablePaid: 0 }
   if (tx.transactionError !== null) return empty
 
-  const transfers = tx.tokenTransfers ?? []
-  const netByMint = new Map<string, number>()
+  const netByMint    = new Map<string, number>()
+  let useAccountData = false
 
-  for (const t of transfers) {
-    if (t.toUserAccount === walletAddress && t.tokenAmount > 0)
-      netByMint.set(t.mint, (netByMint.get(t.mint) ?? 0) + t.tokenAmount)
-    if (t.fromUserAccount === walletAddress && t.tokenAmount > 0)
-      netByMint.set(t.mint, (netByMint.get(t.mint) ?? 0) - t.tokenAmount)
+  // ── Primaire : accountData.tokenBalanceChanges ────────────────────────────
+  for (const ad of (tx.accountData ?? [])) {
+    for (const tc of (ad.tokenBalanceChanges ?? [])) {
+      if (tc.userAccount !== walletAddress) continue
+      const raw     = parseInt(tc.rawTokenAmount.tokenAmount, 10)
+      const decimal = raw / Math.pow(10, tc.rawTokenAmount.decimals)
+      if (decimal !== 0) {
+        netByMint.set(tc.mint, (netByMint.get(tc.mint) ?? 0) + decimal)
+        useAccountData = true
+      }
+    }
+  }
+
+  // ── Fallback : tokenTransfers net-balance ─────────────────────────────────
+  if (!useAccountData) {
+    for (const t of (tx.tokenTransfers ?? [])) {
+      if (t.toUserAccount === walletAddress && t.tokenAmount > 0)
+        netByMint.set(t.mint, (netByMint.get(t.mint) ?? 0) + t.tokenAmount)
+      if (t.fromUserAccount === walletAddress && t.tokenAmount > 0)
+        netByMint.set(t.mint, (netByMint.get(t.mint) ?? 0) - t.tokenAmount)
+    }
   }
 
   const buys = [...netByMint.entries()]
@@ -100,6 +136,7 @@ function analyzeNetBalances(
   const lamportsPaid     = native.filter(t => t.fromUserAccount === walletAddress).reduce((s, t) => s + t.amount, 0)
   const lamportsReceived = native.filter(t => t.toUserAccount   === walletAddress).reduce((s, t) => s + t.amount, 0)
 
+  // stablePaid : déjà en unités décimales dans les deux chemins
   const stablePaid = [...netByMint.entries()]
     .filter(([mint, net]) => (mint === USDC_MINT || mint === USDT_MINT) && net < 0)
     .reduce((s, [, net]) => s + Math.abs(net), 0)
@@ -273,10 +310,10 @@ export async function processWebhookEvent(
   rawId:   string,
   payload: unknown,
   supabase: SupabaseClient,
-): Promise<void> {
+): Promise<{ buysInserted: number; sellsInserted: number }> {
   if (!Array.isArray(payload) || payload.length === 0) {
     console.log(`[webhook] raw ${rawId.slice(0, 8)}: payload vide ou invalide`)
-    return
+    return { buysInserted: 0, sellsInserted: 0 }
   }
 
   // ── Charger les wallets surveillés ──────────────────────────────────────
@@ -287,7 +324,7 @@ export async function processWebhookEvent(
   if (walletErr) throw new Error(`wallet select: ${walletErr.message}`)
   if (!wallets?.length) {
     console.warn('[webhook] kymia_risque_wallets vide')
-    return
+    return { buysInserted: 0, sellsInserted: 0 }
   }
 
   const walletMap = new Map<string, string>(
@@ -305,17 +342,35 @@ export async function processWebhookEvent(
 
   // ── Traiter chaque transaction ──────────────────────────────────────────
   const txs = payload as HeliusTx[]
-  let processed = 0
+  let buysInserted  = 0
+  let sellsInserted = 0
 
   for (const tx of txs) {
     if (tx.transactionError !== null) continue
 
-    // Identifier les wallets de notre liste impliqués dans cette tx
-    const transfers = tx.tokenTransfers ?? []
-    const involved  = new Set<string>()
-    for (const t of transfers) {
-      if (walletMap.has(t.fromUserAccount)) involved.add(t.fromUserAccount)
-      if (walletMap.has(t.toUserAccount))   involved.add(t.toUserAccount)
+    // ── Identifier les wallets impliqués ─────────────────────────────────────
+    // Source primaire : tokenBalanceChanges[].userAccount
+    //   Helius résout ATA → wallet ici. Le feePayer (qui peut être un tiers —
+    //   bot, agrégateur) n'apparaît PAS dans tokenBalanceChanges, donc il n'est
+    //   jamais confondu avec un wallet suivi.
+    //
+    // Fallback : tokenTransfers[].fromUserAccount uniquement (ventes sans accountData).
+    //   NB : toUserAccount n'est PAS utilisé — c'est l'ATA pour les achats pump.fun.
+    //
+    // Helius ne pousse que les txs où nos adresses figurent → involved.size=0
+    // ne devrait pas arriver, mais le guard reste pour les txs système rares.
+    const involved = new Set<string>()
+
+    for (const ad of (tx.accountData ?? [])) {
+      for (const tc of (ad.tokenBalanceChanges ?? [])) {
+        if (walletMap.has(tc.userAccount)) involved.add(tc.userAccount)
+      }
+    }
+    // Fallback : ventes où accountData est absent (tokenTransfers only)
+    if (involved.size === 0) {
+      for (const t of (tx.tokenTransfers ?? [])) {
+        if (walletMap.has(t.fromUserAccount)) involved.add(t.fromUserAccount)
+      }
     }
 
     if (involved.size === 0) continue
@@ -334,7 +389,7 @@ export async function processWebhookEvent(
             walletAddress, walletLabel,
             lamportsPaid, stablePaid, maxMcUsd,
           )
-          processed++
+          buysInserted++
         } catch (e: any) {
           console.error(`[webhook] processBuy ${buy.mint.slice(0, 8)}… ${walletLabel}:`, e.message)
         }
@@ -366,7 +421,7 @@ export async function processWebhookEvent(
             walletAddress, walletLabel,
             lamportsReceived,
           )
-          processed++
+          sellsInserted++
         } catch (e: any) {
           console.error(`[webhook] processSell ${sell.mint.slice(0, 8)}… ${walletLabel}:`, e.message)
         }
@@ -374,5 +429,10 @@ export async function processWebhookEvent(
     }
   }
 
-  console.log(`[webhook] raw ${rawId.slice(0, 8)}: ${txs.length} txs → ${processed} événements traités`)
+  console.log(
+    `[webhook] raw ${rawId.slice(0, 8)}: ${txs.length} txs` +
+    ` → buys=${buysInserted} sells=${sellsInserted}`
+  )
+
+  return { buysInserted, sellsInserted }
 }

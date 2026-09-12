@@ -75,10 +75,15 @@ export async function POST(req: NextRequest) {
   // after() s'exécute après l'envoi de la réponse, dans la même instance Vercel.
   after(async () => {
     try {
-      await processWebhookEvent(rawId, payload, supabase)
+      const { buysInserted, sellsInserted } = await processWebhookEvent(rawId, payload, supabase)
       await supabase
         .from('kymia_risque_webhooks_raw')
-        .update({ processed: true, processed_at: new Date().toISOString() })
+        .update({
+          processed:      true,
+          processed_at:   new Date().toISOString(),
+          buys_inserted:  buysInserted,
+          sells_inserted: sellsInserted,
+        })
         .eq('id', rawId)
     } catch (e: any) {
       // Payload toujours en base avec processed=false — rejouable via /api/admin/risque/replay
@@ -88,7 +93,6 @@ export async function POST(req: NextRequest) {
         .update({ error: e.message })
         .eq('id', rawId)
       if (updateErr) {
-        // Si même la mise à jour d'erreur échoue, on peut au moins logger
         console.error('[webhook/helius] error update failed:', updateErr.message)
       }
     }
