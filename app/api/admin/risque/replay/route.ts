@@ -155,6 +155,58 @@ async function replayBatch(
   })
 }
 
+// ── Mode fix-tokens ───────────────────────────────────────────────────────────
+// Reprocesse les entrées où le buy a été inséré (buys_inserted > 0) mais où
+// le token est possiblement absent (replays d'avant le fix graceful-degradation).
+// Le buy insert retournera 23505 (idempotent) ; seul l'upsert token est effectif.
+
+async function replayFixTokens(
+  supabase: ReturnType<typeof makeSupabase>,
+  limit:    number,
+): Promise<NextResponse> {
+  const { data: rows, error: fetchErr } = await supabase
+    .from('kymia_risque_webhooks_raw')
+    .select('id, payload')
+    .gt('buys_inserted', 0)
+    .order('received_at', { ascending: true })
+    .limit(limit)
+
+  if (fetchErr) return NextResponse.json({ error: fetchErr.message }, { status: 500 })
+  if (!rows?.length) {
+    return NextResponse.json({ ok: true, mode: 'fix-tokens', replayed: 0, token_errors: [] })
+  }
+
+  console.log(`[replay] fix-tokens: ${rows.length} entrées à retraiter (limit=${limit})`)
+
+  let tokenFixed = 0
+  const tokenErrors: string[] = []
+
+  for (const row of rows) {
+    const rawId = row.id as string
+    try {
+      const result = await processWebhookEvent(rawId, row.payload, supabase)
+      tokenFixed++
+      if (result.tokenErrors.length > 0) {
+        tokenErrors.push(...result.tokenErrors)
+      }
+    } catch (e: any) {
+      console.error(`[replay] fix-tokens ${rawId.slice(0, 8)}…: ${e.message}`)
+      tokenErrors.push(`${rawId.slice(0, 8)}: ${e.message}`)
+    }
+
+    await new Promise(r => setTimeout(r, 300))
+  }
+
+  console.log(`[replay] fix-tokens terminé — replayed=${rows.length} token_errors=${tokenErrors.length}`)
+
+  return NextResponse.json({
+    ok:           true,
+    mode:         'fix-tokens',
+    replayed:     rows.length,
+    token_errors: tokenErrors.length > 0 ? tokenErrors : undefined,
+  })
+}
+
 // ── Handler ───────────────────────────────────────────────────────────────────
 
 export async function POST(req: NextRequest) {
@@ -171,18 +223,14 @@ export async function POST(req: NextRequest) {
 
   const mode  = req.nextUrl.searchParams.get('mode')
   const rawId = req.nextUrl.searchParams.get('raw_id')
+  const limit = Math.min(parseInt(req.nextUrl.searchParams.get('limit') ?? '50', 10), 200)
 
-  if (mode === 'batch') {
-    const limit = Math.min(parseInt(req.nextUrl.searchParams.get('limit') ?? '50', 10), 200)
-    return replayBatch(supabase, limit)
-  }
-
-  if (rawId) {
-    return replaySingle(supabase, rawId)
-  }
+  if (mode === 'batch')       return replayBatch(supabase, limit)
+  if (mode === 'fix-tokens')  return replayFixTokens(supabase, limit)
+  if (rawId)                  return replaySingle(supabase, rawId)
 
   return NextResponse.json(
-    { error: 'Paramètre requis : raw_id=<uuid> ou mode=batch' },
+    { error: 'Paramètre requis : raw_id=<uuid>, mode=batch, ou mode=fix-tokens' },
     { status: 400 },
   )
 }

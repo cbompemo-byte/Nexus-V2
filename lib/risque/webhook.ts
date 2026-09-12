@@ -213,7 +213,7 @@ async function processBuy(
       {
         mint,
         market_cap_usd:      marketData?.marketCapUsd ?? null,
-        mcap_source:         marketData?.source ?? null,
+        mcap_source:         marketData?.source ?? 'UNAVAILABLE',
         risque_score:        rugResult.score,
         score_reason:        rugResult.reason,
         rug_flags:           rugResult.flags,
