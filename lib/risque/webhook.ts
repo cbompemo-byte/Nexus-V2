@@ -146,14 +146,15 @@ function analyzeNetBalances(
 
 // ── Traitement d'un achat ─────────────────────────────────────────────────────
 
-// processBuy retourne les données de marché + le résultat de l'insert.
-// inserted=true uniquement si l'INSERT a réussi (pas duplicate, pas erreur).
-// lastError : message Supabase brut si l'insert a échoué (pour diagnostic).
+// processBuy retourne les données de marché + résultat des inserts.
+// inserted=true uniquement si l'INSERT buy a réussi.
+// lastError/tokenError : messages Supabase bruts pour diagnostic.
 interface BuyMarketData {
-  priceUsd:     number | null
+  priceUsd:    number | null
   marketCapUsd: number | null
-  inserted:     boolean
-  lastError:    string | null
+  inserted:    boolean
+  lastError:   string | null   // erreur buy insert
+  tokenError:  string | null   // erreur token upsert
 }
 
 async function processBuy(
@@ -166,8 +167,15 @@ async function processBuy(
   stablePaid:    number,
   maxMcUsd:      number,
 ): Promise<BuyMarketData> {
-  // ── Market cap + prix ────────────────────────────────────────────────────
-  const marketData = await getTokenMarketData(mint)
+
+  // ── Enrichissement 1 : prix + market cap ─────────────────────────────────
+  // Dégradation gracieuse : exception isolée, token créé avec market_cap_usd=null
+  let marketData: import('@/lib/risque/pumpfun').TokenMarketData | null = null
+  try {
+    marketData = await getTokenMarketData(mint)
+  } catch (e: any) {
+    console.warn(`[webhook] getTokenMarketData ${mint.slice(0, 8)}…: ${e.message}`)
+  }
 
   console.log(
     `[webhook] BUY ${mint.slice(0, 8)}… wallet=${walletLabel}` +
@@ -176,11 +184,29 @@ async function processBuy(
     (marketData && marketData.marketCapUsd > maxMcUsd ? ` — > $${maxMcUsd} (stocké, filtré à la lecture)` : '')
   )
 
-  // ── Rug checks ──────────────────────────────────────────────────────────
-  const rug       = await fetchRugCheck(mint)
-  const rugResult = await checkRug(mint, rug)
+  // ── Enrichissement 2 : rug check ──────────────────────────────────────────
+  // Dégradation gracieuse : exception isolée, token créé avec risque_score='DATA_UNAVAILABLE'
+  let rugResult: import('@/lib/risque/rug').RugResult = {
+    score: 'DATA_UNAVAILABLE',
+    reason: null,
+    flags: {
+      mint_auth_revoked: null, freeze_auth_revoked: null,
+      dev_pct: null, top10_pct: null,
+      dev_sold: null, bundled: null,
+      danger_risks: [], warn_risks: [],
+    },
+  }
+  try {
+    const rug = await fetchRugCheck(mint)
+    rugResult = await checkRug(mint, rug)
+  } catch (e: any) {
+    console.warn(`[webhook] checkRug ${mint.slice(0, 8)}…: ${e.message}`)
+  }
 
-  // ── Upsert token — AVANT l'insert buy (cohérence logique) ──────────────
+  // ── Upsert token — TOUJOURS, enrichissements null ou non ─────────────────
+  // Le token (fait que le wallet a acheté ce mint) est la donnée primaire.
+  // market_cap et risque_score sont des enrichissements — leur échec ne
+  // doit jamais empêcher l'enregistrement du token.
   const { error: tokenErr } = await supabase
     .from('kymia_risque_tokens')
     .upsert(
@@ -202,8 +228,11 @@ async function processBuy(
       { onConflict: 'mint' },
     )
 
-  if (tokenErr) {
-    console.warn(`[webhook] token upsert ${mint.slice(0, 8)}…: ${tokenErr.message}`)
+  const tokenError = tokenErr
+    ? `token upsert: ${tokenErr.message} (code=${tokenErr.code ?? 'none'}) hint=${tokenErr.hint ?? ''} detail=${tokenErr.details ?? ''}`
+    : null
+  if (tokenError) {
+    console.error(`[webhook] ${mint.slice(0, 8)}… ${tokenError}`)
   }
 
   // ── Insert buy — unique sur tx_signature (idempotent sur replay) ────────
@@ -223,16 +252,14 @@ async function processBuy(
   if (buyErr) {
     if (buyErr.code === '23505') {
       console.log(`[webhook] buy ${tx.signature.slice(0, 8)}… déjà présent — skip`)
-      return { priceUsd: marketData?.priceUsd ?? null, marketCapUsd: marketData?.marketCapUsd ?? null, inserted: false, lastError: null }
+      return { priceUsd: marketData?.priceUsd ?? null, marketCapUsd: marketData?.marketCapUsd ?? null, inserted: false, lastError: null, tokenError }
     }
-    // Erreur non-duplicate : remonte le message brut Supabase pour diagnostic
     const errDetail = `buy insert: ${buyErr.message} (code=${buyErr.code ?? 'none'}) hint=${buyErr.hint ?? ''} detail=${buyErr.details ?? ''}`
     console.error(`[webhook] ${tx.signature.slice(0, 8)}… ${errDetail}`)
-    return { priceUsd: null, marketCapUsd: null, inserted: false, lastError: errDetail }
+    return { priceUsd: null, marketCapUsd: null, inserted: false, lastError: errDetail, tokenError }
   }
 
-  // ── Mise à jour buyer_count (distinct wallets depuis kymia_risque_buys) ─
-  // Max 18 lignes par token (18 wallets surveillés) — count en JS suffisant.
+  // ── Mise à jour buyer_count ───────────────────────────────────────────────
   const { data: buyerRows } = await supabase
     .from('kymia_risque_buys')
     .select('wallet_address')
@@ -254,7 +281,7 @@ async function processBuy(
     ` buyers=${distinctBuyers}`
   )
 
-  return { priceUsd: marketData?.priceUsd ?? null, marketCapUsd: marketData?.marketCapUsd ?? null, inserted: true, lastError: null }
+  return { priceUsd: marketData?.priceUsd ?? null, marketCapUsd: marketData?.marketCapUsd ?? null, inserted: true, lastError: null, tokenError }
 }
 
 // ── Traitement d'une vente ────────────────────────────────────────────────────
@@ -315,10 +342,10 @@ export async function processWebhookEvent(
   rawId:   string,
   payload: unknown,
   supabase: SupabaseClient,
-): Promise<{ buysInserted: number; sellsInserted: number; buyErrors: string[] }> {
+): Promise<{ buysInserted: number; sellsInserted: number; buyErrors: string[]; tokenErrors: string[] }> {
   if (!Array.isArray(payload) || payload.length === 0) {
     console.log(`[webhook] raw ${rawId.slice(0, 8)}: payload vide ou invalide`)
-    return { buysInserted: 0, sellsInserted: 0, buyErrors: [] }
+    return { buysInserted: 0, sellsInserted: 0, buyErrors: [], tokenErrors: [] }
   }
 
   // ── Charger les wallets surveillés ──────────────────────────────────────
@@ -329,7 +356,7 @@ export async function processWebhookEvent(
   if (walletErr) throw new Error(`wallet select: ${walletErr.message}`)
   if (!wallets?.length) {
     console.warn('[webhook] kymia_risque_wallets vide')
-    return { buysInserted: 0, sellsInserted: 0, buyErrors: [] }
+    return { buysInserted: 0, sellsInserted: 0, buyErrors: [], tokenErrors: [] }
   }
 
   const walletMap = new Map<string, string>(
@@ -349,7 +376,8 @@ export async function processWebhookEvent(
   const txs = payload as HeliusTx[]
   let buysInserted  = 0
   let sellsInserted = 0
-  const buyErrors: string[] = []
+  const buyErrors:   string[] = []
+  const tokenErrors: string[] = []
 
   for (const tx of txs) {
     if (tx.transactionError !== null) continue
@@ -388,7 +416,7 @@ export async function processWebhookEvent(
 
       for (const buy of buys) {
         let marketResult: BuyMarketData =
-          { priceUsd: null, marketCapUsd: null, inserted: false, lastError: null }
+          { priceUsd: null, marketCapUsd: null, inserted: false, lastError: null, tokenError: null }
         try {
           marketResult = await processBuy(
             supabase, tx, buy.mint,
@@ -400,6 +428,9 @@ export async function processWebhookEvent(
             buysInserted++
           } else if (marketResult.lastError) {
             buyErrors.push(marketResult.lastError)
+          }
+          if (marketResult.tokenError) {
+            tokenErrors.push(marketResult.tokenError)
           }
         } catch (e: any) {
           console.error(`[webhook] processBuy ${buy.mint.slice(0, 8)}… ${walletLabel}:`, e.message)
@@ -449,6 +480,9 @@ export async function processWebhookEvent(
   if (buyErrors.length > 0) {
     console.error(`[webhook] buy errors raw ${rawId.slice(0, 8)}:`, buyErrors)
   }
+  if (tokenErrors.length > 0) {
+    console.error(`[webhook] token errors raw ${rawId.slice(0, 8)}:`, tokenErrors)
+  }
 
-  return { buysInserted, sellsInserted, buyErrors }
+  return { buysInserted, sellsInserted, buyErrors, tokenErrors }
 }
