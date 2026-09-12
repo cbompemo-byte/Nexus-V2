@@ -16,10 +16,11 @@
 // Déduplication : tx_signature UNIQUE sur kymia_risque_buys et kymia_risque_sells —
 // un replay ne crée pas de doublon.
 
-import { SupabaseClient } from '@supabase/supabase-js'
-import { fetchRugCheck }  from '@/lib/memecoin/screen'
-import { getMarketCap }   from '@/lib/risque/pumpfun'
-import { checkRug }       from '@/lib/risque/rug'
+import { SupabaseClient }             from '@supabase/supabase-js'
+import { fetchRugCheck }              from '@/lib/memecoin/screen'
+import { getTokenMarketData }         from '@/lib/risque/pumpfun'
+import { checkRug }                   from '@/lib/risque/rug'
+import { checkEntry }                 from '@/lib/risque/positions'
 
 // ── Constantes ────────────────────────────────────────────────────────────────
 
@@ -108,6 +109,13 @@ function analyzeNetBalances(
 
 // ── Traitement d'un achat ─────────────────────────────────────────────────────
 
+// processBuy retourne les données de marché pour que processWebhookEvent
+// puisse appeler checkEntry sans refetch.
+interface BuyMarketData {
+  priceUsd:     number | null
+  marketCapUsd: number | null
+}
+
 async function processBuy(
   supabase:      SupabaseClient,
   tx:            HeliusTx,
@@ -117,14 +125,15 @@ async function processBuy(
   lamportsPaid:  number,
   stablePaid:    number,
   maxMcUsd:      number,
-): Promise<void> {
-  // ── Market cap ──────────────────────────────────────────────────────────
-  const mcResult = await getMarketCap(mint)
+): Promise<BuyMarketData> {
+  // ── Market cap + prix ────────────────────────────────────────────────────
+  const marketData = await getTokenMarketData(mint)
 
   console.log(
     `[webhook] BUY ${mint.slice(0, 8)}… wallet=${walletLabel}` +
-    ` mcap=${mcResult ? '$' + mcResult.usd.toFixed(0) + ' (' + mcResult.source + ')' : 'null'}` +
-    (mcResult && mcResult.usd > maxMcUsd ? ` — > $${maxMcUsd} (stocké, filtré à la lecture)` : '')
+    ` price=${marketData ? '$' + marketData.priceUsd.toFixed(8) : 'null'}` +
+    ` mcap=${marketData ? '$' + marketData.marketCapUsd.toFixed(0) + ' (' + marketData.source + ')' : 'null'}` +
+    (marketData && marketData.marketCapUsd > maxMcUsd ? ` — > $${maxMcUsd} (stocké, filtré à la lecture)` : '')
   )
 
   // ── Rug checks ──────────────────────────────────────────────────────────
@@ -137,8 +146,8 @@ async function processBuy(
     .upsert(
       {
         mint,
-        market_cap_usd:      mcResult?.usd ?? null,
-        mcap_source:         mcResult?.source ?? null,
+        market_cap_usd:      marketData?.marketCapUsd ?? null,
+        mcap_source:         marketData?.source ?? null,
         risque_score:        rugResult.score,
         score_reason:        rugResult.reason,
         rug_flags:           rugResult.flags,
@@ -168,16 +177,16 @@ async function processBuy(
       bought_at:         new Date(tx.timestamp * 1000).toISOString(),
       sol_amount:        lamportsPaid > 0 ? lamportsPaid / LAMPORTS_PER_SOL : null,
       usdc_amount:       stablePaid   > 0 ? stablePaid                       : null,
-      market_cap_at_buy: mcResult?.usd ?? null,
+      market_cap_at_buy: marketData?.marketCapUsd ?? null,
     })
 
   if (buyErr) {
     if (buyErr.code === '23505') {
       console.log(`[webhook] buy ${tx.signature.slice(0, 8)}… déjà présent — skip`)
-      return
+      return { priceUsd: marketData?.priceUsd ?? null, marketCapUsd: marketData?.marketCapUsd ?? null }
     }
     console.error(`[webhook] buy insert ${tx.signature.slice(0, 8)}…: ${buyErr.message}`)
-    return
+    return { priceUsd: null, marketCapUsd: null }
   }
 
   // ── Mise à jour buyer_count (distinct wallets depuis kymia_risque_buys) ─
@@ -202,6 +211,8 @@ async function processBuy(
     (rugResult.reason ? ` (${rugResult.reason})` : '') +
     ` buyers=${distinctBuyers}`
   )
+
+  return { priceUsd: marketData?.priceUsd ?? null, marketCapUsd: marketData?.marketCapUsd ?? null }
 }
 
 // ── Traitement d'une vente ────────────────────────────────────────────────────
@@ -315,8 +326,10 @@ export async function processWebhookEvent(
         analyzeNetBalances(tx, walletAddress)
 
       for (const buy of buys) {
+        let marketResult: { priceUsd: number | null; marketCapUsd: number | null } =
+          { priceUsd: null, marketCapUsd: null }
         try {
-          await processBuy(
+          marketResult = await processBuy(
             supabase, tx, buy.mint,
             walletAddress, walletLabel,
             lamportsPaid, stablePaid, maxMcUsd,
@@ -325,6 +338,23 @@ export async function processWebhookEvent(
         } catch (e: any) {
           console.error(`[webhook] processBuy ${buy.mint.slice(0, 8)}… ${walletLabel}:`, e.message)
         }
+
+        // Vérifier les conditions d'entrée après chaque buy
+        if (marketResult.priceUsd !== null) {
+          try {
+            const entry = await checkEntry(
+              supabase, buy.mint,
+              marketResult.priceUsd,
+              marketResult.marketCapUsd,
+            )
+            if (entry.entered) {
+              console.log(`[webhook] POSITION OUVERTE ${buy.mint.slice(0, 8)}…: ${entry.reason}`)
+            }
+          } catch (e: any) {
+            console.error(`[webhook] checkEntry ${buy.mint.slice(0, 8)}…:`, e.message)
+          }
+        }
+
         // Throttle DexScreener + RugCheck + RPC
         await new Promise(r => setTimeout(r, 250))
       }
