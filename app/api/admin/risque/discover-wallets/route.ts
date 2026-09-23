@@ -4,11 +4,12 @@
 // ── Phase 1 — Découverte tokens (DexScreener, 0 crédit Helius) ──────────────────
 //   GET /api/admin/risque/discover-wallets
 //   GET /api/admin/risque/discover-wallets?tokens=mint1,mint2,...  (mints explicites)
-//   → Retourne tokens qualifiés + estimation coût Helius. Ne consomme 0 crédit Helius.
+//   → Retourne tokens qualifiés + estimation coût. Ne consomme 0 crédit Helius.
 //
-// ── Phase 2 — Extraction premiers acheteurs (Helius, crédits consommés) ─────────
+// ── Phase 2 — Extraction premiers acheteurs (RPC Solana, 0 crédit Helius) ────────
 //   GET /api/admin/risque/discover-wallets?run=true
-//   → Appelle Helius pour extraire les premiers acheteurs de chaque token qualifié.
+//   → Utilise le RPC Solana standard pour extraire les premiers acheteurs.
+//   → 2 appels RPC par token : getSignaturesForAddress + batch getTransaction.
 //   → Retourne candidats à valider (ne touche pas kymia_risque_wallets).
 //
 // ── Phase 3 — Insertion après validation manuelle ────────────────────────────────
@@ -34,10 +35,11 @@
 //   /latest/dex/search?q=...  — 10 keywords × 30 paires (cat, dog, pepe…)
 //   → ~400 mints Solana uniques avant filtrage
 //
-// ── Coût Helius estimé ───────────────────────────────────────────────────────────
-//   getSignaturesForAddress : ~10 crédits/token
-//   Parse enhanced txs      : 1 crédit × discover_early_tx_count par token
-//   → ~40 crédits/token. 30 tokens ≈ 1 200 crédits (négligeable sur 10M/mois)
+// ── Extraction acheteurs (RPC Solana public) ─────────────────────────────────────
+//   getSignaturesForAddress(bondingCurvePDA) → 1 appel RPC
+//   batch getTransaction(30 sigs)            → 1 appel RPC batch
+//   → 2 appels RPC par token, ~700ms/token, 0 crédit Helius
+//   → Acheteur = signer[0] qui perd > 0.01 SOL ET reçoit des tokens
 //
 // ── Critère min_wins adaptatif ───────────────────────────────────────────────────
 //   tokens_qualifiés ≥ 10  → min_wins (défaut 2)
@@ -52,8 +54,8 @@ import { PublicKey }                 from '@solana/web3.js'
 import { bondingCurvePda }           from '@/lib/risque/pumpfun'
 import { getConnection }             from '@/lib/solana/wallet'
 
-const HELIUS_API  = 'https://api.helius.xyz/v0'
 const DEXSCREENER = 'https://api.dexscreener.com'
+const PUBLIC_RPC  = 'https://api.mainnet-beta.solana.com'
 
 // Keywords pour DexScreener search — termes populaires des meme coins Solana
 const SEARCH_KEYWORDS = [
@@ -178,27 +180,72 @@ async function fetchPairsBatch(mints: string[]): Promise<DexPair[]> {
   return (data?.pairs ?? []) as DexPair[]
 }
 
-// ── Helius : premiers acheteurs ───────────────────────────────────────────────────
-// Fonctionne pour pump.fun (bonding curve PDA) ET tokens graduées (pumpswap/raydium).
-// Pour les tokens graduées : fallback sur mint address (plus de signatures, plus large).
+// ── RPC Solana : premiers acheteurs (0 crédit Helius) ────────────────────────────
+//
+// Stratégie :
+//   1. getSignaturesForAddress sur la bonding curve PDA (pump.fun non-gradué)
+//      → fallback sur mint address pour tokens graduées (pumpswap/raydium)
+//   2. Batch getTransaction sur les N sigs les plus anciennes
+//   3. Acheteur = signer[0] qui perd > 0.01 SOL ET reçoit des tokens (postTokenBalances)
+//
+// Coût : 2 appels RPC par token (~700ms), 0 crédit Helius.
+// Rate limit public RPC : espacer les appels de 200ms minimum.
 
-interface HeliusEnhancedTx {
-  signature:       string
-  source?:         string
-  tokenTransfers?: Array<{ toUserAccount: string; fromUserAccount: string; mint: string }>
-  accountData?:    Array<{
-    account:             string
-    nativeBalanceChange: number
-    tokenBalanceChanges: Array<{ mint: string; rawTokenAmount: { tokenAmount: string } }>
-  }>
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function batchGetTransactions(sigs: string[], rpcUrl: string): Promise<any[]> {
+  if (sigs.length === 0) return []
+  const batchReq = sigs.map((sig, i) => ({
+    jsonrpc: '2.0',
+    id:      i,
+    method:  'getTransaction',
+    params:  [sig, { encoding: 'jsonParsed', maxSupportedTransactionVersion: 0 }],
+  }))
+  try {
+    const res = await fetch(rpcUrl, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', 'User-Agent': 'KYMIA/1.0' },
+      body:    JSON.stringify(batchReq),
+      signal:  AbortSignal.timeout(20_000),
+    })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return res.json()
+  } catch (e: any) {
+    console.warn(`[discover-wallets] batchGetTransactions: ${e.message}`)
+    return []
+  }
+}
+
+// Extrait l'acheteur depuis une tx jsonParsed.
+// Retourne null si la tx n'est pas un achat (création, frais, admin…).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function extractBuyer(txResult: any): string | null {
+  if (!txResult) return null
+  const meta  = txResult.meta ?? {}
+  const msg   = txResult.transaction?.message ?? {}
+  const accs  = msg.accountKeys ?? []
+  const preBal  = meta.preBalances  ?? []
+  const postBal = meta.postBalances ?? []
+  const postTok = meta.postTokenBalances ?? []
+
+  if (!accs.length || !preBal.length || !postBal.length) return null
+
+  const signer   = accs[0]
+  const signerPk = typeof signer === 'object' ? (signer as any).pubkey : String(signer)
+  const solChange = (postBal[0] - preBal[0]) / 1e9
+
+  // Vérifie que le signer reçoit des tokens (est propriétaire d'un token account post-tx)
+  const gotTokens = postTok.some((tb: any) => tb.owner === signerPk)
+
+  if (solChange < -0.01 && gotTokens) return signerPk
+  return null
 }
 
 async function getEarlyBuyers(
-  mint:          string,
-  apiKey:        string,
-  earlyTxCount:  number,
+  mint:         string,
+  earlyTxCount: number,
 ): Promise<{ address: string; txIndex: number }[]> {
-  const conn = getConnection()
+  const conn   = getConnection()
+  const rpcUrl = process.env.SOLANA_RPC_URL ?? PUBLIC_RPC
   let sigs: string[] = []
 
   // Essayer bonding curve PDA (pump.fun non-gradué)
@@ -223,58 +270,24 @@ async function getEarlyBuyers(
 
   if (sigs.length === 0) return []
 
-  // Dernières signatures = plus anciennes = premiers acheteurs
+  // Dernières signatures = plus anciennes = premiers acheteurs (ordre chrono)
   const earlySigs = sigs
     .slice(-Math.min(earlyTxCount, sigs.length))
-    .reverse()  // ordre chrono (index 0 = 1er acheteur)
+    .reverse()
 
-  // Parse via Helius enhanced transactions (batch, 1 crédit/tx)
-  let parsed: HeliusEnhancedTx[] = []
-  try {
-    const res = await fetch(`${HELIUS_API}/transactions?api-key=${apiKey}`, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json', 'User-Agent': 'KYMIA/1.0' },
-      body:    JSON.stringify({ transactions: earlySigs }),
-      signal:  AbortSignal.timeout(15_000),
-    })
-    if (res.ok) parsed = await res.json()
-    else console.warn(`[discover-wallets] Helius parse ${mint.slice(0, 8)}…: HTTP ${res.status}`)
-  } catch (e: any) {
-    console.warn(`[discover-wallets] Helius parse ${mint.slice(0, 8)}…: ${e.message}`)
-    return []
-  }
+  // Batch getTransaction via RPC (1 seul appel HTTP pour toutes les sigs)
+  const txResults = await batchGetTransactions(earlySigs, rpcUrl)
 
-  // Extraire l'acheteur de chaque tx
+  // Extraire les acheteurs — dédupliquer par wallet
   const buyers: { address: string; txIndex: number }[] = []
   const seen = new Set<string>()
-  let pdaStr: string | null = null
-  try { pdaStr = bondingCurvePda(mint).toBase58() } catch { /* non pump.fun */ }
 
-  for (let i = 0; i < parsed.length; i++) {
-    const tx = parsed[i]
-
-    // Méthode 1 : tokenTransfers — destinataire du token cible = acheteur
-    const tokenRecipient = tx.tokenTransfers?.find(t => t.mint === mint)?.toUserAccount
-
-    // Méthode 2 : accountData — compte qui perd SOL ET gagne des tokens
-    let accountDataBuyer: string | null = null
-    if (!tokenRecipient && tx.accountData) {
-      for (const ad of tx.accountData) {
-        if (pdaStr && ad.account === pdaStr) continue
-        const gainsMint = ad.tokenBalanceChanges?.some(
-          tc => tc.mint === mint && parseInt(tc.rawTokenAmount.tokenAmount, 10) > 0
-        )
-        if (gainsMint && ad.nativeBalanceChange < 0) {
-          accountDataBuyer = ad.account
-          break
-        }
-      }
-    }
-
-    const buyer = tokenRecipient ?? accountDataBuyer
+  for (const resp of txResults) {
+    const chronoIdx = resp.id as number  // = position chronologique dans earlySigs
+    const buyer = extractBuyer(resp.result)
     if (buyer && !seen.has(buyer)) {
       seen.add(buyer)
-      buyers.push({ address: buyer, txIndex: i })
+      buyers.push({ address: buyer, txIndex: chronoIdx })
     }
   }
 
@@ -282,11 +295,12 @@ async function getEarlyBuyers(
 }
 
 // ── Debug : trace complète pour un seul token ────────────────────────────────────
-// Appelé via GET ?debug=true&token=<mint>&run=true
+// Appelé via GET ?debug=true&token=<mint>
 
-async function debugSingleToken(mint: string, apiKey: string, earlyTxCount: number) {
+async function debugSingleToken(mint: string, earlyTxCount: number) {
   const conn   = getConnection()
-  const result: Record<string, unknown> = { mint }
+  const rpcUrl = process.env.SOLANA_RPC_URL ?? PUBLIC_RPC
+  const result: Record<string, unknown> = { mint, rpc_url: rpcUrl }
 
   // 1. Bonding curve PDA
   let pdaStr: string | null = null
@@ -297,7 +311,7 @@ async function debugSingleToken(mint: string, apiKey: string, earlyTxCount: numb
     result.pda_address = pdaStr
     const r = await conn.getSignaturesForAddress(pda, { limit: 1000 }, 'confirmed')
     pdaSigs = r.map(s => s.signature)
-    result.pda_sigs_count = pdaSigs.length
+    result.pda_sigs_count   = pdaSigs.length
     result.pda_sigs_newest3 = pdaSigs.slice(0, 3)
     result.pda_sigs_oldest3 = pdaSigs.slice(-3)
   } catch (e: any) {
@@ -319,8 +333,8 @@ async function debugSingleToken(mint: string, apiKey: string, earlyTxCount: numb
   }
 
   const sigs = pdaSigs.length > 0 ? pdaSigs : mintSigs
-  result.sig_source     = pdaSigs.length > 0 ? 'bonding_curve_pda' : 'mint_address'
-  result.total_sigs     = sigs.length
+  result.sig_source = pdaSigs.length > 0 ? 'bonding_curve_pda' : 'mint_address'
+  result.total_sigs = sigs.length
 
   if (sigs.length === 0) {
     result.diagnosis = 'FAIL: 0 signatures — token introuvable on-chain ou PDA et mint inactifs'
@@ -329,99 +343,70 @@ async function debugSingleToken(mint: string, apiKey: string, earlyTxCount: numb
 
   // 3. Sélection des N plus anciennes signatures
   const earlySigs = sigs.slice(-Math.min(earlyTxCount, sigs.length)).reverse()
-  result.early_sigs_count    = earlySigs.length
-  result.early_sigs_sample3  = earlySigs.slice(0, 3)
+  result.early_sigs_count   = earlySigs.length
+  result.early_sigs_sample3 = earlySigs.slice(0, 3)
 
-  // 4. Helius parse
-  let heliusStatus = 0
-  let parsed: HeliusEnhancedTx[] = []
-  try {
-    const res = await fetch(`${HELIUS_API}/transactions?api-key=${apiKey}`, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json', 'User-Agent': 'KYMIA/1.0' },
-      body:    JSON.stringify({ transactions: earlySigs }),
-      signal:  AbortSignal.timeout(15_000),
-    })
-    heliusStatus = res.status
-    result.helius_parse_http = heliusStatus
-    if (res.ok) {
-      parsed = await res.json()
-      result.helius_parsed_count = parsed.length
-    } else {
-      result.helius_parse_error = await res.text().catch(() => '')
-      result.diagnosis = `FAIL: Helius parse HTTP ${heliusStatus}`
-      return result
-    }
-  } catch (e: any) {
-    result.helius_parse_exception = e.message
-    result.diagnosis = `FAIL: Helius parse exception — ${e.message}`
-    return result
-  }
+  // 4. Batch getTransaction via RPC
+  const txResults = await batchGetTransactions(earlySigs, rpcUrl)
+  result.rpc_batch_responses = txResults.length
+  result.rpc_errors = txResults.filter((r: any) => r.error).length
 
-  if (parsed.length === 0) {
-    result.diagnosis = 'FAIL: Helius a retourné 0 transactions pour ces signatures'
+  if (txResults.length === 0) {
+    result.diagnosis = 'FAIL: batchGetTransactions a retourné 0 résultats'
     return result
   }
 
   // 5. Aperçu des 3 premières txs (structure clé pour le diagnostic)
-  result.tx_sample = parsed.slice(0, 3).map((tx, i) => ({
-    index:           i,
-    signature:       tx.signature?.slice(0, 12) + '…',
-    source:          tx.source,
-    tokenTransfers:  tx.tokenTransfers?.slice(0, 3) ?? [],
-    accountData_wallets: (tx.accountData ?? []).slice(0, 5).map(ad => ({
-      account:             ad.account?.slice(0, 8) + '…',
-      nativeBalanceChange: ad.nativeBalanceChange,
-      tokenChanges:        ad.tokenBalanceChanges?.filter(tc => tc.mint === mint).map(tc => ({
-        mint:      tc.mint?.slice(0, 8) + '…',
-        rawAmount: tc.rawTokenAmount?.tokenAmount,
-      })) ?? [],
-    })),
-  }))
+  result.tx_sample = txResults.slice(0, 3).map((resp: any) => {
+    const r = resp.result
+    if (!r) return { id: resp.id, error: resp.error ?? 'null result' }
+    const meta = r.meta ?? {}
+    const msg  = r.transaction?.message ?? {}
+    const accs = (msg.accountKeys ?? []).slice(0, 4).map((a: any) =>
+      typeof a === 'object' ? { pk: (a.pubkey ?? '').slice(0, 12) + '…', signer: a.signer, writable: a.writable } : String(a).slice(0, 12) + '…'
+    )
+    return {
+      id:          resp.id,
+      slot:        r.slot,
+      blockTime:   r.blockTime,
+      accounts:    accs,
+      sol_changes: (meta.preBalances ?? []).slice(0, 4).map(
+        (pre: number, i: number) => ((meta.postBalances?.[i] ?? pre) - pre) / 1e9
+      ),
+      post_tok_count: (meta.postTokenBalances ?? []).length,
+      post_tok_owners: (meta.postTokenBalances ?? []).slice(0, 3).map((tb: any) => (tb.owner ?? '?').slice(0, 12) + '…'),
+    }
+  })
 
   // 6. Extraction acheteurs (même logique que getEarlyBuyers)
-  const buyersAll:    { address: string; txIndex: number; method: string }[] = []
+  const buyersAll: { address: string; txIndex: number }[] = []
   const seen = new Set<string>()
-  let txsWithNoMethod = 0
+  let txsWithNoBuyer = 0
 
-  for (let i = 0; i < parsed.length; i++) {
-    const tx = parsed[i]
-    const tokenRecipient = tx.tokenTransfers?.find(t => t.mint === mint)?.toUserAccount
-    let accountDataBuyer: string | null = null
-    if (!tokenRecipient && tx.accountData) {
-      for (const ad of tx.accountData) {
-        if (pdaStr && ad.account === pdaStr) continue
-        const gainsMint = ad.tokenBalanceChanges?.some(
-          tc => tc.mint === mint && parseInt(tc.rawTokenAmount.tokenAmount, 10) > 0
-        )
-        if (gainsMint && ad.nativeBalanceChange < 0) {
-          accountDataBuyer = ad.account
-          break
-        }
+  for (const resp of txResults) {
+    const buyer = extractBuyer(resp.result)
+    if (buyer) {
+      if (!seen.has(buyer)) {
+        seen.add(buyer)
+        buyersAll.push({ address: buyer, txIndex: resp.id as number })
       }
-    }
-    const buyer  = tokenRecipient ?? accountDataBuyer
-    const method = tokenRecipient ? 'tokenTransfers' : accountDataBuyer ? 'accountData' : 'none'
-    if (method === 'none') txsWithNoMethod++
-    if (buyer && !seen.has(buyer)) {
-      seen.add(buyer)
-      buyersAll.push({ address: buyer, txIndex: i, method })
+    } else {
+      txsWithNoBuyer++
     }
   }
 
   result.buyers_before_filter = buyersAll.length
-  result.txs_with_no_method   = txsWithNoMethod
+  result.txs_with_no_buyer    = txsWithNoBuyer
   result.buyers_sample5       = buyersAll.slice(0, 5)
 
   if (buyersAll.length === 0) {
     result.diagnosis =
-      'FAIL: 0 acheteurs extraits — ' +
-      (txsWithNoMethod === parsed.length
-        ? `TOUTES les txs (${parsed.length}) sans tokenTransfers ni accountData matching. ` +
-          'Format inattendu — inspecter tx_sample ci-dessus.'
-        : `${txsWithNoMethod}/${parsed.length} txs sans acheteur identifié.`)
+      'FAIL: 0 acheteurs — ' +
+      (txsWithNoBuyer === txResults.length
+        ? `toutes les txs (${txResults.length}) filtrées (pas de perte SOL > 0.01 + gain tokens). Inspecter tx_sample.`
+        : `${txsWithNoBuyer}/${txResults.length} txs sans acheteur identifié.`)
   } else {
-    result.diagnosis = `OK: ${buyersAll.length} acheteurs extraits`
+    result.diagnosis = `OK: ${buyersAll.length} acheteurs extraits sur ${txResults.length} txs`
   }
 
   return result
@@ -434,15 +419,10 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const apiKey  = process.env.NEXT_PUBLIC_HELIEUS_KEY
-  const run     = req.nextUrl.searchParams.get('run') === 'true'
-  const tokensQ = req.nextUrl.searchParams.get('tokens')
+  const run       = req.nextUrl.searchParams.get('run') === 'true'
+  const tokensQ   = req.nextUrl.searchParams.get('tokens')
   const debugMode = req.nextUrl.searchParams.get('debug') === 'true'
   const debugMint = req.nextUrl.searchParams.get('token')
-
-  if ((run || debugMode) && !apiKey) {
-    return NextResponse.json({ error: 'NEXT_PUBLIC_HELIEUS_KEY manquant' }, { status: 500 })
-  }
 
   const supaUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
   const supaKey = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -460,7 +440,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'Paramètre ?token=<mint> requis avec debug=true' }, { status: 400 })
     }
     console.log(`[discover-wallets] debug mode pour ${mint.slice(0, 8)}…`)
-    const trace = await debugSingleToken(mint, apiKey!, cfg.earlyTxCount)
+    const trace = await debugSingleToken(mint, cfg.earlyTxCount)
     return NextResponse.json({ ok: true, debug: true, trace })
   }
 
@@ -481,9 +461,9 @@ export async function GET(req: NextRequest) {
   )
 
   // ── 2. Récupérer les données de paires en batch ───────────────────────────────
-  const nowMs       = Date.now()
-  const maxAgeMs    = cfg.maxPairAgeDays > 0 ? cfg.maxPairAgeDays * 86_400_000 : Infinity
-  const allPairs    = new Map<string, DexPair>()  // mint → best pair
+  const nowMs    = Date.now()
+  const maxAgeMs = cfg.maxPairAgeDays > 0 ? cfg.maxPairAgeDays * 86_400_000 : Infinity
+  const allPairs = new Map<string, DexPair>()  // mint → best pair
 
   const batches = []
   for (let i = 0; i < allMints.length; i += DEX_BATCH_SIZE) {
@@ -523,8 +503,8 @@ export async function GET(req: NextRequest) {
     if (!cfg.allowedDexIds.includes(p.dexId)) continue
 
     // Filtre gain : h24 OU h6
-    const h24  = p.priceChange?.h24 ?? null
-    const h6   = p.priceChange?.h6  ?? null
+    const h24    = p.priceChange?.h24 ?? null
+    const h6     = p.priceChange?.h6  ?? null
     const gainOk = (h24 !== null && h24 >= cfg.minGainPct)
                 || (h6  !== null && h6  >= cfg.minGainH6Pct)
     if (!gainOk) continue
@@ -571,7 +551,8 @@ export async function GET(req: NextRequest) {
     ? `Adaptatif : min_wins abaissé à 1 (seulement ${qualifyingTokens.length} tokens qualifiés < 10) + filtre avg_entry_rank ≤ ${cfg.minEntryRank}`
     : null
 
-  const estimatedCredits = qualifyingTokens.length * (10 + cfg.earlyTxCount)
+  // Coût estimé : 2 appels RPC par token (getSignaturesForAddress + batch getTransaction)
+  const estimatedRpcCalls = qualifyingTokens.length * 2
 
   if (!run) {
     return NextResponse.json({
@@ -581,25 +562,25 @@ export async function GET(req: NextRequest) {
       tokens_found:      qualifyingTokens.length,
       effective_min_wins: effectiveMinWins,
       adaptive_note:     adaptiveNote,
-      estimated_credits: estimatedCredits,
+      estimated_rpc_calls: estimatedRpcCalls,
+      helius_credits_used: 0,
       settings:          cfg,
-      hint:              `Relancer avec ?run=true pour extraire les premiers acheteurs (~${estimatedCredits} crédits Helius)`,
+      hint:              `Relancer avec ?run=true pour extraire les premiers acheteurs (~${estimatedRpcCalls} appels RPC, 0 crédit Helius)`,
       tokens:            qualifyingTokens,
     })
   }
 
-  // ── 4. Extraction Helius : premiers acheteurs ─────────────────────────────────
+  // ── 4. Extraction RPC : premiers acheteurs ────────────────────────────────────
   const { data: existingWallets } = await supabase
     .from('kymia_risque_wallets').select('address')
   const existingSet = new Set((existingWallets ?? []).map((w: any) => w.address as string))
 
-  let heliusCreditsUsed = 0
+  let rpcCallsUsed = 0
   const walletWins = new Map<string, {
     wins:         number
     tokens:       string[]
     labels:       string[]
     firstIndexes: number[]
-    buyAmounts:   number[]   // pour filtre qualité (non utilisé pour l'instant)
   }>()
 
   for (const tok of qualifyingTokens) {
@@ -609,31 +590,30 @@ export async function GET(req: NextRequest) {
       ` mcap=$${tok.mcap?.toFixed(0) ?? '?'} dex=${tok.dexId}`
     )
 
-    const buyers = await getEarlyBuyers(tok.mint, apiKey!, cfg.earlyTxCount)
-    // 10 crédits pour getSignaturesForAddress + 1 crédit/tx parsée (earlyTxCount au max)
-    heliusCreditsUsed += 10 + Math.min(cfg.earlyTxCount, buyers.length > 0 ? cfg.earlyTxCount : 0)
+    const buyers = await getEarlyBuyers(tok.mint, cfg.earlyTxCount)
+    rpcCallsUsed += 2  // 1 getSignaturesForAddress + 1 batch getTransaction
     console.log(`[discover-wallets] ${tok.symbol}: ${buyers.length} acheteurs extraits`)
 
     for (const buyer of buyers) {
       if (existingSet.has(buyer.address)) continue
       const prev = walletWins.get(buyer.address) ??
-        { wins: 0, tokens: [], labels: [], firstIndexes: [], buyAmounts: [] }
+        { wins: 0, tokens: [], labels: [], firstIndexes: [] }
       walletWins.set(buyer.address, {
         wins:         prev.wins + 1,
         tokens:       [...prev.tokens, tok.mint],
         labels:       [...prev.labels, tok.symbol],
         firstIndexes: [...prev.firstIndexes, buyer.txIndex],
-        buyAmounts:   prev.buyAmounts,
       })
     }
 
-    await new Promise(r => setTimeout(r, 400))
+    // Pause 200ms entre chaque token pour respecter le rate limit du RPC public
+    await new Promise(r => setTimeout(r, 200))
   }
 
   // ── 5. Filtrer les candidats ──────────────────────────────────────────────────
-  const totalWallets    = walletWins.size
-  const withMinWins     = [...walletWins.values()].filter(v => v.wins >= effectiveMinWins).length
-  const withRankFilter  = effectiveMinWins === 1
+  const totalWallets   = walletWins.size
+  const withMinWins    = [...walletWins.values()].filter(v => v.wins >= effectiveMinWins).length
+  const withRankFilter = effectiveMinWins === 1
     ? [...walletWins.values()].filter(v => {
         if (v.wins < 1) return false
         const avgRank = v.firstIndexes.reduce((s, i) => s + i, 0) / v.firstIndexes.length
@@ -650,7 +630,6 @@ export async function GET(req: NextRequest) {
   const candidates = [...walletWins.entries()]
     .filter(([, v]) => {
       if (v.wins < effectiveMinWins) return false
-      // Filtre qualité si min_wins adaptatif = 1
       if (effectiveMinWins === 1) {
         const avgRank = v.firstIndexes.reduce((s, i) => s + i, 0) / v.firstIndexes.length
         if (avgRank > cfg.minEntryRank) return false
@@ -663,9 +642,9 @@ export async function GET(req: NextRequest) {
         : null
       return {
         address,
-        wins:           v.wins,
-        winning_tokens: v.labels,
-        avg_entry_rank: avgEntryRank,
+        wins:            v.wins,
+        winning_tokens:  v.labels,
+        avg_entry_rank:  avgEntryRank,
         suggested_label: `alpha_${address.slice(0, 6)}`,
       }
     })
@@ -674,7 +653,7 @@ export async function GET(req: NextRequest) {
   console.log(
     `[discover-wallets] terminé — ${qualifyingTokens.length} tokens évalués,` +
     ` ${walletWins.size} wallets uniques, ${candidates.length} candidats,` +
-    ` ${heliusCreditsUsed} crédits Helius utilisés`
+    ` ${rpcCallsUsed} appels RPC, 0 crédit Helius`
   )
 
   return NextResponse.json({
@@ -685,7 +664,8 @@ export async function GET(req: NextRequest) {
     candidates_count:    candidates.length,
     effective_min_wins:  effectiveMinWins,
     adaptive_note:       adaptiveNote,
-    helius_credits_used: heliusCreditsUsed,
+    rpc_calls_used:      rpcCallsUsed,
+    helius_credits_used: 0,
     settings:            cfg,
     hint: candidates.length > 0
       ? 'Valider puis POST /api/admin/risque/discover-wallets avec {wallets:[{address,label}]}'
