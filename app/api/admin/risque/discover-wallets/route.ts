@@ -281,6 +281,152 @@ async function getEarlyBuyers(
   return buyers
 }
 
+// ── Debug : trace complète pour un seul token ────────────────────────────────────
+// Appelé via GET ?debug=true&token=<mint>&run=true
+
+async function debugSingleToken(mint: string, apiKey: string, earlyTxCount: number) {
+  const conn   = getConnection()
+  const result: Record<string, unknown> = { mint }
+
+  // 1. Bonding curve PDA
+  let pdaStr: string | null = null
+  let pdaSigs: string[] = []
+  try {
+    const pda = bondingCurvePda(mint)
+    pdaStr = pda.toBase58()
+    result.pda_address = pdaStr
+    const r = await conn.getSignaturesForAddress(pda, { limit: 1000 }, 'confirmed')
+    pdaSigs = r.map(s => s.signature)
+    result.pda_sigs_count = pdaSigs.length
+    result.pda_sigs_newest3 = pdaSigs.slice(0, 3)
+    result.pda_sigs_oldest3 = pdaSigs.slice(-3)
+  } catch (e: any) {
+    result.pda_error = e.message
+  }
+
+  // 2. Fallback mint address si PDA vide
+  let mintSigs: string[] = []
+  if (pdaSigs.length === 0) {
+    try {
+      const r = await conn.getSignaturesForAddress(new PublicKey(mint), { limit: 1000 }, 'confirmed')
+      mintSigs = r.map(s => s.signature)
+      result.mint_sigs_count   = mintSigs.length
+      result.mint_sigs_newest3 = mintSigs.slice(0, 3)
+      result.mint_sigs_oldest3 = mintSigs.slice(-3)
+    } catch (e: any) {
+      result.mint_sigs_error = e.message
+    }
+  }
+
+  const sigs = pdaSigs.length > 0 ? pdaSigs : mintSigs
+  result.sig_source     = pdaSigs.length > 0 ? 'bonding_curve_pda' : 'mint_address'
+  result.total_sigs     = sigs.length
+
+  if (sigs.length === 0) {
+    result.diagnosis = 'FAIL: 0 signatures — token introuvable on-chain ou PDA et mint inactifs'
+    return result
+  }
+
+  // 3. Sélection des N plus anciennes signatures
+  const earlySigs = sigs.slice(-Math.min(earlyTxCount, sigs.length)).reverse()
+  result.early_sigs_count    = earlySigs.length
+  result.early_sigs_sample3  = earlySigs.slice(0, 3)
+
+  // 4. Helius parse
+  let heliusStatus = 0
+  let parsed: HeliusEnhancedTx[] = []
+  try {
+    const res = await fetch(`${HELIUS_API}/transactions?api-key=${apiKey}`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', 'User-Agent': 'KYMIA/1.0' },
+      body:    JSON.stringify({ transactions: earlySigs }),
+      signal:  AbortSignal.timeout(15_000),
+    })
+    heliusStatus = res.status
+    result.helius_parse_http = heliusStatus
+    if (res.ok) {
+      parsed = await res.json()
+      result.helius_parsed_count = parsed.length
+    } else {
+      result.helius_parse_error = await res.text().catch(() => '')
+      result.diagnosis = `FAIL: Helius parse HTTP ${heliusStatus}`
+      return result
+    }
+  } catch (e: any) {
+    result.helius_parse_exception = e.message
+    result.diagnosis = `FAIL: Helius parse exception — ${e.message}`
+    return result
+  }
+
+  if (parsed.length === 0) {
+    result.diagnosis = 'FAIL: Helius a retourné 0 transactions pour ces signatures'
+    return result
+  }
+
+  // 5. Aperçu des 3 premières txs (structure clé pour le diagnostic)
+  result.tx_sample = parsed.slice(0, 3).map((tx, i) => ({
+    index:           i,
+    signature:       tx.signature?.slice(0, 12) + '…',
+    source:          tx.source,
+    tokenTransfers:  tx.tokenTransfers?.slice(0, 3) ?? [],
+    accountData_wallets: (tx.accountData ?? []).slice(0, 5).map(ad => ({
+      account:             ad.account?.slice(0, 8) + '…',
+      nativeBalanceChange: ad.nativeBalanceChange,
+      tokenChanges:        ad.tokenBalanceChanges?.filter(tc => tc.mint === mint).map(tc => ({
+        mint:      tc.mint?.slice(0, 8) + '…',
+        rawAmount: tc.rawTokenAmount?.tokenAmount,
+      })) ?? [],
+    })),
+  }))
+
+  // 6. Extraction acheteurs (même logique que getEarlyBuyers)
+  const buyersAll:    { address: string; txIndex: number; method: string }[] = []
+  const seen = new Set<string>()
+  let txsWithNoMethod = 0
+
+  for (let i = 0; i < parsed.length; i++) {
+    const tx = parsed[i]
+    const tokenRecipient = tx.tokenTransfers?.find(t => t.mint === mint)?.toUserAccount
+    let accountDataBuyer: string | null = null
+    if (!tokenRecipient && tx.accountData) {
+      for (const ad of tx.accountData) {
+        if (pdaStr && ad.account === pdaStr) continue
+        const gainsMint = ad.tokenBalanceChanges?.some(
+          tc => tc.mint === mint && parseInt(tc.rawTokenAmount.tokenAmount, 10) > 0
+        )
+        if (gainsMint && ad.nativeBalanceChange < 0) {
+          accountDataBuyer = ad.account
+          break
+        }
+      }
+    }
+    const buyer  = tokenRecipient ?? accountDataBuyer
+    const method = tokenRecipient ? 'tokenTransfers' : accountDataBuyer ? 'accountData' : 'none'
+    if (method === 'none') txsWithNoMethod++
+    if (buyer && !seen.has(buyer)) {
+      seen.add(buyer)
+      buyersAll.push({ address: buyer, txIndex: i, method })
+    }
+  }
+
+  result.buyers_before_filter = buyersAll.length
+  result.txs_with_no_method   = txsWithNoMethod
+  result.buyers_sample5       = buyersAll.slice(0, 5)
+
+  if (buyersAll.length === 0) {
+    result.diagnosis =
+      'FAIL: 0 acheteurs extraits — ' +
+      (txsWithNoMethod === parsed.length
+        ? `TOUTES les txs (${parsed.length}) sans tokenTransfers ni accountData matching. ` +
+          'Format inattendu — inspecter tx_sample ci-dessus.'
+        : `${txsWithNoMethod}/${parsed.length} txs sans acheteur identifié.`)
+  } else {
+    result.diagnosis = `OK: ${buyersAll.length} acheteurs extraits`
+  }
+
+  return result
+}
+
 // ── Handler GET ───────────────────────────────────────────────────────────────────
 
 export async function GET(req: NextRequest) {
@@ -291,8 +437,10 @@ export async function GET(req: NextRequest) {
   const apiKey  = process.env.NEXT_PUBLIC_HELIEUS_KEY
   const run     = req.nextUrl.searchParams.get('run') === 'true'
   const tokensQ = req.nextUrl.searchParams.get('tokens')
+  const debugMode = req.nextUrl.searchParams.get('debug') === 'true'
+  const debugMint = req.nextUrl.searchParams.get('token')
 
-  if (run && !apiKey) {
+  if ((run || debugMode) && !apiKey) {
     return NextResponse.json({ error: 'NEXT_PUBLIC_HELIEUS_KEY manquant' }, { status: 500 })
   }
 
@@ -303,6 +451,18 @@ export async function GET(req: NextRequest) {
   }
   const supabase = createClient(supaUrl, supaKey, { auth: { persistSession: false } })
   const cfg      = await loadDiscoverSettings(supabase)
+
+  // ── Mode debug : trace complète pour un token précis ─────────────────────────
+  // GET ?debug=true&token=<mint>
+  if (debugMode) {
+    const mint = debugMint?.trim()
+    if (!mint) {
+      return NextResponse.json({ error: 'Paramètre ?token=<mint> requis avec debug=true' }, { status: 400 })
+    }
+    console.log(`[discover-wallets] debug mode pour ${mint.slice(0, 8)}…`)
+    const trace = await debugSingleToken(mint, apiKey!, cfg.earlyTxCount)
+    return NextResponse.json({ ok: true, debug: true, trace })
+  }
 
   // ── 1. Collecter les mints candidats ─────────────────────────────────────────
   const explicitMints = tokensQ
@@ -450,7 +610,9 @@ export async function GET(req: NextRequest) {
     )
 
     const buyers = await getEarlyBuyers(tok.mint, apiKey!, cfg.earlyTxCount)
-    heliusCreditsUsed += 10 + buyers.length
+    // 10 crédits pour getSignaturesForAddress + 1 crédit/tx parsée (earlyTxCount au max)
+    heliusCreditsUsed += 10 + Math.min(cfg.earlyTxCount, buyers.length > 0 ? cfg.earlyTxCount : 0)
+    console.log(`[discover-wallets] ${tok.symbol}: ${buyers.length} acheteurs extraits`)
 
     for (const buyer of buyers) {
       if (existingSet.has(buyer.address)) continue
@@ -469,6 +631,22 @@ export async function GET(req: NextRequest) {
   }
 
   // ── 5. Filtrer les candidats ──────────────────────────────────────────────────
+  const totalWallets    = walletWins.size
+  const withMinWins     = [...walletWins.values()].filter(v => v.wins >= effectiveMinWins).length
+  const withRankFilter  = effectiveMinWins === 1
+    ? [...walletWins.values()].filter(v => {
+        if (v.wins < 1) return false
+        const avgRank = v.firstIndexes.reduce((s, i) => s + i, 0) / v.firstIndexes.length
+        return avgRank <= cfg.minEntryRank
+      }).length
+    : withMinWins
+
+  console.log(
+    `[discover-wallets] candidats pré-filtre: ${totalWallets} wallets uniques` +
+    ` → ${withMinWins} avec wins≥${effectiveMinWins}` +
+    (effectiveMinWins === 1 ? ` → ${withRankFilter} avec avg_entry_rank≤${cfg.minEntryRank}` : '')
+  )
+
   const candidates = [...walletWins.entries()]
     .filter(([, v]) => {
       if (v.wins < effectiveMinWins) return false
