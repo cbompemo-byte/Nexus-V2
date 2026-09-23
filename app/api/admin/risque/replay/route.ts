@@ -155,6 +155,128 @@ async function replayBatch(
   })
 }
 
+// ── Mode fix-sol-amounts ──────────────────────────────────────────────────────
+// Corrige rétroactivement les sol_amount NULL dans kymia_risque_buys.
+//
+// Cause : l'ancienne version utilisait nativeTransfers.fromUserAccount pour déduire
+// le SOL payé, mais pour les swaps pump.fun le SOL transite via le programme
+// (fromUserAccount ≠ wallet) → lamportsPaid = 0 → sol_amount = null.
+//
+// Fix : lire accountData[wallet].nativeBalanceChange depuis le payload brut stocké.
+// Fallback WSOL : si nativeBalanceChange = 0, lire tokenBalanceChanges[WSOL_MINT].
+// WSOL a 9 décimales (= lamports) — rawTokenAmount.tokenAmount est signé.
+
+const WSOL_MINT_FIX = 'So11111111111111111111111111111111111111112'
+
+async function fixSolAmounts(
+  supabase: ReturnType<typeof makeSupabase>,
+  limit:    number,
+): Promise<NextResponse> {
+  // On lit les webhooks_raw où buys_inserted > 0 — ces payloads ont des buys connus.
+  const { data: rows, error: fetchErr } = await supabase
+    .from('kymia_risque_webhooks_raw')
+    .select('id, payload')
+    .gt('buys_inserted', 0)
+    .order('received_at', { ascending: true })
+    .limit(limit)
+
+  if (fetchErr) return NextResponse.json({ error: fetchErr.message }, { status: 500 })
+  if (!rows?.length) {
+    return NextResponse.json({ ok: true, mode: 'fix-sol-amounts', processed: 0, updated: 0 })
+  }
+
+  console.log(`[replay] fix-sol-amounts: ${rows.length} payloads à analyser`)
+
+  const { data: wallets } = await supabase.from('kymia_risque_wallets').select('address')
+  const walletSet = new Set((wallets ?? []).map(w => w.address as string))
+
+  let totalUpdated   = 0
+  let totalNative    = 0   // corrigés via nativeBalanceChange
+  let totalWsol      = 0   // corrigés via WSOL tokenBalanceChange
+  let totalSkipped   = 0   // nativeBalanceChange = 0 ET pas de WSOL → toujours NULL
+
+  interface TokenBalanceChange {
+    mint:           string
+    rawTokenAmount: { tokenAmount: string; decimals: number }
+  }
+  interface RawAccountData {
+    account:             string
+    nativeBalanceChange: number
+    tokenBalanceChanges: TokenBalanceChange[]
+  }
+  interface RawTx {
+    signature:   string
+    accountData: RawAccountData[]
+  }
+
+  for (const row of rows) {
+    const txs = (Array.isArray(row.payload) ? row.payload : []) as RawTx[]
+
+    for (const tx of txs) {
+      if (!tx.signature) continue
+
+      for (const ad of (tx.accountData ?? [])) {
+        if (!walletSet.has(ad.account)) continue
+
+        // ── Primaire : nativeBalanceChange ──────────────────────────────────
+        let lamports = ad.nativeBalanceChange
+
+        // ── Fallback : WSOL tokenBalanceChange ──────────────────────────────
+        // Achat avec WSOL déjà wrappé → nativeBalanceChange = 0
+        // mais tokenBalanceChanges[WSOL_MINT].rawTokenAmount.tokenAmount < 0 (lamports)
+        if (lamports === 0) {
+          for (const tc of (ad.tokenBalanceChanges ?? [])) {
+            if (tc.mint !== WSOL_MINT_FIX) continue
+            const raw = parseInt(tc.rawTokenAmount.tokenAmount, 10)
+            if (raw < 0) {
+              lamports = raw   // déjà en lamports (WSOL, 9 décimales)
+              break
+            }
+          }
+        }
+
+        if (lamports >= 0) {
+          totalSkipped++
+          continue   // pas d'info SOL sur ce wallet pour cette tx
+        }
+
+        const solAmount = -lamports / 1_000_000_000
+        const isWsol    = ad.nativeBalanceChange === 0
+
+        const { data: updatedRows } = await supabase
+          .from('kymia_risque_buys')
+          .update({ sol_amount: solAmount })
+          .eq('tx_signature',   tx.signature)
+          .eq('wallet_address', ad.account)
+          .is('sol_amount', null)
+          .select('id')
+
+        const n = updatedRows?.length ?? 0
+        totalUpdated += n
+        if (n > 0) {
+          if (isWsol) totalWsol++ ; else totalNative++
+        }
+      }
+    }
+  }
+
+  console.log(
+    `[replay] fix-sol-amounts terminé — payloads=${rows.length}` +
+    ` updated=${totalUpdated} (native=${totalNative} wsol=${totalWsol})` +
+    ` skipped_no_data=${totalSkipped}`
+  )
+
+  return NextResponse.json({
+    ok:              true,
+    mode:            'fix-sol-amounts',
+    payloads:        rows.length,
+    updated:         totalUpdated,
+    updated_native:  totalNative,
+    updated_wsol:    totalWsol,
+    skipped_no_data: totalSkipped,
+  })
+}
+
 // ── Mode fix-tokens ───────────────────────────────────────────────────────────
 // Reprocesse les entrées où le buy a été inséré (buys_inserted > 0) mais où
 // le token est possiblement absent (replays d'avant le fix graceful-degradation).
@@ -225,12 +347,13 @@ export async function POST(req: NextRequest) {
   const rawId = req.nextUrl.searchParams.get('raw_id')
   const limit = Math.min(parseInt(req.nextUrl.searchParams.get('limit') ?? '50', 10), 200)
 
-  if (mode === 'batch')       return replayBatch(supabase, limit)
-  if (mode === 'fix-tokens')  return replayFixTokens(supabase, limit)
-  if (rawId)                  return replaySingle(supabase, rawId)
+  if (mode === 'batch')            return replayBatch(supabase, limit)
+  if (mode === 'fix-tokens')       return replayFixTokens(supabase, limit)
+  if (mode === 'fix-sol-amounts')  return fixSolAmounts(supabase, limit)
+  if (rawId)                       return replaySingle(supabase, rawId)
 
   return NextResponse.json(
-    { error: 'Paramètre requis : raw_id=<uuid>, mode=batch, ou mode=fix-tokens' },
+    { error: 'Paramètre requis : raw_id=<uuid>, mode=batch, mode=fix-tokens, ou mode=fix-sol-amounts' },
     { status: 400 },
   )
 }

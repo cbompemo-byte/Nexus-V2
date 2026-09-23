@@ -164,16 +164,33 @@ export async function GET(req: NextRequest) {
 // ── Helpers locaux (évite d'importer pumpfun.ts — garde le diagnostic isolé) ──
 
 async function fetchSolPrice(): Promise<number> {
+  // Primary: CoinGecko
+  try {
+    const res = await fetch(
+      'https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd',
+      { headers: { 'User-Agent': 'KYMIA/1.0' }, signal: AbortSignal.timeout(5_000) },
+    )
+    if (res.ok) {
+      const data  = await res.json()
+      const price = data?.solana?.usd
+      if (typeof price === 'number' && price > 0) return price
+    }
+  } catch { /* fall through */ }
+
+  // Fallback: DexScreener on WSOL
   const res = await fetch(
-    `https://lite-api.jup.ag/price/v2?ids=${WSOL_MINT}`,
-    { headers: { 'User-Agent': 'KYMIA/1.0' }, signal: AbortSignal.timeout(5_000) },
+    `https://api.dexscreener.com/latest/dex/tokens/${WSOL_MINT}`,
+    { headers: { 'User-Agent': 'KYMIA/1.0' }, signal: AbortSignal.timeout(8_000) },
   )
-  if (!res.ok) throw new Error(`Jupiter HTTP ${res.status}`)
+  if (!res.ok) throw new Error(`DexScreener HTTP ${res.status}`)
   const data  = await res.json()
-  const price = data?.data?.[WSOL_MINT]?.price
-  if (typeof price !== 'number' && typeof price !== 'string')
-    throw new Error('SOL price absent de Jupiter')
-  return Number(price)
+  const pairs = (data.pairs ?? []) as Array<{ priceUsd?: string; liquidity?: { usd: number } }>
+  const best  = pairs
+    .filter(p => parseFloat(p.priceUsd ?? '0') > 0)
+    .sort((a, b) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0))[0]
+  const price = best ? parseFloat(best.priceUsd!) : 0
+  if (price > 0) return price
+  throw new Error('SOL price unavailable (CoinGecko + DexScreener failed)')
 }
 
 async function fetchDexScreener(mint: string): Promise<{ priceUsd: number; marketCapUsd: number } | null> {

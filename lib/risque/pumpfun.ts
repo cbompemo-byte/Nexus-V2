@@ -7,7 +7,12 @@
 //   - Layout    : discriminator(8) + virtualTokenReserves(u64) + virtualSolReserves(u64)
 //                 + realTokenReserves(u64) + realSolReserves(u64)
 //                 + tokenTotalSupply(u64) + complete(bool)
-//   - Prix SOL  : Jupiter Price API v2
+//   - Prix SOL  : CoinGecko (primaire) + DexScreener WSOL (fallback) + cache 60s
+//
+// Sources :
+//   - 'onchain'          : curve lisible + prix SOL disponible → priceUsd + marketCapUsd
+//   - 'onchain_sol_only' : curve lisible mais prix SOL indisponible → marketCapSol only
+//   - 'dexscreener'      : curve absente/graduée → DexScreener pairs
 //
 // Fallback DexScreener :
 //   - Si curve.complete = true  → token gradué, bonding curve inactive → DexScreener
@@ -20,6 +25,17 @@ import { getConnection } from '@/lib/solana/wallet'
 const PUMP_PROGRAM_ID = new PublicKey('6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P')
 const WSOL_MINT       = 'So11111111111111111111111111111111111111112'
 const DEXSCREENER     = 'https://api.dexscreener.com'
+
+// Erreur spécifique levée quand Helius RPC retourne 429 (quota épuisé).
+// Attrappée par le monitor pour avorter le cycle entier sans faux-positifs.
+export class HeliusRateLimitError extends Error {
+  constructor() { super('Helius quota épuisé (429)'); this.name = 'HeliusRateLimitError' }
+}
+
+function is429(e: unknown): boolean {
+  const msg = (e instanceof Error ? e.message : String(e)).toLowerCase()
+  return msg.includes('429') || msg.includes('too many requests') || msg.includes('rate limit')
+}
 
 // ── Bonding curve PDA ─────────────────────────────────────────────────────────
 
@@ -58,19 +74,51 @@ function parseCurve(data: Buffer): CurveData {
   }
 }
 
-// ── Prix SOL depuis Jupiter Price API v2 ─────────────────────────────────────
+// ── Prix SOL — CoinGecko (primaire) + DexScreener WSOL (fallback) + cache 60s ──
 
-async function fetchSolPriceUsd(): Promise<number> {
-  const res = await fetch(
-    `https://lite-api.jup.ag/price/v2?ids=${WSOL_MINT}`,
-    { headers: { 'User-Agent': 'KYMIA/1.0' }, signal: AbortSignal.timeout(5_000) },
-  )
-  if (!res.ok) throw new Error(`Jupiter price HTTP ${res.status}`)
-  const data  = await res.json()
-  const price = data?.data?.[WSOL_MINT]?.price
-  if (typeof price !== 'number' && typeof price !== 'string')
-    throw new Error('SOL price absent de la réponse Jupiter')
-  return Number(price)
+let _solPriceCache: { price: number; expiresAt: number } | null = null
+
+export async function fetchSolPriceUsd(): Promise<number> {
+  const now = Date.now()
+  if (_solPriceCache && now < _solPriceCache.expiresAt) return _solPriceCache.price
+
+  // Primary: CoinGecko
+  try {
+    const res = await fetch(
+      'https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd',
+      { headers: { 'User-Agent': 'KYMIA/1.0' }, signal: AbortSignal.timeout(5_000) },
+    )
+    if (res.ok) {
+      const data  = await res.json()
+      const price = data?.solana?.usd
+      if (typeof price === 'number' && price > 0) {
+        _solPriceCache = { price, expiresAt: now + 60_000 }
+        return price
+      }
+    }
+  } catch { /* fall through to DexScreener */ }
+
+  // Fallback: DexScreener on WSOL pairs
+  try {
+    const res = await fetch(
+      `https://api.dexscreener.com/latest/dex/tokens/${WSOL_MINT}`,
+      { headers: { 'User-Agent': 'KYMIA/1.0' }, signal: AbortSignal.timeout(8_000) },
+    )
+    if (res.ok) {
+      const data  = await res.json()
+      const pairs = (data.pairs ?? []) as Array<{ priceUsd?: string; liquidity?: { usd: number } }>
+      const best  = pairs
+        .filter(p => parseFloat(p.priceUsd ?? '0') > 0)
+        .sort((a, b) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0))[0]
+      const price = best ? parseFloat(best.priceUsd!) : 0
+      if (price > 0) {
+        _solPriceCache = { price, expiresAt: now + 60_000 }
+        return price
+      }
+    }
+  } catch { /* fall through */ }
+
+  throw new Error('SOL price unavailable (CoinGecko + DexScreener both failed)')
 }
 
 // ── Fallback DexScreener ──────────────────────────────────────────────────────
@@ -156,6 +204,7 @@ export async function getMarketCap(mint: string): Promise<MarketCapResult | null
     // Compte PDA absent (token pas pump.fun ou déjà clôturé)
     console.warn(`[pumpfun] PDA absent pour ${mint.slice(0, 8)}… → fallback DexScreener`)
   } catch (e: any) {
+    if (is429(e)) throw new HeliusRateLimitError()
     console.warn(`[pumpfun] RPC error ${mint.slice(0, 8)}…: ${e.message} → fallback DexScreener`)
   }
 
@@ -168,9 +217,10 @@ export async function getMarketCap(mint: string): Promise<MarketCapResult | null
 // Utilisé par le monitor (prix pour stop checks) et par checkEntry.
 
 export interface TokenMarketData {
-  priceUsd:     number
-  marketCapUsd: number
-  source:       'onchain' | 'dexscreener'
+  priceUsd:     number | null   // null si SOL price indisponible (onchain_sol_only)
+  marketCapUsd: number | null   // null si SOL price indisponible (onchain_sol_only)
+  marketCapSol: number | null   // lamports → SOL, disponible si onchain ou onchain_sol_only
+  source:       'onchain' | 'onchain_sol_only' | 'dexscreener'
 }
 
 export async function getTokenMarketData(mint: string): Promise<TokenMarketData | null> {
@@ -185,29 +235,39 @@ export async function getTokenMarketData(mint: string): Promise<TokenMarketData 
 
       if (curve.complete) {
         const d = await dataFromDexScreener(mint)
-        return d ? { priceUsd: d.priceUsd, marketCapUsd: d.marketCapUsd, source: 'dexscreener' } : null
+        return d ? { priceUsd: d.priceUsd, marketCapUsd: d.marketCapUsd, marketCapSol: null, source: 'dexscreener' } : null
       }
 
       if (curve.virtualTokenReserves === BigInt(0)) {
         throw new Error('virtualTokenReserves = 0')
       }
 
-      const solPriceUsd      = await fetchSolPriceUsd()
       const pricePerTokenSol =
         (Number(curve.virtualSolReserves) / 1e9) /
         (Number(curve.virtualTokenReserves) / 1e6)
-      const priceUsd     = pricePerTokenSol * solPriceUsd
-      const marketCapUsd = priceUsd * (Number(curve.tokenTotalSupply) / 1e6)
+      const supply       = Number(curve.tokenTotalSupply) / 1e6
+      const marketCapSol = pricePerTokenSol * supply
 
-      return { priceUsd, marketCapUsd, source: 'onchain' }
+      let solPriceUsd: number | null = null
+      try { solPriceUsd = await fetchSolPriceUsd() } catch { /* onchain_sol_only */ }
+
+      if (solPriceUsd !== null) {
+        const priceUsd     = pricePerTokenSol * solPriceUsd
+        const marketCapUsd = priceUsd * supply
+        return { priceUsd, marketCapUsd, marketCapSol, source: 'onchain' }
+      }
+
+      console.warn(`[pumpfun] SOL price unavailable for ${mint.slice(0, 8)}… — storing onchain_sol_only`)
+      return { priceUsd: null, marketCapUsd: null, marketCapSol, source: 'onchain_sol_only' }
     }
 
     console.warn(`[pumpfun] PDA absent pour ${mint.slice(0, 8)}… → fallback DexScreener`)
   } catch (e: any) {
+    if (is429(e)) throw new HeliusRateLimitError()
     console.warn(`[pumpfun] RPC error ${mint.slice(0, 8)}…: ${e.message} → fallback DexScreener`)
   }
 
   // ── Fallback DexScreener ─────────────────────────────────────────────────
   const d = await dataFromDexScreener(mint)
-  return d ? { priceUsd: d.priceUsd, marketCapUsd: d.marketCapUsd, source: 'dexscreener' } : null
+  return d ? { priceUsd: d.priceUsd, marketCapUsd: d.marketCapUsd, marketCapSol: null, source: 'dexscreener' } : null
 }

@@ -132,9 +132,39 @@ function analyzeNetBalances(
     .map(([mint, net]) => ({ mint, net: Math.abs(net) }))
     .sort((a, b) => b.net - a.net)
 
-  const native = tx.nativeTransfers ?? []
-  const lamportsPaid     = native.filter(t => t.fromUserAccount === walletAddress).reduce((s, t) => s + t.amount, 0)
-  const lamportsReceived = native.filter(t => t.toUserAccount   === walletAddress).reduce((s, t) => s + t.amount, 0)
+  // ── SOL : primaire accountData.nativeBalanceChange, fallback nativeTransfers ──
+  // Pour un achat pump.fun, le SOL transite par le programme (pas wallet→pool direct).
+  // nativeTransfers.fromUserAccount peut manquer selon le routing. Le nativeBalanceChange
+  // du wallet dans accountData est la valeur nette fiable : négatif = payé, positif = reçu.
+  let lamportsPaid     = 0
+  let lamportsReceived = 0
+
+  for (const ad of (tx.accountData ?? [])) {
+    if (ad.account !== walletAddress) continue
+    const change = ad.nativeBalanceChange
+    if (change < 0) lamportsPaid     = -change
+    if (change > 0) lamportsReceived =  change
+  }
+
+  // Fallback 1 : nativeTransfers (payloads anciens sans accountData)
+  if (lamportsPaid === 0 && lamportsReceived === 0) {
+    const native = tx.nativeTransfers ?? []
+    lamportsPaid     = native.filter(t => t.fromUserAccount === walletAddress).reduce((s, t) => s + t.amount, 0)
+    lamportsReceived = native.filter(t => t.toUserAccount   === walletAddress).reduce((s, t) => s + t.amount, 0)
+  }
+
+  // Fallback 2 : WSOL tokenBalanceChange — paiement via wrapped SOL.
+  // Quand l'achat est fait avec du WSOL (déjà wrappé), nativeBalanceChange = 0
+  // mais le wallet perd du WSOL (SPL token). netByMint[WSOL_MINT] est négatif.
+  // WSOL a 9 décimales (même unité que SOL), donc × 1e9 = lamports.
+  if (lamportsPaid === 0) {
+    const wsolNet = netByMint.get(WSOL_MINT) ?? 0
+    if (wsolNet < 0) lamportsPaid = Math.round(Math.abs(wsolNet) * LAMPORTS_PER_SOL)
+  }
+  if (lamportsReceived === 0) {
+    const wsolNet = netByMint.get(WSOL_MINT) ?? 0
+    if (wsolNet > 0) lamportsReceived = Math.round(wsolNet * LAMPORTS_PER_SOL)
+  }
 
   // stablePaid : déjà en unités décimales dans les deux chemins
   const stablePaid = [...netByMint.entries()]
@@ -150,11 +180,12 @@ function analyzeNetBalances(
 // inserted=true uniquement si l'INSERT buy a réussi.
 // lastError/tokenError : messages Supabase bruts pour diagnostic.
 interface BuyMarketData {
-  priceUsd:    number | null
+  priceUsd:     number | null
   marketCapUsd: number | null
-  inserted:    boolean
-  lastError:   string | null   // erreur buy insert
-  tokenError:  string | null   // erreur token upsert
+  marketCapSol: number | null  // disponible si source=onchain_sol_only
+  inserted:     boolean
+  lastError:    string | null  // erreur buy insert
+  tokenError:   string | null  // erreur token upsert
 }
 
 async function processBuy(
@@ -179,15 +210,36 @@ async function processBuy(
 
   console.log(
     `[webhook] BUY ${mint.slice(0, 8)}… wallet=${walletLabel}` +
-    ` price=${marketData ? '$' + marketData.priceUsd.toFixed(8) : 'null'}` +
-    ` mcap=${marketData ? '$' + marketData.marketCapUsd.toFixed(0) + ' (' + marketData.source + ')' : 'null'}` +
-    (marketData && marketData.marketCapUsd > maxMcUsd ? ` — > $${maxMcUsd} (stocké, filtré à la lecture)` : '')
+    ` price=${marketData?.priceUsd != null ? '$' + marketData.priceUsd.toFixed(8) : 'null'}` +
+    ` mcap=${marketData?.marketCapUsd != null
+        ? '$' + marketData.marketCapUsd.toFixed(0) + ' (' + marketData.source + ')'
+        : marketData?.source === 'onchain_sol_only'
+          ? `${marketData.marketCapSol?.toFixed(2)} SOL (onchain_sol_only)`
+          : 'null'}` +
+    (marketData?.marketCapUsd != null && marketData.marketCapUsd > maxMcUsd ? ` — > $${maxMcUsd} (stocké, filtré à la lecture)` : '')
   )
+
+  // ── Vérification token existant — évite les appels DAS+RugCheck inutiles ──
+  // Si le token a déjà un symbol ET un risque_score valide en base, on saute
+  // les enrichissements coûteux (1 crédit DAS + ~3 crédits RugCheck par appel).
+  const { data: existingToken } = await supabase
+    .from('kymia_risque_tokens')
+    .select('symbol, name, risque_score')
+    .eq('mint', mint)
+    .maybeSingle()
+
+  const needsDas = !existingToken?.symbol
+  const needsRugCheck = !existingToken?.risque_score
+                     || existingToken.risque_score === 'DATA_UNAVAILABLE'
+
+  if (!needsDas && !needsRugCheck) {
+    console.log(`[webhook] ${mint.slice(0, 8)}… déjà enrichi (symbol+score) — DAS+Rug skippés`)
+  }
 
   // ── Enrichissement 2 : rug check ──────────────────────────────────────────
   // Dégradation gracieuse : exception isolée, token créé avec risque_score='DATA_UNAVAILABLE'
   let rugResult: import('@/lib/risque/rug').RugResult = {
-    score: 'DATA_UNAVAILABLE',
+    score: existingToken?.risque_score ?? 'DATA_UNAVAILABLE',
     reason: null,
     flags: {
       mint_auth_revoked: null, freeze_auth_revoked: null,
@@ -196,35 +248,84 @@ async function processBuy(
       danger_risks: [], warn_risks: [],
     },
   }
-  try {
-    const rug = await fetchRugCheck(mint)
-    rugResult = await checkRug(mint, rug)
-  } catch (e: any) {
-    console.warn(`[webhook] checkRug ${mint.slice(0, 8)}…: ${e.message}`)
+  if (needsRugCheck) {
+    try {
+      const rug = await fetchRugCheck(mint)
+      rugResult = await checkRug(mint, rug)
+    } catch (e: any) {
+      console.warn(`[webhook] checkRug ${mint.slice(0, 8)}…: ${e.message}`)
+    }
+  }
+
+  // ── Enrichissement 3 : métadonnées Helius DAS (symbol / name) ────────────
+  let tokenSymbol: string | null = existingToken?.symbol ?? null
+  let tokenName:   string | null = existingToken?.name   ?? null
+  if (needsDas) {
+    const heliusKey = process.env.NEXT_PUBLIC_HELIEUS_KEY
+    if (heliusKey) {
+      try {
+        const dasRes = await fetch(
+          `https://mainnet.helius-rpc.com/?api-key=${heliusKey}`,
+          {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json', 'User-Agent': 'KYMIA/1.0' },
+            body:    JSON.stringify({ jsonrpc: '2.0', id: '1', method: 'getAsset', params: { id: mint } }),
+            signal:  AbortSignal.timeout(5_000),
+          },
+        )
+        if (dasRes.ok) {
+          const dasData = await dasRes.json()
+          const r = dasData?.result
+          // Fungible SPL tokens: token_info.symbol est la source primaire (on-chain),
+          // content.metadata.symbol est l'off-chain JSON (parfois absent pour les tokens récents)
+          tokenSymbol = r?.token_info?.symbol
+                     ?? r?.content?.metadata?.symbol
+                     ?? null
+          tokenName   = r?.content?.metadata?.name
+                     ?? r?.token_info?.name
+                     ?? null
+          if (!tokenSymbol && !tokenName) {
+            console.warn(`[webhook] DAS ${mint.slice(0, 8)}…: symbol/name absents (interface=${r?.interface})`)
+          }
+        } else {
+          console.warn(`[webhook] DAS getAsset ${mint.slice(0, 8)}…: HTTP ${dasRes.status}`)
+        }
+      } catch (e: any) {
+        console.warn(`[webhook] DAS getAsset ${mint.slice(0, 8)}…: ${e.message}`)
+      }
+    }
   }
 
   // ── Upsert token — TOUJOURS, enrichissements null ou non ─────────────────
   // Le token (fait que le wallet a acheté ce mint) est la donnée primaire.
   // market_cap et risque_score sont des enrichissements — leur échec ne
   // doit jamais empêcher l'enregistrement du token.
+  // On ne surécrit PAS les données existantes avec null si on a skippé l'enrichissement.
+  const upsertBase = {
+    mint,
+    market_cap_usd: marketData?.marketCapUsd ?? null,
+    market_cap_sol: marketData?.marketCapSol ?? null,
+    mcap_source:    marketData?.source ?? 'UNAVAILABLE',
+    updated_at:     new Date().toISOString(),
+  }
+  const upsertEnrichment = {
+    ...(needsDas ? { symbol: tokenSymbol, name: tokenName } : {}),
+    ...(needsRugCheck ? {
+      risque_score:        rugResult.score,
+      score_reason:        rugResult.reason,
+      rug_flags:           rugResult.flags,
+      dev_pct:             rugResult.flags.dev_pct,
+      top10_pct:           rugResult.flags.top10_pct,
+      dev_sold:            rugResult.flags.dev_sold,
+      bundled:             rugResult.flags.bundled,
+      mint_auth_revoked:   rugResult.flags.mint_auth_revoked,
+      freeze_auth_revoked: rugResult.flags.freeze_auth_revoked,
+    } : {}),
+  }
   const { error: tokenErr } = await supabase
     .from('kymia_risque_tokens')
     .upsert(
-      {
-        mint,
-        market_cap_usd:      marketData?.marketCapUsd ?? null,
-        mcap_source:         marketData?.source ?? 'UNAVAILABLE',
-        risque_score:        rugResult.score,
-        score_reason:        rugResult.reason,
-        rug_flags:           rugResult.flags,
-        dev_pct:             rugResult.flags.dev_pct,
-        top10_pct:           rugResult.flags.top10_pct,
-        dev_sold:            rugResult.flags.dev_sold,
-        bundled:             rugResult.flags.bundled,
-        mint_auth_revoked:   rugResult.flags.mint_auth_revoked,
-        freeze_auth_revoked: rugResult.flags.freeze_auth_revoked,
-        updated_at:          new Date().toISOString(),
-      },
+      { ...upsertBase, ...upsertEnrichment },
       { onConflict: 'mint' },
     )
 
@@ -252,11 +353,11 @@ async function processBuy(
   if (buyErr) {
     if (buyErr.code === '23505') {
       console.log(`[webhook] buy ${tx.signature.slice(0, 8)}… déjà présent — skip`)
-      return { priceUsd: marketData?.priceUsd ?? null, marketCapUsd: marketData?.marketCapUsd ?? null, inserted: false, lastError: null, tokenError }
+      return { priceUsd: marketData?.priceUsd ?? null, marketCapUsd: marketData?.marketCapUsd ?? null, marketCapSol: marketData?.marketCapSol ?? null, inserted: false, lastError: null, tokenError }
     }
     const errDetail = `buy insert: ${buyErr.message} (code=${buyErr.code ?? 'none'}) hint=${buyErr.hint ?? ''} detail=${buyErr.details ?? ''}`
     console.error(`[webhook] ${tx.signature.slice(0, 8)}… ${errDetail}`)
-    return { priceUsd: null, marketCapUsd: null, inserted: false, lastError: errDetail, tokenError }
+    return { priceUsd: null, marketCapUsd: null, marketCapSol: null, inserted: false, lastError: errDetail, tokenError }
   }
 
   // ── Mise à jour buyer_count ───────────────────────────────────────────────
@@ -281,7 +382,7 @@ async function processBuy(
     ` buyers=${distinctBuyers}`
   )
 
-  return { priceUsd: marketData?.priceUsd ?? null, marketCapUsd: marketData?.marketCapUsd ?? null, inserted: true, lastError: null, tokenError }
+  return { priceUsd: marketData?.priceUsd ?? null, marketCapUsd: marketData?.marketCapUsd ?? null, marketCapSol: marketData?.marketCapSol ?? null, inserted: true, lastError: null, tokenError }
 }
 
 // ── Traitement d'une vente ────────────────────────────────────────────────────
@@ -416,7 +517,7 @@ export async function processWebhookEvent(
 
       for (const buy of buys) {
         let marketResult: BuyMarketData =
-          { priceUsd: null, marketCapUsd: null, inserted: false, lastError: null, tokenError: null }
+          { priceUsd: null, marketCapUsd: null, marketCapSol: null, inserted: false, lastError: null, tokenError: null }
         try {
           marketResult = await processBuy(
             supabase, tx, buy.mint,

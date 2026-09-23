@@ -18,7 +18,7 @@ export const dynamic = 'force-dynamic'
 
 import { NextRequest, NextResponse }                     from 'next/server'
 import { createClient }                                  from '@supabase/supabase-js'
-import { getTokenMarketData }                            from '@/lib/risque/pumpfun'
+import { getTokenMarketData, HeliusRateLimitError }      from '@/lib/risque/pumpfun'
 import { closePosition, trailingStopPrice, PositionRow } from '@/lib/risque/positions'
 
 function isAuthorized(req: NextRequest): boolean {
@@ -68,9 +68,25 @@ export async function GET(req: NextRequest) {
     const symbol = pos.token_symbol ?? pos.token_mint.slice(0, 8)
 
     // ── 1. Prix courant ───────────────────────────────────────────────────
-    const marketData = await getTokenMarketData(pos.token_mint)
-    if (!marketData) {
-      console.warn(`[monitor] ${symbol} — prix indisponible — skip (pas de sortie sur données manquantes)`)
+    let marketData: Awaited<ReturnType<typeof getTokenMarketData>>
+    try {
+      marketData = await getTokenMarketData(pos.token_mint)
+    } catch (e: unknown) {
+      if (e instanceof HeliusRateLimitError) {
+        console.warn('[monitor] Helius quota épuisé (429) — cycle abandonné')
+        return NextResponse.json({
+          ok:                false,
+          quota_exhausted:   true,
+          positions_checked: 0,
+          exits,
+          timestamp:         new Date().toISOString(),
+        })
+      }
+      console.warn(`[monitor] ${symbol} — getTokenMarketData erreur inattendue: ${(e as Error).message} — skip`)
+      continue
+    }
+    if (!marketData || marketData.priceUsd === null) {
+      console.warn(`[monitor] ${symbol} — prix USD indisponible (${marketData?.source ?? 'null'}) — skip`)
       continue
     }
     const currentPrice = marketData.priceUsd
