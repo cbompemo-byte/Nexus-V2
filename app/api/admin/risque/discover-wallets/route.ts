@@ -46,7 +46,7 @@
 //   tokens_qualifiés < 10  → 1 + avg_entry_rank ≤ discover_min_entry_rank
 
 export const dynamic    = 'force-dynamic'
-export const maxDuration = 120
+export const maxDuration = 300
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient }              from '@supabase/supabase-js'
@@ -56,9 +56,11 @@ const DEXSCREENER = 'https://api.dexscreener.com'
 
 // RPCs publics gratuits — utilisés exclusivement dans discover-wallets
 // (évite SOLANA_RPC_URL qui pointe vers Helius et déclenche des 429)
+// Round-robin lot par lot pour répartir la charge.
 const PUBLIC_RPCS = [
   'https://api.mainnet-beta.solana.com',
   'https://solana-rpc.publicnode.com',
+  'https://rpc.ankr.com/solana',
 ]
 
 // Keywords pour DexScreener search — termes populaires des meme coins Solana
@@ -247,21 +249,83 @@ async function getSignaturesForAddress(address: string, limit = 1000): Promise<s
   }
 }
 
+// Récupère N transactions en micro-lots de MICRO_BATCH sigs.
+// — Round-robin entre PUBLIC_RPCS d'un lot à l'autre
+// — Retry individuel par réponse sur 429 (pas seulement sur l'appel global)
+// — Backoff exponentiel : 500ms → 1s → 2s → 4s (max MAX_RETRIES tentatives)
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function batchGetTransactions(sigs: string[]): Promise<any[]> {
   if (sigs.length === 0) return []
-  const batchReq = sigs.map((sig, i) => ({
-    jsonrpc: '2.0',
-    id:      i,
-    method:  'getTransaction',
-    params:  [sig, { encoding: 'jsonParsed', maxSupportedTransactionVersion: 0 }],
-  }))
-  try {
-    return await rpcPost(batchReq)
-  } catch (e: any) {
-    console.warn(`[discover-wallets] batchGetTransactions: ${e.message}`)
-    return []
+
+  const MICRO_BATCH = 5
+  const BATCH_GAP   = 400   // ms entre micro-lots
+  const MAX_RETRIES = 4
+
+  // Résultats indexés par position originale dans sigs
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const results: (any | null)[] = new Array(sigs.length).fill(null)
+
+  for (let start = 0; start < sigs.length; start += MICRO_BATCH) {
+    if (start > 0) await sleep(BATCH_GAP)
+
+    const lotIdx = Math.floor(start / MICRO_BATCH)
+
+    // pending = items encore à récupérer dans ce micro-lot
+    let pending = sigs
+      .slice(start, start + MICRO_BATCH)
+      .map((sig, i) => ({ origIdx: start + i, sig }))
+
+    for (let attempt = 0; attempt <= MAX_RETRIES && pending.length > 0; attempt++) {
+      if (attempt > 0) {
+        const wait = Math.min(500 * 2 ** (attempt - 1), 4_000)
+        console.warn(
+          `[discover-wallets] retry ${attempt}/${MAX_RETRIES}` +
+          ` lot ${lotIdx} — ${pending.length} txs (${wait}ms)`
+        )
+        await sleep(wait)
+      }
+
+      // Round-robin : lot 0 → rpc[0], lot 1 → rpc[1], retry → rpc suivant
+      const rpcUrl = PUBLIC_RPCS[(lotIdx + attempt) % PUBLIC_RPCS.length]
+
+      const req = pending.map(({ origIdx, sig }) => ({
+        jsonrpc: '2.0', id: origIdx,
+        method:  'getTransaction',
+        params:  [sig, { encoding: 'jsonParsed', maxSupportedTransactionVersion: 0 }],
+      }))
+
+      let responses: any[] = []
+      try {
+        const res = await fetch(rpcUrl, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json', 'User-Agent': 'KYMIA/1.0' },
+          body:    JSON.stringify(req),
+          signal:  AbortSignal.timeout(15_000),
+        })
+        if (res.status === 429) continue  // HTTP-level 429 → retry tout le micro-lot
+        if (res.ok) responses = await res.json()
+      } catch {
+        continue  // erreur réseau → retry
+      }
+
+      if (!Array.isArray(responses)) continue
+
+      // Réponses résolues = tout sauf 429 individuel
+      const resolvedIds = new Set<number>()
+      for (const resp of responses) {
+        const id    = resp.id as number
+        const is429 = resp.error?.code === 429 ||
+          String(resp.error?.message ?? '').toLowerCase().includes('too many')
+        if (is429) continue  // garder dans pending pour retry
+        results[id] = resp
+        resolvedIds.add(id)
+      }
+
+      pending = pending.filter(p => !resolvedIds.has(p.origIdx))
+    }
   }
+
+  return results.filter(r => r !== null)
 }
 
 // Extrait l'acheteur depuis une tx jsonParsed.
