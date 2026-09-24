@@ -50,12 +50,16 @@ export const maxDuration = 120
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient }              from '@supabase/supabase-js'
-import { PublicKey }                 from '@solana/web3.js'
 import { bondingCurvePda }           from '@/lib/risque/pumpfun'
-import { getConnection }             from '@/lib/solana/wallet'
 
 const DEXSCREENER = 'https://api.dexscreener.com'
-const PUBLIC_RPC  = 'https://api.mainnet-beta.solana.com'
+
+// RPCs publics gratuits — utilisés exclusivement dans discover-wallets
+// (évite SOLANA_RPC_URL qui pointe vers Helius et déclenche des 429)
+const PUBLIC_RPCS = [
+  'https://api.mainnet-beta.solana.com',
+  'https://solana-rpc.publicnode.com',
+]
 
 // Keywords pour DexScreener search — termes populaires des meme coins Solana
 const SEARCH_KEYWORDS = [
@@ -180,19 +184,71 @@ async function fetchPairsBatch(mints: string[]): Promise<DexPair[]> {
   return (data?.pairs ?? []) as DexPair[]
 }
 
-// ── RPC Solana : premiers acheteurs (0 crédit Helius) ────────────────────────────
+// ── RPC Solana : couche bas-niveau (public, sans Helius) ─────────────────────────
 //
-// Stratégie :
-//   1. getSignaturesForAddress sur la bonding curve PDA (pump.fun non-gradué)
+// Toutes les fonctions ci-dessous appellent PUBLIC_RPCS directement via fetch().
+// On n'utilise PAS getConnection() — qui pointerait vers SOLANA_RPC_URL (Helius).
+//
+// Stratégie par token :
+//   1. getSignaturesForAddress(bondingCurvePDA)   — 1 appel RPC
 //      → fallback sur mint address pour tokens graduées (pumpswap/raydium)
-//   2. Batch getTransaction sur les N sigs les plus anciennes
-//   3. Acheteur = signer[0] qui perd > 0.01 SOL ET reçoit des tokens (postTokenBalances)
+//   2. batch getTransaction(N sigs)               — 1 appel RPC batch
+//   3. Acheteur = signer[0] perdant > 0.01 SOL + recevant des tokens
 //
-// Coût : 2 appels RPC par token (~700ms), 0 crédit Helius.
-// Rate limit public RPC : espacer les appels de 200ms minimum.
+// Rate limiting : retry avec backoff exponentiel sur 429, rotation sur fallback RPC.
+
+function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)) }
+
+// Masque les query params d'une URL (ex: api-key=xxx) pour les logs/debug
+function maskRpcUrl(url: string): string {
+  try { return new URL(url).hostname } catch { return 'unknown' }
+}
+
+// Appel RPC unique avec retry + backoff sur 429, rotation entre PUBLIC_RPCS
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function rpcPost(body: object, attempt = 0): Promise<any> {
+  const url = PUBLIC_RPCS[attempt % PUBLIC_RPCS.length]
+  try {
+    const res = await fetch(url, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', 'User-Agent': 'KYMIA/1.0' },
+      body:    JSON.stringify(body),
+      signal:  AbortSignal.timeout(15_000),
+    })
+    if (res.status === 429) {
+      if (attempt >= 4) throw new Error(`429 après ${attempt + 1} tentatives (${maskRpcUrl(url)})`)
+      const wait = Math.min(500 * 2 ** attempt, 4_000)
+      console.warn(`[discover-wallets] 429 sur ${maskRpcUrl(url)} — retry dans ${wait}ms (tentative ${attempt + 1})`)
+      await sleep(wait)
+      return rpcPost(body, attempt + 1)
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status} (${maskRpcUrl(url)})`)
+    return res.json()
+  } catch (e: any) {
+    if (attempt < 4 && !e.message.startsWith('429')) {
+      await sleep(300)
+      return rpcPost(body, attempt + 1)
+    }
+    throw e
+  }
+}
+
+async function getSignaturesForAddress(address: string, limit = 1000): Promise<string[]> {
+  try {
+    const data = await rpcPost({
+      jsonrpc: '2.0', id: 1,
+      method:  'getSignaturesForAddress',
+      params:  [address, { limit, commitment: 'confirmed' }],
+    })
+    return (data?.result ?? []).map((s: any) => s.signature as string)
+  } catch (e: any) {
+    console.warn(`[discover-wallets] getSignaturesForAddress ${address.slice(0, 8)}…: ${e.message}`)
+    return []
+  }
+}
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function batchGetTransactions(sigs: string[], rpcUrl: string): Promise<any[]> {
+async function batchGetTransactions(sigs: string[]): Promise<any[]> {
   if (sigs.length === 0) return []
   const batchReq = sigs.map((sig, i) => ({
     jsonrpc: '2.0',
@@ -201,14 +257,7 @@ async function batchGetTransactions(sigs: string[], rpcUrl: string): Promise<any
     params:  [sig, { encoding: 'jsonParsed', maxSupportedTransactionVersion: 0 }],
   }))
   try {
-    const res = await fetch(rpcUrl, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json', 'User-Agent': 'KYMIA/1.0' },
-      body:    JSON.stringify(batchReq),
-      signal:  AbortSignal.timeout(20_000),
-    })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    return res.json()
+    return await rpcPost(batchReq)
   } catch (e: any) {
     console.warn(`[discover-wallets] batchGetTransactions: ${e.message}`)
     return []
@@ -244,46 +293,31 @@ async function getEarlyBuyers(
   mint:         string,
   earlyTxCount: number,
 ): Promise<{ address: string; txIndex: number }[]> {
-  const conn   = getConnection()
-  const rpcUrl = process.env.SOLANA_RPC_URL ?? PUBLIC_RPC
+  // Bonding curve PDA (pump.fun non-gradué)
   let sigs: string[] = []
-
-  // Essayer bonding curve PDA (pump.fun non-gradué)
   try {
-    const pda    = bondingCurvePda(mint)
-    const result = await conn.getSignaturesForAddress(pda, { limit: 1000 }, 'confirmed')
-    sigs = result.map(s => s.signature)
-  } catch { /* pas pump.fun ou gradué → fallback */ }
+    const pdaStr = bondingCurvePda(mint).toBase58()
+    sigs = await getSignaturesForAddress(pdaStr)
+  } catch { /* pas pump.fun ou PDA introuvable → fallback */ }
 
-  // Fallback : utiliser le mint address (pumpswap, raydium, graduées)
+  // Fallback : mint address (pumpswap, raydium, tokens graduées)
   if (sigs.length === 0) {
-    try {
-      const result = await conn.getSignaturesForAddress(
-        new PublicKey(mint), { limit: 1000 }, 'confirmed'
-      )
-      sigs = result.map(s => s.signature)
-    } catch (e: any) {
-      console.warn(`[discover-wallets] getSignaturesForAddress ${mint.slice(0, 8)}…: ${e.message}`)
-      return []
-    }
+    sigs = await getSignaturesForAddress(mint)
   }
 
   if (sigs.length === 0) return []
 
   // Dernières signatures = plus anciennes = premiers acheteurs (ordre chrono)
-  const earlySigs = sigs
-    .slice(-Math.min(earlyTxCount, sigs.length))
-    .reverse()
+  const earlySigs = sigs.slice(-Math.min(earlyTxCount, sigs.length)).reverse()
 
-  // Batch getTransaction via RPC (1 seul appel HTTP pour toutes les sigs)
-  const txResults = await batchGetTransactions(earlySigs, rpcUrl)
+  // Batch getTransaction — 1 seul appel HTTP pour toutes les sigs
+  const txResults = await batchGetTransactions(earlySigs)
 
-  // Extraire les acheteurs — dédupliquer par wallet
   const buyers: { address: string; txIndex: number }[] = []
   const seen = new Set<string>()
 
   for (const resp of txResults) {
-    const chronoIdx = resp.id as number  // = position chronologique dans earlySigs
+    const chronoIdx = resp.id as number
     const buyer = extractBuyer(resp.result)
     if (buyer && !seen.has(buyer)) {
       seen.add(buyer)
@@ -298,19 +332,16 @@ async function getEarlyBuyers(
 // Appelé via GET ?debug=true&token=<mint>
 
 async function debugSingleToken(mint: string, earlyTxCount: number) {
-  const conn   = getConnection()
-  const rpcUrl = process.env.SOLANA_RPC_URL ?? PUBLIC_RPC
-  const result: Record<string, unknown> = { mint, rpc_url: rpcUrl }
+  // rpc_url affiché = hôte seulement (pas de query params → pas de clé API exposée)
+  const result: Record<string, unknown> = { mint, rpc_url: PUBLIC_RPCS.map(maskRpcUrl) }
 
   // 1. Bonding curve PDA
   let pdaStr: string | null = null
   let pdaSigs: string[] = []
   try {
-    const pda = bondingCurvePda(mint)
-    pdaStr = pda.toBase58()
+    pdaStr = bondingCurvePda(mint).toBase58()
     result.pda_address = pdaStr
-    const r = await conn.getSignaturesForAddress(pda, { limit: 1000 }, 'confirmed')
-    pdaSigs = r.map(s => s.signature)
+    pdaSigs = await getSignaturesForAddress(pdaStr)
     result.pda_sigs_count   = pdaSigs.length
     result.pda_sigs_newest3 = pdaSigs.slice(0, 3)
     result.pda_sigs_oldest3 = pdaSigs.slice(-3)
@@ -321,15 +352,10 @@ async function debugSingleToken(mint: string, earlyTxCount: number) {
   // 2. Fallback mint address si PDA vide
   let mintSigs: string[] = []
   if (pdaSigs.length === 0) {
-    try {
-      const r = await conn.getSignaturesForAddress(new PublicKey(mint), { limit: 1000 }, 'confirmed')
-      mintSigs = r.map(s => s.signature)
-      result.mint_sigs_count   = mintSigs.length
-      result.mint_sigs_newest3 = mintSigs.slice(0, 3)
-      result.mint_sigs_oldest3 = mintSigs.slice(-3)
-    } catch (e: any) {
-      result.mint_sigs_error = e.message
-    }
+    mintSigs = await getSignaturesForAddress(mint)
+    result.mint_sigs_count   = mintSigs.length
+    result.mint_sigs_newest3 = mintSigs.slice(0, 3)
+    result.mint_sigs_oldest3 = mintSigs.slice(-3)
   }
 
   const sigs = pdaSigs.length > 0 ? pdaSigs : mintSigs
@@ -347,7 +373,7 @@ async function debugSingleToken(mint: string, earlyTxCount: number) {
   result.early_sigs_sample3 = earlySigs.slice(0, 3)
 
   // 4. Batch getTransaction via RPC
-  const txResults = await batchGetTransactions(earlySigs, rpcUrl)
+  const txResults = await batchGetTransactions(earlySigs)
   result.rpc_batch_responses = txResults.length
   result.rpc_errors = txResults.filter((r: any) => r.error).length
 
