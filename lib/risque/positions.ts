@@ -34,6 +34,9 @@ export interface RisqueSettings {
   convergenceWindowMinutes: number   // fenêtre max entre 1er et Nème acheteur qualifié (minutes)
   maxPriceRunPct:           number   // skip si prix a monté de plus de X% depuis 1er acheteur
   dexConfirmEnabled:        boolean  // si true, buy/sell ratio DexScreener 1h ≤ 50% bloque l'entrée
+  convergenceStrongBuyers:  number   // nb de wallets forts requis pour le fast-path (0 = désactivé)
+  strongPathWindowMinutes:  number   // fenêtre max entre 1er et dernier strong buyer (minutes, 0 = désactivé)
+  minAvgUsdPerBuy:          number   // USD moyen / achat qualifié sur le token dans la fenêtre (0 = désactivé)
 }
 
 export async function loadSettings(supabase: SupabaseClient): Promise<RisqueSettings> {
@@ -69,6 +72,9 @@ export async function loadSettings(supabase: SupabaseClient): Promise<RisqueSett
     convergenceWindowMinutes: num('convergence_window_minutes',   60),
     maxPriceRunPct:           num('max_price_run_pct',            50),
     dexConfirmEnabled:        map.get('dex_confirm_enabled') === true,
+    convergenceStrongBuyers:  num('convergence_strong_buyers',   3),
+    strongPathWindowMinutes:  num('strong_path_window_minutes', 360),
+    minAvgUsdPerBuy:          num('min_avg_usd_per_buy',        500),
   }
 }
 
@@ -247,9 +253,48 @@ export async function checkEntry(
     buyerMap.set(key, { ...prev, totalUsd: prev.totalUsd + usd })
   }
 
-  if (buyerMap.size < settings.minBuyersForEntry) {
-    const mmNote = mmWallets.size > 0 ? ` (${mmWallets.size} MM exclus)` : ''
-    const reason = `${buyerMap.size}/${settings.minBuyersForEntry} wallets qualifiés dans fenêtre 6h (min $${settings.minUsdPerBuyer})${mmNote}`
+  // ── min_avg_usd_per_buy : filtre commun aux deux chemins ─────────────────────
+  // total_usd / nb_achats_qualifiés sur ce token dans la fenêtre.
+  // Discrimine les MM qui font beaucoup de micro-achats ($0) des vrais acheteurs.
+  if (settings.minAvgUsdPerBuy > 0) {
+    const qualifiedBuys = (recentBuys ?? []).filter(b => {
+      if (mmWallets.has(b.wallet_address as string)) return false
+      return buyUsd(b) >= settings.minUsdPerBuyer
+    })
+    const sumQualifiedUsd = qualifiedBuys.reduce((s, b) => s + buyUsd(b), 0)
+    const avgUsdPerBuy    = qualifiedBuys.length > 0 ? sumQualifiedUsd / qualifiedBuys.length : 0
+    if (qualifiedBuys.length > 0 && avgUsdPerBuy < settings.minAvgUsdPerBuy) {
+      const reason =
+        `avg $${avgUsdPerBuy.toFixed(0)}/achat (${sumQualifiedUsd.toFixed(0)}$ / ${qualifiedBuys.length} achats)` +
+        ` < min $${settings.minAvgUsdPerBuy}`
+      console.log(`${tag} SKIP: ${reason}`)
+      return { entered: false, reason }
+    }
+    console.log(
+      `${tag} avg/achat: $${avgUsdPerBuy.toFixed(0)}` +
+      ` (${qualifiedBuys.length} achats qualifiés, $${sumQualifiedUsd.toFixed(0)} total)` +
+      ` — seuil $${settings.minAvgUsdPerBuy} OK`
+    )
+  }
+
+  // ── Strong buyers fast-path ────────────────────────────────────────────────
+  // Si ≥ convergence_strong_buyers wallets distincts ont CHACUN dépensé ≥ 200$,
+  // on saute les filtres temporels (convergence window, price run, âge) et on va
+  // directement aux checks de sécurité. Cible les tokens très jeunes avec signal fort.
+  // Filtre mcap relevé à 1M$ (vs maxMcUsd normal).
+  const STRONG_MIN_USD   = 200          // seuil fort par acheteur (hardcodé — non DB)
+  const STRONG_MAX_MC    = 1_000_000    // mcap plafond pour le fast-path
+
+  const strongBuyers = [...buyerMap.entries()].filter(([, v]) => v.totalUsd >= STRONG_MIN_USD)
+  const isStrongPath = settings.convergenceStrongBuyers > 0
+    && strongBuyers.length >= settings.convergenceStrongBuyers
+
+  if (!isStrongPath && buyerMap.size < settings.minBuyersForEntry) {
+    const mmNote  = mmWallets.size > 0 ? ` (${mmWallets.size} MM exclus)` : ''
+    const strongNote = settings.convergenceStrongBuyers > 0
+      ? ` | strong: ${strongBuyers.length}/${settings.convergenceStrongBuyers} (≥$${STRONG_MIN_USD})`
+      : ''
+    const reason = `${buyerMap.size}/${settings.minBuyersForEntry} wallets qualifiés dans fenêtre 6h (min $${settings.minUsdPerBuyer})${mmNote}${strongNote}`
     console.log(`${tag} SKIP: ${reason}`)
     return { entered: false, reason }
   }
@@ -258,32 +303,71 @@ export async function checkEntry(
   const sortedBuyers = [...buyerMap.entries()]
     .sort((a, b) => a[1].firstBoughtAt.localeCompare(b[1].firstBoughtAt))
 
-  // ── Condition convergence_window_minutes : fenêtre entre 1er et Nème acheteur ──
-  const nthBuyerEntry = sortedBuyers[settings.minBuyersForEntry - 1]
-  const firstBuyerEntry = sortedBuyers[0]
-  const convergenceSpanMin =
-    (new Date(nthBuyerEntry[1].firstBoughtAt).getTime() -
-     new Date(firstBuyerEntry[1].firstBoughtAt).getTime()) / 60_000
-
-  if (convergenceSpanMin > settings.convergenceWindowMinutes) {
-    const reason = `convergence trop lente — ${convergenceSpanMin.toFixed(0)}min entre 1er et ${settings.minBuyersForEntry}e acheteur (max ${settings.convergenceWindowMinutes}min)`
-    console.log(`${tag} SKIP: ${reason}`)
-    return { entered: false, reason }
-  }
-
-  // ── Condition max_price_run_pct : skip si déjà trop monté ────────────────────
-  // Compare le prix courant au prix d'entrée du 1er acheteur déclencheur.
-  // Évite d'acheter sur une bougie déjà consommée.
-  const firstMcap = firstBuyerEntry[1].firstMcap
-  if (firstMcap && firstMcap > 0) {
-    const firstBuyerPrice = firstMcap / 1e9
-    const runPct = (currentPrice - firstBuyerPrice) / firstBuyerPrice * 100
-    if (runPct > settings.maxPriceRunPct) {
-      const reason = `prix a monté de +${runPct.toFixed(0)}% depuis le 1er acheteur (max +${settings.maxPriceRunPct}%)`
+  if (isStrongPath) {
+    // Mcap check avec seuil élevé (1M$) pour le fast-path
+    if (marketCapUsd !== null && marketCapUsd > STRONG_MAX_MC) {
+      const reason = `[strong] mcap $${marketCapUsd.toFixed(0)} > seuil fast-path $${STRONG_MAX_MC.toLocaleString()}`
       console.log(`${tag} SKIP: ${reason}`)
       return { entered: false, reason }
     }
-    console.log(`${tag} price run: +${runPct.toFixed(0)}% depuis 1er acheteur (seuil ${settings.maxPriceRunPct}%) — OK`)
+
+    // ── Fenêtre de convergence du chemin fort ──────────────────────────────────
+    // Les N strong buyers doivent tous être dans une fenêtre de strong_path_window_minutes.
+    // Évite que 3 wallets achetant sur 28h (ex : AL55bcvn) déclenchent une entrée.
+    if (settings.strongPathWindowMinutes > 0 && strongBuyers.length >= 2) {
+      const strongSorted = [...strongBuyers].sort(
+        (a, b) => a[1].firstBoughtAt.localeCompare(b[1].firstBoughtAt)
+      )
+      const spanMin =
+        (new Date(strongSorted.at(-1)![1].firstBoughtAt).getTime() -
+         new Date(strongSorted[0][1].firstBoughtAt).getTime()) / 60_000
+      if (spanMin > settings.strongPathWindowMinutes) {
+        const reason =
+          `[strong] convergence trop lente — ${spanMin.toFixed(0)}min entre 1er et dernier strong buyer` +
+          ` (max ${settings.strongPathWindowMinutes}min)`
+        console.log(`${tag} SKIP: ${reason}`)
+        return { entered: false, reason }
+      }
+      console.log(
+        `${tag} [strong] convergence: ${spanMin.toFixed(0)}min` +
+        ` (max ${settings.strongPathWindowMinutes}min) — OK`
+      )
+    }
+
+    console.log(
+      `${tag} [strong-path] ${strongBuyers.length}/${settings.convergenceStrongBuyers}` +
+      ` acheteurs ≥$${STRONG_MIN_USD} — skip price-run`
+    )
+  }
+
+  if (!isStrongPath) {
+    // ── Condition convergence_window_minutes : fenêtre entre 1er et Nème acheteur ──
+    const nthBuyerEntry = sortedBuyers[settings.minBuyersForEntry - 1]
+    const firstBuyerEntry = sortedBuyers[0]
+    const convergenceSpanMin =
+      (new Date(nthBuyerEntry[1].firstBoughtAt).getTime() -
+       new Date(firstBuyerEntry[1].firstBoughtAt).getTime()) / 60_000
+
+    if (convergenceSpanMin > settings.convergenceWindowMinutes) {
+      const reason = `convergence trop lente — ${convergenceSpanMin.toFixed(0)}min entre 1er et ${settings.minBuyersForEntry}e acheteur (max ${settings.convergenceWindowMinutes}min)`
+      console.log(`${tag} SKIP: ${reason}`)
+      return { entered: false, reason }
+    }
+
+    // ── Condition max_price_run_pct : skip si déjà trop monté ────────────────────
+    // Compare le prix courant au prix d'entrée du 1er acheteur déclencheur.
+    // Évite d'acheter sur une bougie déjà consommée.
+    const firstMcap = sortedBuyers[0][1].firstMcap
+    if (firstMcap && firstMcap > 0) {
+      const firstBuyerPrice = firstMcap / 1e9
+      const runPct = (currentPrice - firstBuyerPrice) / firstBuyerPrice * 100
+      if (runPct > settings.maxPriceRunPct) {
+        const reason = `prix a monté de +${runPct.toFixed(0)}% depuis le 1er acheteur (max +${settings.maxPriceRunPct}%)`
+        console.log(`${tag} SKIP: ${reason}`)
+        return { entered: false, reason }
+      }
+      console.log(`${tag} price run: +${runPct.toFixed(0)}% depuis 1er acheteur (seuil ${settings.maxPriceRunPct}%) — OK`)
+    }
   }
 
   // ── DexScreener buy/sell ratio 1h — stocké, bloquant si dex_confirm_enabled ───
@@ -339,9 +423,12 @@ export async function checkEntry(
   }
 
   // ── Toutes conditions remplies → ouvrir la position ──────────────────────────
-  const totalUsd      = sortedBuyers.reduce((s, [, v]) => s + v.totalUsd, 0)
-  const triggerLabels = sortedBuyers.map(([, v]) => v.label)
-  const triggerReason = `${buyerMap.size} wallets, $${totalUsd.toFixed(0)} total`
+  const activeBuyers  = isStrongPath ? strongBuyers : sortedBuyers
+  const totalUsd      = activeBuyers.reduce((s, [, v]) => s + v.totalUsd, 0)
+  const triggerLabels = activeBuyers.map(([, v]) => v.label)
+  const triggerReason = isStrongPath
+    ? `[strong] ${strongBuyers.length} wallets ≥$${STRONG_MIN_USD}, $${totalUsd.toFixed(0)} total`
+    : `${buyerMap.size} wallets, $${totalUsd.toFixed(0)} total`
   const stopPriceUsd  = currentPrice * (1 - settings.stopLossPct / 100)
 
   console.log(

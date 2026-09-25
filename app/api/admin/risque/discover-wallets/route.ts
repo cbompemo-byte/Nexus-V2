@@ -790,7 +790,7 @@ export async function POST(req: NextRequest) {
   const { data: inserted, error: insertErr } = await supabase
     .from('kymia_risque_wallets')
     .upsert(
-      body.wallets.map(w => ({ address: w.address, label: w.label, active: true })),
+      body.wallets.map(w => ({ address: w.address, label: w.label, active: true, source: 'DISCOVERY' })),
       { onConflict: 'address', ignoreDuplicates: false }
     )
     .select('address, label')
