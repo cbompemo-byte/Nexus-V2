@@ -175,6 +175,12 @@ function classifyDiscoveryWallet(stats: {
 }
 
 // ── Handler GET ───────────────────────────────────────────────────────────────────
+// Paramètres optionnels :
+//   ?limit=N   — nb de wallets à traiter (défaut 10)
+//   ?offset=M  — sauter M wallets dans la liste non-audités (défaut 0)
+//
+// Les wallets déjà audités (audited_at IS NOT NULL) sont ignorés.
+// Chaque wallet traité reçoit audited_at=now() en base, même s'il est désactivé.
 
 export async function GET(req: NextRequest) {
   if (!isAuthorized(req)) {
@@ -188,19 +194,29 @@ export async function GET(req: NextRequest) {
   }
   const supabase = createClient(supaUrl, supaKey, { auth: { persistSession: false } })
 
-  // 1. Charger les wallets DISCOVERY actifs
-  const { data: wallets, error: walletsErr } = await supabase
+  // Paramètres de pagination
+  const sp     = req.nextUrl.searchParams
+  const limit  = Math.max(1, Math.min(50, parseInt(sp.get('limit')  ?? '10', 10)))
+  const offset = Math.max(0, parseInt(sp.get('offset') ?? '0',  10))
+
+  // 1. Charger les wallets DISCOVERY actifs non encore audités
+  const { data: wallets, error: walletsErr, count: totalRemaining } = await supabase
     .from('kymia_risque_wallets')
-    .select('address, label')
+    .select('address, label', { count: 'exact' })
     .eq('source', 'DISCOVERY')
     .eq('active', true)
+    .is('audited_at', null)
+    .range(offset, offset + limit - 1)
 
   if (walletsErr) {
     return NextResponse.json({ error: walletsErr.message }, { status: 500 })
   }
 
   const walletList = (wallets ?? []) as Array<{ address: string; label: string }>
-  console.log(`[audit-discovery] ${walletList.length} wallets DISCOVERY actifs à auditer`)
+  console.log(
+    `[audit-discovery] lot offset=${offset} limit=${limit}` +
+    ` — ${walletList.length} wallets à traiter (${totalRemaining ?? '?'} non-audités au total)`
+  )
 
   // 2. Auditer chaque wallet séquentiellement
   const auditResults: Array<{
@@ -323,6 +339,12 @@ export async function GET(req: NextRequest) {
       still_active: true,  // mis à jour ci-dessous après désactivation
     })
 
+    // Marquer audited_at = now() immédiatement (ne sera plus retraité au prochain lot)
+    await supabase
+      .from('kymia_risque_wallets')
+      .update({ audited_at: new Date().toISOString() })
+      .eq('address', wallet.address)
+
     // Pause inter-wallet
     await sleep(200)
   }
@@ -353,12 +375,23 @@ export async function GET(req: NextRequest) {
   const summary: Record<WalletClassification, number> = { BOT: 0, SUSPECT_MM: 0, NORMAL: 0, INACTIVE: 0 }
   for (const r of auditResults) summary[r.classification]++
 
+  // Compter les wallets non-audités restants (pour savoir si relancer)
+  const { count: stillRemaining } = await supabase
+    .from('kymia_risque_wallets')
+    .select('*', { count: 'exact', head: true })
+    .eq('source', 'DISCOVERY')
+    .eq('active', true)
+    .is('audited_at', null)
+
   return NextResponse.json({
-    ok:          true,
-    total:       walletList.length,
-    deactivated: toDeactivate.length,
+    ok:              true,
+    batch:           { offset, limit, processed: walletList.length },
+    deactivated:     toDeactivate.length,
     summary,
-    wallets:     auditResults,
-    next_step:   'POST /api/admin/risque/sync-webhook pour synchroniser le webhook Helius',
+    remaining:       stillRemaining ?? 0,
+    next_step:       stillRemaining && stillRemaining > 0
+      ? `Relancer GET /api/admin/risque/audit-discovery?limit=${limit} (${stillRemaining} wallets restants)`
+      : 'Audit terminé — POST /api/admin/risque/sync-webhook pour synchroniser le webhook Helius',
+    wallets:         auditResults,
   })
 }
