@@ -23,8 +23,9 @@
 export const dynamic     = 'force-dynamic'
 export const maxDuration = 300
 
-import { NextRequest, NextResponse } from 'next/server'
-import { createClient }              from '@supabase/supabase-js'
+import { NextRequest, NextResponse }          from 'next/server'
+import { createClient }                       from '@supabase/supabase-js'
+import { bondingCurvePda, fetchSolPriceUsd }  from '@/lib/risque/pumpfun'
 
 // ── Auth ──────────────────────────────────────────────────────────────────────────
 
@@ -42,7 +43,7 @@ const PUBLIC_RPCS = [
 ]
 
 const WINDOW_MS  = 48 * 3600_000   // 48h en millisecondes
-const SIG_LIMIT  = 100             // signatures récupérées par wallet
+const SIG_LIMIT  = 50              // signatures récupérées par wallet (50 → ~8 micro-batches × 400ms = 3s/wallet)
 
 function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)) }
 
@@ -136,6 +137,75 @@ async function batchGetTransactions(sigs: string[]): Promise<any[]> {
   return results.filter(r => r !== null)
 }
 
+// ── getMarketCapPublicRpc ─────────────────────────────────────────────────────────
+// Lit la bonding curve pump.fun via getAccountInfo (public RPC, 0 Helius).
+// Parse identique à pumpfun.ts : virtualSolReserves / virtualTokenReserves × supply × SOL price.
+// Fallback DexScreener si curve absente, complète ou parseuse échoue.
+// Résultat mis en cache par mint dans la Map passée en paramètre pour éviter
+// les appels dupliqués quand un wallet achète le même token plusieurs fois.
+
+async function getMarketCapPublicRpc(
+  mint:  string,
+  cache: Map<string, number | null>,
+): Promise<number | null> {
+  if (cache.has(mint)) return cache.get(mint)!
+
+  let mcap: number | null = null
+
+  // 1. Bonding curve on-chain
+  try {
+    const pda  = bondingCurvePda(mint).toBase58()
+    const data = await rpcPost({
+      jsonrpc: '2.0', id: 1,
+      method:  'getAccountInfo',
+      params:  [pda, { encoding: 'base64', commitment: 'confirmed' }],
+    })
+    const b64 = data?.result?.value?.data?.[0] as string | undefined
+    if (b64) {
+      const buf  = Buffer.from(b64, 'base64')
+      if (buf.length >= 49) {
+        const view     = new DataView(buf.buffer, buf.byteOffset, buf.byteLength)
+        const vTok     = view.getBigUint64(8,  true)   // virtualTokenReserves
+        const vSol     = view.getBigUint64(16, true)   // virtualSolReserves
+        const supply   = view.getBigUint64(40, true)   // tokenTotalSupply
+        const complete = buf[48] === 1
+
+        if (!complete && vTok > BigInt(0)) {
+          const pricePerTokenSol = (Number(vSol) / 1e9) / (Number(vTok) / 1e6)
+          const supplyTokens     = Number(supply) / 1e6
+          try {
+            const solPrice = await fetchSolPriceUsd()
+            mcap = pricePerTokenSol * supplyTokens * solPrice
+          } catch { /* fall through to DexScreener */ }
+        }
+        // complete=true → graduated token → DexScreener below
+      }
+    }
+  } catch (e: any) {
+    console.warn(`[recent-buys] getAccountInfo ${mint.slice(0, 8)}…: ${e.message}`)
+  }
+
+  // 2. DexScreener fallback
+  if (mcap === null) {
+    try {
+      const res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${mint}`, {
+        headers: { 'User-Agent': 'KYMIA/1.0' },
+        signal:  AbortSignal.timeout(6_000),
+      })
+      if (res.ok) {
+        const d = await res.json()
+        const pairs = (d.pairs ?? []) as Array<{ marketCap?: number; liquidity?: { usd: number } }>
+        const best  = pairs.filter(p => (p.marketCap ?? 0) > 0)
+          .sort((a, b) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0))[0]
+        if (best?.marketCap) mcap = best.marketCap
+      }
+    } catch { /* mcap reste null */ }
+  }
+
+  cache.set(mint, mcap)
+  return mcap
+}
+
 // ── parseBuyFromTx ────────────────────────────────────────────────────────────────
 // Détecte si la tx est un achat pour walletAddress :
 //   - SOL perdu (> 0.01 SOL) ET token reçu  → sol buy
@@ -217,7 +287,7 @@ export async function GET(req: NextRequest) {
   const supabase = createClient(supaUrl, supaKey, { auth: { persistSession: false } })
 
   const sp    = req.nextUrl.searchParams
-  const limit = Math.max(1, Math.min(20, parseInt(sp.get('limit') ?? '10', 10)))
+  const limit = Math.max(1, Math.min(10, parseInt(sp.get('limit') ?? '3', 10)))
 
   const windowStart = new Date(Date.now() - WINDOW_MS)
 
@@ -250,37 +320,57 @@ export async function GET(req: NextRequest) {
   }> = []
 
   let totalInserted = 0
+  // Cache mcap par mint — partagé sur tout le lot pour éviter les appels dupliqués
+  const mcapCache = new Map<string, number | null>()
 
   for (const wallet of walletList) {
     console.log(`[recent-buys] ${wallet.label} (${wallet.address.slice(0, 8)}…)`)
 
-    const sigs     = await getSignaturesForAddress(wallet.address, SIG_LIMIT)
+    const sigs      = await getSignaturesForAddress(wallet.address, SIG_LIMIT)
     const txResults = await batchGetTransactions(sigs)
 
     const windowStartTs = Math.floor(windowStart.getTime() / 1000)
 
-    let buysInWindow = 0
-    let inserted     = 0
-    let skipped      = 0
+    // 1. Collecter tous les achats dans la fenêtre
+    const pendingBuys: Array<{
+      sig:       string
+      buy:       NonNullable<ReturnType<typeof parseBuyFromTx>>
+    }> = []
 
     for (const txResult of txResults) {
       const tx = txResult.result ?? txResult
       if (!tx) continue
-
-      // Hors fenêtre 48h → skip
       if ((tx.blockTime ?? 0) < windowStartTs) continue
 
+      // txResult.id = origIdx = index dans sigs[]
       const sig = txResult.id !== undefined
         ? sigs[txResult.id as number]
         : (tx.transaction?.signatures?.[0] ?? null)
-
       if (!sig) continue
 
       const buy = parseBuyFromTx(tx, wallet.address)
       if (!buy) continue
 
-      buysInWindow++
+      pendingBuys.push({ sig, buy })
+    }
 
+    // 2. Fetch market cap pour chaque mint unique (1 appel RPC + 1 DexScreener par mint)
+    const uniqueMints = [...new Set(pendingBuys.map(p => p.buy.tokenMint))]
+    for (const mint of uniqueMints) {
+      if (!mcapCache.has(mint)) {
+        const mc = await getMarketCapPublicRpc(mint, mcapCache)
+        console.log(
+          `[recent-buys] mcap ${mint.slice(0, 8)}…:` +
+          ` ${mc !== null ? '$' + mc.toFixed(0) : 'null'}`
+        )
+      }
+    }
+
+    // 3. Insérer avec mcap
+    let inserted = 0
+    let skipped  = 0
+
+    for (const { sig, buy } of pendingBuys) {
       const { error: insertErr } = await supabase
         .from('kymia_risque_buys')
         .insert({
@@ -291,17 +381,13 @@ export async function GET(req: NextRequest) {
           bought_at:         new Date(buy.blockTime * 1000).toISOString(),
           sol_amount:        buy.solAmount,
           usdc_amount:       buy.usdcAmount,
-          market_cap_at_buy: null,   // pas disponible depuis le RPC public
+          market_cap_at_buy: mcapCache.get(buy.tokenMint) ?? null,
           source:            'BACKFILL',
         })
 
       if (insertErr) {
-        if (insertErr.code === '23505') {
-          skipped++   // doublon tx_signature → déjà présent
-        } else {
-          console.warn(`[recent-buys] insert ${sig.slice(0, 8)}…: ${insertErr.message}`)
-          skipped++
-        }
+        if (insertErr.code === '23505') { skipped++ }
+        else { console.warn(`[recent-buys] insert ${sig.slice(0, 8)}…: ${insertErr.message}`); skipped++ }
       } else {
         inserted++
         totalInserted++
@@ -309,21 +395,20 @@ export async function GET(req: NextRequest) {
     }
 
     batchResults.push({
-      address:         wallet.address,
-      label:           wallet.label,
-      sigs_fetched:    sigs.length,
-      buys_in_window:  buysInWindow,
+      address:        wallet.address,
+      label:          wallet.label,
+      sigs_fetched:   sigs.length,
+      buys_in_window: pendingBuys.length,
       inserted,
       skipped,
     })
 
-    // Marquer last_backfill_at immédiatement (ne sera plus repris au prochain lot)
+    // Marquer last_backfill_at immédiatement
     await supabase
       .from('kymia_risque_wallets')
       .update({ last_backfill_at: new Date().toISOString() })
       .eq('address', wallet.address)
 
-    // Pause inter-wallet pour respecter les RPC publics
     await sleep(300)
   }
 
