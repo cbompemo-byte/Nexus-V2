@@ -303,7 +303,7 @@ export async function GET(req: NextRequest) {
       live_mints:      liveMints,
       dead_mints:      deadMints,
     },
-    min_tokens,
+    min_tokens:   minTokens,
     ranked:       rankings.length,
     rankings,
     excluded_wallets: excluded,
