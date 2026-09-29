@@ -302,10 +302,9 @@ export async function GET(req: NextRequest) {
   if (resetNull) {
     const { count: resetCount, error: resetErr } = await supabase
       .from('kymia_risque_tokens')
-      .update({ mfe_computed_at: null })
+      .update({ mfe_computed_at: null }, { count: 'exact' })
       .is('mfe_mult_24h', null)
       .not('mfe_computed_at', 'is', null)
-      .select('*', { count: 'exact', head: true })
     if (resetErr) console.warn(`[wallet-mfe] reset_null: ${resetErr.message}`)
     else console.log(`[wallet-mfe] reset_null: ${resetCount ?? 0} tokens remis en attente`)
     if (!debugMode) {
