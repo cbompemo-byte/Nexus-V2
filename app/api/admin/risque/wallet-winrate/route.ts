@@ -104,20 +104,28 @@ export async function GET(req: NextRequest) {
   const minTokens = Math.max(1, parseInt(sp.get('min_tokens') ?? '5', 10))
 
   // ── 1. Tous les achats (ordre chronologique → premier achat en tête) ──────────
-  const { data: buys, error: buysErr } = await supabase
-    .from('kymia_risque_buys')
-    .select('wallet_address, wallet_label, token_mint, market_cap_at_buy, bought_at')
-    .order('bought_at', { ascending: true })
-
-  if (buysErr) return NextResponse.json({ error: buysErr.message }, { status: 500 })
-
-  const allBuys = (buys ?? []) as Array<{
+  // Paginated to bypass Supabase's 1 000-row default limit.
+  type BuyRow = {
     wallet_address:    string
     wallet_label:      string | null
     token_mint:        string
     market_cap_at_buy: number | null
     bought_at:         string
-  }>
+  }
+  const allBuys: BuyRow[] = []
+  const BUY_PAGE = 1000
+  let buyOffset  = 0
+  while (true) {
+    const { data, error: buysErr } = await supabase
+      .from('kymia_risque_buys')
+      .select('wallet_address, wallet_label, token_mint, market_cap_at_buy, bought_at')
+      .order('bought_at', { ascending: true })
+      .range(buyOffset, buyOffset + BUY_PAGE - 1)
+    if (buysErr) return NextResponse.json({ error: buysErr.message }, { status: 500 })
+    allBuys.push(...((data ?? []) as BuyRow[]))
+    if ((data ?? []).length < BUY_PAGE) break
+    buyOffset += BUY_PAGE
+  }
 
   // ── 2. Tokens table AVANT DexScreener update — proxy entry mcap + MFE ─────────
   // Chargé ici pour que kymia_risque_tokens.market_cap_usd soit encore "historique"
