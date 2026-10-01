@@ -20,7 +20,7 @@ import { SupabaseClient }             from '@supabase/supabase-js'
 import { fetchRugCheck }              from '@/lib/memecoin/screen'
 import { getTokenMarketData }         from '@/lib/risque/pumpfun'
 import { checkRug }                   from '@/lib/risque/rug'
-import { checkEntry }                 from '@/lib/risque/positions'
+import { checkEntry, closePosition, PositionRow } from '@/lib/risque/positions'
 
 // ── Constantes ────────────────────────────────────────────────────────────────
 
@@ -437,6 +437,47 @@ async function processSell(
   )
 }
 
+// ── Sortie temps réel sur vente d'un wallet déclencheur ──────────────────────
+// Si une VENTE arrive sur un token où on a une position ouverte ET que le vendeur
+// est l'un des wallets déclencheurs, on ferme immédiatement sans attendre le monitor.
+
+async function checkTriggerExit(
+  supabase:      SupabaseClient,
+  mint:          string,
+  walletLabel:   string,
+): Promise<void> {
+  const { data: pos } = await supabase
+    .from('kymia_risque_positions')
+    .select('id, token_mint, token_symbol, entry_at, entry_price_usd, size_usd, stop_price_usd, high_since_entry, trailing_active, trigger_wallets, is_paper')
+    .eq('token_mint', mint)
+    .eq('status', 'OPEN')
+    .maybeSingle()
+
+  if (!pos) return
+
+  const triggerList = (pos.trigger_wallets ?? []) as string[]
+  if (!triggerList.includes(walletLabel)) return
+
+  // Wallet déclencheur a vendu — récupérer le prix courant
+  let exitPrice = pos.entry_price_usd as number
+  try {
+    const md = await getTokenMarketData(mint)
+    if (md?.priceUsd) exitPrice = md.priceUsd
+  } catch { /* fallback au prix d'entrée */ }
+
+  const exitReason =
+    `signal inverse : wallet déclencheur "${walletLabel}" a vendu (exit temps réel webhook)`
+  console.log(`[webhook] EXIT signal_reverse ${mint.slice(0, 8)}… : ${exitReason}`)
+
+  await closePosition(
+    supabase,
+    pos as unknown as PositionRow,
+    exitPrice,
+    'CLOSED_SIGNAL_REVERSE',
+    exitReason,
+  )
+}
+
 // ── Point d'entrée public ─────────────────────────────────────────────────────
 
 export async function processWebhookEvent(
@@ -568,6 +609,14 @@ export async function processWebhookEvent(
           sellsInserted++
         } catch (e: any) {
           console.error(`[webhook] processSell ${sell.mint.slice(0, 8)}… ${walletLabel}:`, e.message)
+        }
+
+        // Exit temps réel : si un wallet déclencheur vient de vendre un token
+        // sur lequel on a une position ouverte, fermer sans attendre le monitor.
+        try {
+          await checkTriggerExit(supabase, sell.mint, walletLabel)
+        } catch (e: any) {
+          console.error(`[webhook] checkTriggerExit ${sell.mint.slice(0, 8)}…:`, e.message)
         }
       }
     }

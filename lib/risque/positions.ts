@@ -34,9 +34,10 @@ export interface RisqueSettings {
   convergenceWindowMinutes: number   // fenêtre max entre 1er et Nème acheteur qualifié (minutes)
   maxPriceRunPct:           number   // skip si prix a monté de plus de X% depuis 1er acheteur
   dexConfirmEnabled:        boolean  // si true, buy/sell ratio DexScreener 1h ≤ 50% bloque l'entrée
-  convergenceStrongBuyers:  number   // nb de wallets forts requis pour le fast-path (0 = désactivé)
-  strongPathWindowMinutes:  number   // fenêtre max entre 1er et dernier strong buyer (minutes, 0 = désactivé)
-  minAvgUsdPerBuy:          number   // USD moyen / achat qualifié sur le token dans la fenêtre (0 = désactivé)
+  convergenceStrongBuyers:    number   // nb de wallets forts requis pour le fast-path (0 = désactivé)
+  strongPathWindowMinutes:    number   // fenêtre max entre 1er et dernier strong buyer (minutes, 0 = désactivé)
+  minAvgUsdPerBuy:            number   // USD moyen / achat qualifié sur le token dans la fenêtre (0 = désactivé)
+  blockIfSoldWithinMinutes:   number   // skip si un wallet suivi a vendu ce token dans les N dernières minutes (0 = désactivé)
 }
 
 export async function loadSettings(supabase: SupabaseClient): Promise<RisqueSettings> {
@@ -75,6 +76,7 @@ export async function loadSettings(supabase: SupabaseClient): Promise<RisqueSett
     convergenceStrongBuyers:  num('convergence_strong_buyers',   3),
     strongPathWindowMinutes:  num('strong_path_window_minutes', 360),
     minAvgUsdPerBuy:          num('min_avg_usd_per_buy',        500),
+    blockIfSoldWithinMinutes: num('block_if_sold_within_minutes', 30),
   }
 }
 
@@ -275,6 +277,55 @@ export async function checkEntry(
       ` (${qualifiedBuys.length} achats qualifiés, $${sumQualifiedUsd.toFixed(0)} total)` +
       ` — seuil $${settings.minAvgUsdPerBuy} OK`
     )
+  }
+
+  // ── Filtre ventes : retirer les acheteurs qui ont depuis vendu ce token ──────
+  // Un wallet dans buyerMap qui a une vente postérieure à son achat ne détient plus
+  // le token → il ne compte pas dans la convergence (sinon on entre comme liquidité
+  // de sortie — bug DtFkKBC3 : risque_14 vendu 150s avant notre entrée).
+  //
+  // block_if_sold_within_minutes : si QUELCONQUE wallet suivi a vendu ce token dans
+  // les N dernières minutes, bloquer l'entrée même si les acheteurs restants suffisent.
+  const { data: allSells } = await supabase
+    .from('kymia_risque_sells')
+    .select('wallet_address, sold_at')
+    .eq('token_mint', mint)
+
+  if ((allSells ?? []).length > 0) {
+    // Latest sell per wallet → used to detect still-holding vs already-out
+    const latestSellAt = new Map<string, string>()
+    for (const s of allSells as { wallet_address: string; sold_at: string }[]) {
+      const prev = latestSellAt.get(s.wallet_address)
+      if (!prev || s.sold_at > prev) latestSellAt.set(s.wallet_address, s.sold_at)
+    }
+
+    // Remove from convergence any wallet whose last sell is AFTER their first buy
+    const removedSellers: string[] = []
+    for (const [addr, entry] of buyerMap) {
+      const lastSell = latestSellAt.get(addr)
+      if (lastSell && lastSell > entry.firstBoughtAt) {
+        buyerMap.delete(addr)
+        removedSellers.push(addr.slice(0, 8) + '…')
+      }
+    }
+    if (removedSellers.length > 0) {
+      console.log(`${tag} ${removedSellers.length} acheteur(s) exclu(s) — ont vendu ce token: ${removedSellers.join(', ')}`)
+    }
+
+    // block_if_sold_within_minutes : bloquer même si les acheteurs restants suffisent
+    if (settings.blockIfSoldWithinMinutes > 0) {
+      const cutoffIso = new Date(Date.now() - settings.blockIfSoldWithinMinutes * 60_000).toISOString()
+      const recentSell = (allSells as { wallet_address: string; sold_at: string }[])
+        .find(s => s.sold_at >= cutoffIso)
+      if (recentSell) {
+        const minAgo = ((Date.now() - new Date(recentSell.sold_at).getTime()) / 60_000).toFixed(0)
+        const reason =
+          `wallet ${recentSell.wallet_address.slice(0, 8)}… a vendu il y a ${minAgo}min` +
+          ` (block_if_sold_within=${settings.blockIfSoldWithinMinutes}min)`
+        console.log(`${tag} SKIP: ${reason}`)
+        return { entered: false, reason }
+      }
+    }
   }
 
   // ── Strong buyers fast-path ────────────────────────────────────────────────
