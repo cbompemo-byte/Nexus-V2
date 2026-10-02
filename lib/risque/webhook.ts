@@ -146,11 +146,21 @@ function analyzeNetBalances(
     if (change > 0) lamportsReceived =  change
   }
 
-  // Fallback 1 : nativeTransfers (payloads anciens sans accountData)
-  if (lamportsPaid === 0 && lamportsReceived === 0) {
-    const native = tx.nativeTransfers ?? []
-    lamportsPaid     = native.filter(t => t.fromUserAccount === walletAddress).reduce((s, t) => s + t.amount, 0)
-    lamportsReceived = native.filter(t => t.toUserAccount   === walletAddress).reduce((s, t) => s + t.amount, 0)
+  // Fallback 1 : nativeTransfers pour lamportsPaid.
+  // Condition originale : `&& lamportsReceived === 0` — TROP STRICTE.
+  // Bug : si nativeBalanceChange du wallet est un petit positif (rent de création d'ATA,
+  // ~2039 lamports), lamportsReceived est mis à 2039 → la condition est FALSE → le
+  // SOL réellement payé (dans nativeTransfers.fromUserAccount) n'est jamais extrait.
+  // Fix : on teste uniquement `lamportsPaid === 0`. On préserve lamportsReceived existant.
+  if (lamportsPaid === 0) {
+    const native  = tx.nativeTransfers ?? []
+    const outgoing = native.filter(t => t.fromUserAccount === walletAddress).reduce((s, t) => s + t.amount, 0)
+    const incoming = native.filter(t => t.toUserAccount   === walletAddress).reduce((s, t) => s + t.amount, 0)
+    // Net outgoing = coût réel (on soustrait les retours de slippage ou rent inclus dans la même tx)
+    if (outgoing > incoming)  lamportsPaid = outgoing - incoming
+    else if (outgoing > 0)    lamportsPaid = outgoing
+    // lamportsReceived : ne mettre à jour que si pas encore déterminé par accountData
+    if (lamportsReceived === 0 && incoming > outgoing) lamportsReceived = incoming - outgoing
   }
 
   // Fallback 2 : WSOL tokenBalanceChange — paiement via wrapped SOL.
@@ -189,14 +199,15 @@ interface BuyMarketData {
 }
 
 async function processBuy(
-  supabase:      SupabaseClient,
-  tx:            HeliusTx,
-  mint:          string,
-  walletAddress: string,
-  walletLabel:   string,
-  lamportsPaid:  number,
-  stablePaid:    number,
-  maxMcUsd:      number,
+  supabase:       SupabaseClient,
+  tx:             HeliusTx,
+  mint:           string,
+  walletAddress:  string,
+  walletLabel:    string,
+  lamportsPaid:   number,
+  stablePaid:     number,
+  maxMcUsd:       number,
+  tokensReceived: number,   // montant brut de tokens reçus (pour fallback mcap)
 ): Promise<BuyMarketData> {
 
   // ── Enrichissement 1 : prix + market cap ─────────────────────────────────
@@ -336,6 +347,26 @@ async function processBuy(
     console.error(`[webhook] ${mint.slice(0, 8)}… ${tokenError}`)
   }
 
+  // ── Montants finaux — fallback mcap si ni SOL ni stablecoin extrait ─────
+  // Couvre le cas "feePayer tiers / WSOL temporaire net=0 / nativeBalanceChange=0"
+  // où aucun chemin SOL ne fonctionne. On sait toujours combien de tokens ont été
+  // reçus et quel était le mcap au moment de l'achat.
+  // tokensReceived × (mcap_at_buy / 1_000_000_000) = $ payé approximatif.
+  const PUMP_SUPPLY    = 1_000_000_000
+  let   solAmountFinal  = lamportsPaid > 0 ? lamportsPaid / LAMPORTS_PER_SOL : null
+  let   usdcAmountFinal = stablePaid   > 0 ? stablePaid : null
+
+  if (solAmountFinal === null && usdcAmountFinal === null
+      && tokensReceived > 0 && (marketData?.marketCapUsd ?? 0) > 0) {
+    const estimatedUsd = tokensReceived * (marketData!.marketCapUsd! / PUMP_SUPPLY)
+    usdcAmountFinal = parseFloat(estimatedUsd.toFixed(4))
+    console.log(
+      `[webhook] ${mint.slice(0, 8)}… montant inconnu → fallback mcap:` +
+      ` ${tokensReceived.toFixed(0)} tokens × $${(marketData!.marketCapUsd! / PUMP_SUPPLY).toFixed(8)}` +
+      ` ≈ $${usdcAmountFinal} (estimé)`
+    )
+  }
+
   // ── Insert buy — unique sur tx_signature (idempotent sur replay) ────────
   const { error: buyErr } = await supabase
     .from('kymia_risque_buys')
@@ -345,8 +376,8 @@ async function processBuy(
       wallet_label:      walletLabel,
       tx_signature:      tx.signature,
       bought_at:         new Date(tx.timestamp * 1000).toISOString(),
-      sol_amount:        lamportsPaid > 0 ? lamportsPaid / LAMPORTS_PER_SOL : null,
-      usdc_amount:       stablePaid   > 0 ? stablePaid                       : null,
+      sol_amount:        solAmountFinal,
+      usdc_amount:       usdcAmountFinal,
       market_cap_at_buy: marketData?.marketCapUsd ?? null,
     })
 
@@ -564,6 +595,7 @@ export async function processWebhookEvent(
             supabase, tx, buy.mint,
             walletAddress, walletLabel,
             lamportsPaid, stablePaid, maxMcUsd,
+            buy.net,  // tokens reçus — pour le fallback montant mcap
           )
           // N'incrémente QUE si l'INSERT Supabase a effectivement réussi
           if (marketResult.inserted) {
