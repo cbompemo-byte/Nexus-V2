@@ -34,10 +34,12 @@ export interface RisqueSettings {
   convergenceWindowMinutes: number   // fenêtre max entre 1er et Nème acheteur qualifié (minutes)
   maxPriceRunPct:           number   // skip si prix a monté de plus de X% depuis 1er acheteur
   dexConfirmEnabled:        boolean  // si true, buy/sell ratio DexScreener 1h ≤ 50% bloque l'entrée
-  convergenceStrongBuyers:    number   // nb de wallets forts requis pour le fast-path (0 = désactivé)
-  strongPathWindowMinutes:    number   // fenêtre max entre 1er et dernier strong buyer (minutes, 0 = désactivé)
-  minAvgUsdPerBuy:            number   // USD moyen / achat qualifié sur le token dans la fenêtre (0 = désactivé)
-  blockIfSoldWithinMinutes:   number   // skip si un wallet suivi a vendu ce token dans les N dernières minutes (0 = désactivé)
+  convergenceStrongBuyers:          number   // nb de wallets forts requis pour le fast-path (0 = désactivé)
+  strongPathWindowMinutes:          number   // fenêtre max entre 1er et dernier strong buyer (minutes, 0 = désactivé)
+  minAvgUsdPerBuy:                  number   // USD moyen / achat qualifié sur le token dans la fenêtre (0 = désactivé)
+  blockIfSoldWithinMinutes:         number   // skip si un wallet suivi a vendu ce token dans les N dernières minutes (0 = désactivé)
+  minPriceVsFirstTriggerPct:        number   // skip si prix courant < X% du mcap du 1er déclencheur — couteau qui tombe (0 = désactivé)
+  maxDrawdownFromPeakPct:           number   // skip si mcap courant a baissé de plus de X% depuis le pic dans la fenêtre (0 = désactivé)
 }
 
 export async function loadSettings(supabase: SupabaseClient): Promise<RisqueSettings> {
@@ -76,7 +78,9 @@ export async function loadSettings(supabase: SupabaseClient): Promise<RisqueSett
     convergenceStrongBuyers:  num('convergence_strong_buyers',   3),
     strongPathWindowMinutes:  num('strong_path_window_minutes', 360),
     minAvgUsdPerBuy:          num('min_avg_usd_per_buy',        500),
-    blockIfSoldWithinMinutes: num('block_if_sold_within_minutes', 30),
+    blockIfSoldWithinMinutes:         num('block_if_sold_within_minutes',           30),
+    minPriceVsFirstTriggerPct:        num('min_price_vs_first_trigger_pct',         70),
+    maxDrawdownFromPeakPct:           num('max_drawdown_from_peak_pct',             20),
   }
 }
 
@@ -354,6 +358,12 @@ export async function checkEntry(
   const sortedBuyers = [...buyerMap.entries()]
     .sort((a, b) => a[1].firstBoughtAt.localeCompare(b[1].firstBoughtAt))
 
+  // strongSorted : strong buyers triés par ordre d'apparition.
+  // Défini ici (hors bloc) pour être accessible dans les checks de prix communs.
+  const strongSorted = [...strongBuyers].sort(
+    (a, b) => a[1].firstBoughtAt.localeCompare(b[1].firstBoughtAt)
+  )
+
   if (isStrongPath) {
     // Mcap check avec seuil élevé (1M$) pour le fast-path
     if (marketCapUsd !== null && marketCapUsd > STRONG_MAX_MC) {
@@ -366,9 +376,6 @@ export async function checkEntry(
     // Les N strong buyers doivent tous être dans une fenêtre de strong_path_window_minutes.
     // Évite que 3 wallets achetant sur 28h (ex : AL55bcvn) déclenchent une entrée.
     if (settings.strongPathWindowMinutes > 0 && strongBuyers.length >= 2) {
-      const strongSorted = [...strongBuyers].sort(
-        (a, b) => a[1].firstBoughtAt.localeCompare(b[1].firstBoughtAt)
-      )
       const spanMin =
         (new Date(strongSorted.at(-1)![1].firstBoughtAt).getTime() -
          new Date(strongSorted[0][1].firstBoughtAt).getTime()) / 60_000
@@ -387,13 +394,13 @@ export async function checkEntry(
 
     console.log(
       `${tag} [strong-path] ${strongBuyers.length}/${settings.convergenceStrongBuyers}` +
-      ` acheteurs ≥$${STRONG_MIN_USD} — skip price-run`
+      ` acheteurs ≥$${STRONG_MIN_USD}`
     )
   }
 
   if (!isStrongPath) {
     // ── Condition convergence_window_minutes : fenêtre entre 1er et Nème acheteur ──
-    const nthBuyerEntry = sortedBuyers[settings.minBuyersForEntry - 1]
+    const nthBuyerEntry   = sortedBuyers[settings.minBuyersForEntry - 1]
     const firstBuyerEntry = sortedBuyers[0]
     const convergenceSpanMin =
       (new Date(nthBuyerEntry[1].firstBoughtAt).getTime() -
@@ -404,20 +411,72 @@ export async function checkEntry(
       console.log(`${tag} SKIP: ${reason}`)
       return { entered: false, reason }
     }
+  }
 
-    // ── Condition max_price_run_pct : skip si déjà trop monté ────────────────────
-    // Compare le prix courant au prix d'entrée du 1er acheteur déclencheur.
-    // Évite d'acheter sur une bougie déjà consommée.
-    const firstMcap = sortedBuyers[0][1].firstMcap
-    if (firstMcap && firstMcap > 0) {
-      const firstBuyerPrice = firstMcap / 1e9
-      const runPct = (currentPrice - firstBuyerPrice) / firstBuyerPrice * 100
-      if (runPct > settings.maxPriceRunPct) {
-        const reason = `prix a monté de +${runPct.toFixed(0)}% depuis le 1er acheteur (max +${settings.maxPriceRunPct}%)`
+  // ── Checks de prix — COMMUNS aux deux chemins ─────────────────────────────
+  // 1er déclencheur = 1er strong buyer (strong path) ou 1er acheteur qualifié (normal path).
+  // BUG CORRIGÉ : la strong path avait un "skip price-run" qui court-circuitait ces checks,
+  // laissant passer DtFkKBC3 (1er trigger 121K → entrée 265K = +119%).
+  const firstTriggerMcap = isStrongPath
+    ? strongSorted[0]?.[1].firstMcap
+    : sortedBuyers[0]?.[1].firstMcap
+
+  if (firstTriggerMcap && firstTriggerMcap > 0) {
+    const firstTriggerPrice = firstTriggerMcap / 1e9
+    const pricePctOfFirst   = (currentPrice / firstTriggerPrice) * 100   // 100% = même prix
+    const runPct            = pricePctOfFirst - 100                       // >0 = monté, <0 = tombé
+
+    // ── max_price_run_pct : skip si le prix a trop monté depuis le 1er déclencheur ──
+    // S'applique maintenant aux DEUX chemins (corrige le bug strong-path).
+    if (runPct > settings.maxPriceRunPct) {
+      const pathLabel = isStrongPath ? '[strong] ' : ''
+      const reason = `${pathLabel}prix +${runPct.toFixed(0)}% depuis le 1er déclencheur (mcap ${firstTriggerMcap.toFixed(0)}→${(currentPrice * 1e9).toFixed(0)}, max +${settings.maxPriceRunPct}%)`
+      console.log(`${tag} SKIP: ${reason}`)
+      return { entered: false, reason }
+    }
+
+    // ── min_price_vs_first_trigger_pct : "couteau qui tombe" ──────────────────
+    // Skip si le prix courant est inférieur à X% du prix du 1er déclencheur.
+    // Ex : 1er acheteur à 360K, entrée à 180K → 50% < seuil 70% → SKIP.
+    if (settings.minPriceVsFirstTriggerPct > 0 && pricePctOfFirst < settings.minPriceVsFirstTriggerPct) {
+      const pathLabel = isStrongPath ? '[strong] ' : ''
+      const reason =
+        `${pathLabel}couteau qui tombe : prix à ${pricePctOfFirst.toFixed(0)}% du 1er déclencheur` +
+        ` (mcap ${firstTriggerMcap.toFixed(0)}→${(currentPrice * 1e9).toFixed(0)}, min ${settings.minPriceVsFirstTriggerPct}%)`
+      console.log(`${tag} SKIP: ${reason}`)
+      return { entered: false, reason }
+    }
+
+    console.log(
+      `${tag} price vs 1er déclencheur: ${pricePctOfFirst.toFixed(0)}%` +
+      ` (run=${runPct > 0 ? '+' : ''}${runPct.toFixed(0)}%,` +
+      ` max_run=${settings.maxPriceRunPct}%, min_pct=${settings.minPriceVsFirstTriggerPct}%) — OK`
+    )
+  }
+
+  // ── max_drawdown_from_peak_pct : "après le pic" ────────────────────────────
+  // Skip si le mcap courant est inférieur de plus de X% au plus haut mcap_at_buy
+  // observé sur ce token dans la fenêtre 6h.
+  // Ex : pic 594K, entrée 404K → drawdown 32% > seuil 20% → SKIP.
+  if (settings.maxDrawdownFromPeakPct > 0 && (marketCapUsd ?? 0) > 0) {
+    const mcapValues = (recentBuys ?? [])
+      .map(b => b.market_cap_at_buy as number | null)
+      .filter((v): v is number => v !== null && v > 0)
+    if (mcapValues.length > 0) {
+      const peakMcap     = Math.max(...mcapValues)
+      const drawdownPct  = (peakMcap - marketCapUsd!) / peakMcap * 100
+      if (drawdownPct > settings.maxDrawdownFromPeakPct) {
+        const reason =
+          `après le pic : mcap $${Math.round(marketCapUsd!)} à -${drawdownPct.toFixed(0)}%` +
+          ` du pic $${Math.round(peakMcap)} dans la fenêtre (max -${settings.maxDrawdownFromPeakPct}%)`
         console.log(`${tag} SKIP: ${reason}`)
         return { entered: false, reason }
       }
-      console.log(`${tag} price run: +${runPct.toFixed(0)}% depuis 1er acheteur (seuil ${settings.maxPriceRunPct}%) — OK`)
+      console.log(
+        `${tag} drawdown depuis pic: -${drawdownPct.toFixed(0)}%` +
+        ` (pic $${Math.round(peakMcap)}, courant $${Math.round(marketCapUsd!)},` +
+        ` max -${settings.maxDrawdownFromPeakPct}%) — OK`
+      )
     }
   }
 
