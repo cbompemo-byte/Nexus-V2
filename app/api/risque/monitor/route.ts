@@ -19,7 +19,7 @@ export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse }                     from 'next/server'
 import { createClient }                                  from '@supabase/supabase-js'
 import { getTokenMarketData, HeliusRateLimitError }      from '@/lib/risque/pumpfun'
-import { closePosition, trailingStopPrice, PositionRow } from '@/lib/risque/positions'
+import { closePosition, trailingStopPrice, loadSettings, PositionRow } from '@/lib/risque/positions'
 
 function isAuthorized(req: NextRequest): boolean {
   const cronSecret = process.env.CRON_SECRET
@@ -60,9 +60,11 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ ok: true, positions_checked: 0, exits: {} })
   }
 
+  const settings = await loadSettings(supabase)
+
   console.log(`[monitor] ${positions.length} position(s) ouverte(s)`)
 
-  const exits = { stop: 0, trailing: 0, signal_reverse: 0, time: 0 }
+  const exits = { stop: 0, trailing: 0, signal_reverse: 0, time: 0, take_profit: 0 }
 
   for (const pos of positions as unknown as PositionRow[]) {
     const symbol = pos.token_symbol ?? pos.token_mint.slice(0, 8)
@@ -96,13 +98,11 @@ export async function GET(req: NextRequest) {
 
     // ── 3. Activation du trailing ─────────────────────────────────────────
     let trailingActive = pos.trailing_active
-    const trailingThreshold = pos.entry_price_usd * (1 + 30 / 100)  // +30% hardcodé (voir settings)
-    // Note : on ne recharge pas les settings ici pour éviter N queries par position.
-    // Si le seuil change en base, prendre effet au prochain cycle.
+    const trailingThreshold = pos.entry_price_usd * (1 + settings.trailingActivationPct / 100)
     if (!trailingActive && currentPrice >= trailingThreshold) {
       trailingActive = true
       const gainPct = ((currentPrice - pos.entry_price_usd) / pos.entry_price_usd * 100).toFixed(1)
-      console.log(`[monitor] ${symbol} trailing activé — price=$${currentPrice} (+${gainPct}%)`)
+      console.log(`[monitor] ${symbol} trailing activé — price=$${currentPrice} (+${gainPct}%) seuil=${settings.trailingActivationPct}%`)
     }
 
     // ── 4. Checks de sortie (ordre de priorité strict) ────────────────────
@@ -126,6 +126,21 @@ export async function GET(req: NextRequest) {
           `${sellerCount}/${triggerCount} wallets déclencheurs ont vendu`,
         )
         if (closed) exits.signal_reverse++
+        continue
+      }
+    }
+
+    // ── TAKE PROFIT ───────────────────────────────────────────────────────
+    if (settings.takeProfitPct > 0) {
+      const tpPrice = pos.entry_price_usd * (1 + settings.takeProfitPct / 100)
+      if (currentPrice >= tpPrice) {
+        const gainP = ((currentPrice - pos.entry_price_usd) / pos.entry_price_usd * 100).toFixed(1)
+        const closed = await closePosition(
+          supabase, pos, currentPrice, 'CLOSED_TAKE_PROFIT',
+          `take profit +${gainP}% ≥ seuil +${settings.takeProfitPct}%` +
+          ` (price $${currentPrice} ≥ tp $${tpPrice.toFixed(8)})`,
+        )
+        if (closed) exits.take_profit++
         continue
       }
     }
@@ -162,7 +177,7 @@ export async function GET(req: NextRequest) {
       const hoursIn = ((Date.now() - entryTime) / 3600_000).toFixed(1)
       const closed  = await closePosition(
         supabase, pos, currentPrice, 'CLOSED_TIME',
-        `time stop ${hoursIn}h — trailing jamais activé (token n'a pas atteint +30%)`,
+        `time stop ${hoursIn}h — trailing jamais activé (token n'a pas atteint +${settings.trailingActivationPct}%)`,
       )
       if (closed) exits.time++
       continue
@@ -191,10 +206,10 @@ export async function GET(req: NextRequest) {
     )
   }
 
-  const totalExits = exits.stop + exits.trailing + exits.signal_reverse + exits.time
+  const totalExits = exits.stop + exits.trailing + exits.signal_reverse + exits.time + exits.take_profit
   console.log(
     `[monitor] terminé — ${positions.length} vérifiées, ${totalExits} sortie(s)` +
-    ` [stop=${exits.stop} trail=${exits.trailing} signal=${exits.signal_reverse} time=${exits.time}]`
+    ` [stop=${exits.stop} trail=${exits.trailing} signal=${exits.signal_reverse} time=${exits.time} tp=${exits.take_profit}]`
   )
 
   return NextResponse.json({

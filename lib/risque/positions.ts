@@ -40,6 +40,7 @@ export interface RisqueSettings {
   blockIfSoldWithinMinutes:         number   // skip si un wallet suivi a vendu ce token dans les N dernières minutes (0 = désactivé)
   minPriceVsFirstTriggerPct:        number   // skip si prix courant < X% du mcap du 1er déclencheur — couteau qui tombe (0 = désactivé)
   maxDrawdownFromPeakPct:           number   // skip si mcap courant a baissé de plus de X% depuis le pic dans la fenêtre (0 = désactivé)
+  takeProfitPct:                    number   // clôture dès que le prix atteint entry × (1 + pct/100) ; 0 = désactivé
 }
 
 export async function loadSettings(supabase: SupabaseClient): Promise<RisqueSettings> {
@@ -81,6 +82,7 @@ export async function loadSettings(supabase: SupabaseClient): Promise<RisqueSett
     blockIfSoldWithinMinutes:         num('block_if_sold_within_minutes',           30),
     minPriceVsFirstTriggerPct:        num('min_price_vs_first_trigger_pct',         70),
     maxDrawdownFromPeakPct:           num('max_drawdown_from_peak_pct',             20),
+    takeProfitPct:                    num('take_profit_pct',                         15),
   }
 }
 
@@ -601,6 +603,7 @@ export type ClosedStatus =
   | 'CLOSED_SIGNAL_REVERSE'
   | 'CLOSED_TIME'
   | 'CLOSED_MANUAL'
+  | 'CLOSED_TAKE_PROFIT'
 
 export interface PositionRow {
   id:               string

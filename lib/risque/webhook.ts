@@ -509,6 +509,59 @@ async function checkTriggerExit(
   )
 }
 
+// ── Take profit temps réel ────────────────────────────────────────────────────
+// Appelée après chaque buy ou sell webhook.
+// Récupère le prix uniquement si une position ouverte existe sur ce mint
+// (évite des appels RPC inutiles pour des tokens sans position).
+// Garde-fous : takeProfitPct ≤ 0 → no-op ; priceUsd null/0 → no-op.
+
+async function checkTakeProfitExit(
+  supabase:      SupabaseClient,
+  mint:          string,
+  takeProfitPct: number,
+  priceUsd?:     number | null,   // prix déjà connu (buy) ; undefined = à récupérer (sell)
+): Promise<void> {
+  if (takeProfitPct <= 0) return
+
+  const { data: pos } = await supabase
+    .from('kymia_risque_positions')
+    .select('id, token_mint, token_symbol, entry_at, entry_price_usd, size_usd, stop_price_usd, high_since_entry, trailing_active, trigger_wallets, is_paper')
+    .eq('token_mint', mint)
+    .eq('status', 'OPEN')
+    .maybeSingle()
+
+  if (!pos) return   // pas de position ouverte — pas besoin du prix
+
+  // Prix : utiliser celui déjà calculé (buy) ou le récupérer (sell)
+  let currentPrice = (priceUsd != null && priceUsd > 0) ? priceUsd : null
+  if (currentPrice === null) {
+    try {
+      const md = await getTokenMarketData(mint)
+      if (md?.priceUsd && md.priceUsd > 0) currentPrice = md.priceUsd
+    } catch (e: any) {
+      console.warn(`[webhook] checkTakeProfitExit getTokenMarketData ${mint.slice(0, 8)}…: ${e.message}`)
+    }
+  }
+  if (currentPrice === null) return   // prix indisponible — skip
+
+  const tpPrice = (pos.entry_price_usd as number) * (1 + takeProfitPct / 100)
+  if (currentPrice < tpPrice) return
+
+  const gainP = ((currentPrice - (pos.entry_price_usd as number)) / (pos.entry_price_usd as number) * 100).toFixed(1)
+  const exitReason =
+    `take profit +${gainP}% ≥ seuil +${takeProfitPct}%` +
+    ` (price $${currentPrice} ≥ tp $${tpPrice.toFixed(8)}) — webhook`
+  console.log(`[webhook] EXIT take_profit ${mint.slice(0, 8)}… : ${exitReason}`)
+
+  await closePosition(
+    supabase,
+    pos as unknown as PositionRow,
+    currentPrice,
+    'CLOSED_TAKE_PROFIT',
+    exitReason,
+  )
+}
+
 // ── Point d'entrée public ─────────────────────────────────────────────────────
 
 export async function processWebhookEvent(
@@ -537,13 +590,14 @@ export async function processWebhookEvent(
   )
 
   // ── Charger le seuil market cap (pour log uniquement) ───────────────────
-  const { data: setting } = await supabase
+  const { data: settingsRows } = await supabase
     .from('kymia_risque_settings')
-    .select('value')
-    .eq('key', 'max_mc_usd')
-    .maybeSingle()
+    .select('key, value')
+    .in('key', ['max_mc_usd', 'take_profit_pct'])
 
-  const maxMcUsd = setting ? Number(setting.value) : 50_000
+  const settingsMap   = new Map((settingsRows ?? []).map(r => [r.key as string, Number(r.value)]))
+  const maxMcUsd      = settingsMap.get('max_mc_usd')      ?? 50_000
+  const takeProfitPct = settingsMap.get('take_profit_pct') ?? 15
 
   // ── Traiter chaque transaction ──────────────────────────────────────────
   const txs = payload as HeliusTx[]
@@ -625,6 +679,16 @@ export async function processWebhookEvent(
           } catch (e: any) {
             console.error(`[webhook] checkEntry ${buy.mint.slice(0, 8)}…:`, e.message)
           }
+
+          // Take profit : vérifier sur la position ouverte avec le prix déjà connu.
+          // Garde-fou : onchain_sol_only → priceUsd null/0 → checkTakeProfitExit no-op.
+          if (marketResult.priceUsd != null && marketResult.priceUsd > 0) {
+            try {
+              await checkTakeProfitExit(supabase, buy.mint, takeProfitPct, marketResult.priceUsd)
+            } catch (e: any) {
+              console.error(`[webhook] checkTakeProfitExit buy ${buy.mint.slice(0, 8)}…:`, e.message)
+            }
+          }
         }
 
         // Throttle DexScreener + RugCheck + RPC
@@ -643,12 +707,19 @@ export async function processWebhookEvent(
           console.error(`[webhook] processSell ${sell.mint.slice(0, 8)}… ${walletLabel}:`, e.message)
         }
 
-        // Exit temps réel : si un wallet déclencheur vient de vendre un token
-        // sur lequel on a une position ouverte, fermer sans attendre le monitor.
+        // Exit temps réel signal reverse : wallet déclencheur a vendu.
         try {
           await checkTriggerExit(supabase, sell.mint, walletLabel)
         } catch (e: any) {
           console.error(`[webhook] checkTriggerExit ${sell.mint.slice(0, 8)}…:`, e.message)
+        }
+
+        // Take profit sur vente : le pic arrive souvent au milieu des ventes.
+        // Prix récupéré par checkTakeProfitExit seulement si position ouverte.
+        try {
+          await checkTakeProfitExit(supabase, sell.mint, takeProfitPct)
+        } catch (e: any) {
+          console.error(`[webhook] checkTakeProfitExit sell ${sell.mint.slice(0, 8)}…:`, e.message)
         }
       }
     }
