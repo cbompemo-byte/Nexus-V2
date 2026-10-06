@@ -100,6 +100,34 @@ export function trailingStopPrice(high: number, entryPrice: number): number {
   return high * (1 - distance)
 }
 
+// ── logSkippedConvergence ─────────────────────────────────────────────────────
+// Insère une ligne dans kymia_risque_skipped quand une convergence RÉELLE
+// (≥ 2 wallets qualifiés) est bloquée par un filtre.
+// Non bloquant : toute erreur est swallowée pour ne jamais perturber checkEntry.
+
+async function logSkippedConvergence(
+  supabase:     SupabaseClient,
+  mint:         string,
+  skipReason:   string,
+  buyerCount:   number,
+  currentPrice: number,
+  marketCapUsd: number | null,
+): Promise<void> {
+  if (buyerCount < 2) return
+  try {
+    await supabase.from('kymia_risque_skipped').insert({
+      token_mint:    mint,
+      skip_reason:   skipReason,
+      buyer_count:   buyerCount,
+      price_at_skip: currentPrice,
+      mcap_at_skip:  marketCapUsd,
+      skipped_at:    new Date().toISOString(),
+    })
+  } catch (e: any) {
+    console.warn(`[positions] logSkip ${mint.slice(0, 8)}… ${skipReason}: ${e.message}`)
+  }
+}
+
 // ── checkEntry ────────────────────────────────────────────────────────────────
 // Appelée après chaque buy webhook. Ouvre une position si les 7 conditions
 // cumulatives sont remplies.
@@ -276,6 +304,7 @@ export async function checkEntry(
         `avg $${avgUsdPerBuy.toFixed(0)}/achat (${sumQualifiedUsd.toFixed(0)}$ / ${qualifiedBuys.length} achats)` +
         ` < min $${settings.minAvgUsdPerBuy}`
       console.log(`${tag} SKIP: ${reason}`)
+      await logSkippedConvergence(supabase, mint, 'min_avg_usd', buyerMap.size, currentPrice, marketCapUsd)
       return { entered: false, reason }
     }
     console.log(
@@ -329,6 +358,7 @@ export async function checkEntry(
           `wallet ${recentSell.wallet_address.slice(0, 8)}… a vendu il y a ${minAgo}min` +
           ` (block_if_sold_within=${settings.blockIfSoldWithinMinutes}min)`
         console.log(`${tag} SKIP: ${reason}`)
+        await logSkippedConvergence(supabase, mint, 'block_if_sold', buyerMap.size, currentPrice, marketCapUsd)
         return { entered: false, reason }
       }
     }
@@ -353,6 +383,7 @@ export async function checkEntry(
       : ''
     const reason = `${buyerMap.size}/${settings.minBuyersForEntry} wallets qualifiés dans fenêtre 6h (min $${settings.minUsdPerBuyer})${mmNote}${strongNote}`
     console.log(`${tag} SKIP: ${reason}`)
+    await logSkippedConvergence(supabase, mint, 'not_enough_buyers', buyerMap.size, currentPrice, marketCapUsd)
     return { entered: false, reason }
   }
 
@@ -371,6 +402,7 @@ export async function checkEntry(
     if (marketCapUsd !== null && marketCapUsd > STRONG_MAX_MC) {
       const reason = `[strong] mcap $${marketCapUsd.toFixed(0)} > seuil fast-path $${STRONG_MAX_MC.toLocaleString()}`
       console.log(`${tag} SKIP: ${reason}`)
+      await logSkippedConvergence(supabase, mint, 'strong_mcap', buyerMap.size, currentPrice, marketCapUsd)
       return { entered: false, reason }
     }
 
@@ -386,6 +418,7 @@ export async function checkEntry(
           `[strong] convergence trop lente — ${spanMin.toFixed(0)}min entre 1er et dernier strong buyer` +
           ` (max ${settings.strongPathWindowMinutes}min)`
         console.log(`${tag} SKIP: ${reason}`)
+        await logSkippedConvergence(supabase, mint, 'strong_convergence_window', buyerMap.size, currentPrice, marketCapUsd)
         return { entered: false, reason }
       }
       console.log(
@@ -411,6 +444,7 @@ export async function checkEntry(
     if (convergenceSpanMin > settings.convergenceWindowMinutes) {
       const reason = `convergence trop lente — ${convergenceSpanMin.toFixed(0)}min entre 1er et ${settings.minBuyersForEntry}e acheteur (max ${settings.convergenceWindowMinutes}min)`
       console.log(`${tag} SKIP: ${reason}`)
+      await logSkippedConvergence(supabase, mint, 'convergence_window', buyerMap.size, currentPrice, marketCapUsd)
       return { entered: false, reason }
     }
   }
@@ -434,6 +468,7 @@ export async function checkEntry(
       const pathLabel = isStrongPath ? '[strong] ' : ''
       const reason = `${pathLabel}prix +${runPct.toFixed(0)}% depuis le 1er déclencheur (mcap ${firstTriggerMcap.toFixed(0)}→${(currentPrice * 1e9).toFixed(0)}, max +${settings.maxPriceRunPct}%)`
       console.log(`${tag} SKIP: ${reason}`)
+      await logSkippedConvergence(supabase, mint, 'max_price_run', buyerMap.size, currentPrice, marketCapUsd)
       return { entered: false, reason }
     }
 
@@ -446,6 +481,7 @@ export async function checkEntry(
         `${pathLabel}couteau qui tombe : prix à ${pricePctOfFirst.toFixed(0)}% du 1er déclencheur` +
         ` (mcap ${firstTriggerMcap.toFixed(0)}→${(currentPrice * 1e9).toFixed(0)}, min ${settings.minPriceVsFirstTriggerPct}%)`
       console.log(`${tag} SKIP: ${reason}`)
+      await logSkippedConvergence(supabase, mint, 'couteau_qui_tombe', buyerMap.size, currentPrice, marketCapUsd)
       return { entered: false, reason }
     }
 
@@ -472,6 +508,7 @@ export async function checkEntry(
           `après le pic : mcap $${Math.round(marketCapUsd!)} à -${drawdownPct.toFixed(0)}%` +
           ` du pic $${Math.round(peakMcap)} dans la fenêtre (max -${settings.maxDrawdownFromPeakPct}%)`
         console.log(`${tag} SKIP: ${reason}`)
+        await logSkippedConvergence(supabase, mint, 'drawdown_depuis_pic', buyerMap.size, currentPrice, marketCapUsd)
         return { entered: false, reason }
       }
       console.log(
@@ -510,6 +547,7 @@ export async function checkEntry(
           if (settings.dexConfirmEnabled && buyRatio <= 0.5) {
             const reason = `DexScreener 1h buy ratio ${ratioStr} ≤ 50% — signal faible`
             console.log(`${tag} SKIP: ${reason}`)
+            await logSkippedConvergence(supabase, mint, 'dex_buy_ratio', buyerMap.size, currentPrice, marketCapUsd)
             return { entered: false, reason }
           }
           console.log(`${tag} DexScreener ratio 1h: ${ratioStr}${settings.dexConfirmEnabled ? '' : ' — non bloquant'}`)
@@ -531,6 +569,7 @@ export async function checkEntry(
   if (token?.risque_score === 'DANGER') {
     const reason = 'score DANGER — entrée refusée'
     console.log(`${tag} SKIP: ${reason}`)
+    await logSkippedConvergence(supabase, mint, 'danger_score', buyerMap.size, currentPrice, marketCapUsd)
     return { entered: false, reason }
   }
 
