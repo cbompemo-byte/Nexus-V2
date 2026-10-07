@@ -20,7 +20,7 @@ import { SupabaseClient }             from '@supabase/supabase-js'
 import { fetchRugCheck }              from '@/lib/memecoin/screen'
 import { getTokenMarketData }         from '@/lib/risque/pumpfun'
 import { checkRug }                   from '@/lib/risque/rug'
-import { checkEntry, closePosition, PositionRow } from '@/lib/risque/positions'
+import { checkEntry, closePosition, takePartialProfit, checkScoutEntry, PositionRow } from '@/lib/risque/positions'
 
 // ── Constantes ────────────────────────────────────────────────────────────────
 
@@ -516,21 +516,23 @@ async function checkTriggerExit(
 // Garde-fous : takeProfitPct ≤ 0 → no-op ; priceUsd null/0 → no-op.
 
 async function checkTakeProfitExit(
-  supabase:      SupabaseClient,
-  mint:          string,
-  takeProfitPct: number,
-  priceUsd?:     number | null,   // prix déjà connu (buy) ; undefined = à récupérer (sell)
+  supabase:           SupabaseClient,
+  mint:               string,
+  takeProfitPct:      number,
+  takeProfitSellPct:  number,
+  priceUsd?:          number | null,   // prix déjà connu (buy) ; undefined = à récupérer (sell)
 ): Promise<void> {
   if (takeProfitPct <= 0) return
 
   const { data: pos } = await supabase
     .from('kymia_risque_positions')
-    .select('id, token_mint, token_symbol, entry_at, entry_price_usd, size_usd, stop_price_usd, high_since_entry, trailing_active, trigger_wallets, is_paper')
+    .select('id, token_mint, token_symbol, entry_at, entry_price_usd, size_usd, original_size_usd, stop_price_usd, high_since_entry, trailing_active, trigger_wallets, is_paper, partial_tp_taken, realized_pnl_usd, strategy_tag')
     .eq('token_mint', mint)
     .eq('status', 'OPEN')
     .maybeSingle()
 
-  if (!pos) return   // pas de position ouverte — pas besoin du prix
+  if (!pos) return
+  if ((pos.partial_tp_taken as boolean)) return   // TP partiel déjà encaissé — pas de double déclenchement
 
   // Prix : utiliser celui déjà calculé (buy) ou le récupérer (sell)
   let currentPrice = (priceUsd != null && priceUsd > 0) ? priceUsd : null
@@ -542,24 +544,23 @@ async function checkTakeProfitExit(
       console.warn(`[webhook] checkTakeProfitExit getTokenMarketData ${mint.slice(0, 8)}…: ${e.message}`)
     }
   }
-  if (currentPrice === null) return   // prix indisponible — skip
+  if (currentPrice === null) return
 
   const tpPrice = (pos.entry_price_usd as number) * (1 + takeProfitPct / 100)
   if (currentPrice < tpPrice) return
 
   const gainP = ((currentPrice - (pos.entry_price_usd as number)) / (pos.entry_price_usd as number) * 100).toFixed(1)
-  const exitReason =
-    `take profit +${gainP}% ≥ seuil +${takeProfitPct}%` +
-    ` (price $${currentPrice} ≥ tp $${tpPrice.toFixed(8)}) — webhook`
-  console.log(`[webhook] EXIT take_profit ${mint.slice(0, 8)}… : ${exitReason}`)
 
-  await closePosition(
-    supabase,
-    pos as unknown as PositionRow,
-    currentPrice,
-    'CLOSED_TAKE_PROFIT',
-    exitReason,
-  )
+  if (takeProfitSellPct >= 100) {
+    const exitReason =
+      `take profit +${gainP}% ≥ seuil +${takeProfitPct}%` +
+      ` (price $${currentPrice} ≥ tp $${tpPrice.toFixed(8)}) — webhook`
+    console.log(`[webhook] EXIT take_profit ${mint.slice(0, 8)}… : ${exitReason}`)
+    await closePosition(supabase, pos as unknown as PositionRow, currentPrice, 'CLOSED_TAKE_PROFIT', exitReason)
+  } else {
+    console.log(`[webhook] PARTIAL TP ${mint.slice(0, 8)}… +${gainP}% → vente ${takeProfitSellPct}%`)
+    await takePartialProfit(supabase, pos as unknown as PositionRow, currentPrice, takeProfitSellPct)
+  }
 }
 
 // ── Point d'entrée public ─────────────────────────────────────────────────────
@@ -577,7 +578,7 @@ export async function processWebhookEvent(
   // ── Charger les wallets surveillés ──────────────────────────────────────
   const { data: wallets, error: walletErr } = await supabase
     .from('kymia_risque_wallets')
-    .select('address, label')
+    .select('address, label, tier')
 
   if (walletErr) throw new Error(`wallet select: ${walletErr.message}`)
   if (!wallets?.length) {
@@ -589,15 +590,23 @@ export async function processWebhookEvent(
     wallets.map(w => [w.address as string, (w.label ?? (w.address as string).slice(0, 8)) as string])
   )
 
+  // Wallets tier A : éclaireurs — une seule requête au démarrage, pas par achat.
+  const tierAWallets = new Set<string>(
+    (wallets as Array<{ address: string; tier: string | null }>)
+      .filter(w => w.tier === 'A')
+      .map(w => w.address)
+  )
+
   // ── Charger le seuil market cap (pour log uniquement) ───────────────────
   const { data: settingsRows } = await supabase
     .from('kymia_risque_settings')
     .select('key, value')
-    .in('key', ['max_mc_usd', 'take_profit_pct'])
+    .in('key', ['max_mc_usd', 'take_profit_pct', 'take_profit_sell_pct'])
 
-  const settingsMap   = new Map((settingsRows ?? []).map(r => [r.key as string, Number(r.value)]))
-  const maxMcUsd      = settingsMap.get('max_mc_usd')      ?? 50_000
-  const takeProfitPct = settingsMap.get('take_profit_pct') ?? 15
+  const settingsMap      = new Map((settingsRows ?? []).map(r => [r.key as string, Number(r.value)]))
+  const maxMcUsd         = settingsMap.get('max_mc_usd')           ?? 50_000
+  const takeProfitPct    = settingsMap.get('take_profit_pct')      ?? 15
+  const takeProfitSellPct = settingsMap.get('take_profit_sell_pct') ?? 50
 
   // ── Traiter chaque transaction ──────────────────────────────────────────
   const txs = payload as HeliusTx[]
@@ -676,6 +685,23 @@ export async function processWebhookEvent(
             if (entry.entered) {
               console.log(`[webhook] POSITION OUVERTE ${buy.mint.slice(0, 8)}…: ${entry.reason}`)
             }
+
+            // Éclaireur : si la convergence n'a pas ouvert (ni CONV ni SCOUT+CONV),
+            // et que ce wallet est tier A → tenter une entrée scout.
+            if (!entry.entered && tierAWallets.has(walletAddress)) {
+              const buyUsdApprox = buy.net > 0 ? buy.net * marketResult.priceUsd : 0
+              try {
+                const scout = await checkScoutEntry(
+                  supabase, buy.mint, walletAddress, walletLabel,
+                  buyUsdApprox, marketResult.priceUsd, marketResult.marketCapUsd,
+                )
+                if (scout.entered) {
+                  console.log(`[webhook] POSITION SCOUT ${buy.mint.slice(0, 8)}…: ${scout.reason}`)
+                }
+              } catch (e: any) {
+                console.error(`[webhook] checkScoutEntry ${buy.mint.slice(0, 8)}…:`, e.message)
+              }
+            }
           } catch (e: any) {
             console.error(`[webhook] checkEntry ${buy.mint.slice(0, 8)}…:`, e.message)
           }
@@ -684,7 +710,7 @@ export async function processWebhookEvent(
           // Garde-fou : onchain_sol_only → priceUsd null/0 → checkTakeProfitExit no-op.
           if (marketResult.priceUsd != null && marketResult.priceUsd > 0) {
             try {
-              await checkTakeProfitExit(supabase, buy.mint, takeProfitPct, marketResult.priceUsd)
+              await checkTakeProfitExit(supabase, buy.mint, takeProfitPct, takeProfitSellPct, marketResult.priceUsd)
             } catch (e: any) {
               console.error(`[webhook] checkTakeProfitExit buy ${buy.mint.slice(0, 8)}…:`, e.message)
             }
@@ -717,7 +743,7 @@ export async function processWebhookEvent(
         // Take profit sur vente : le pic arrive souvent au milieu des ventes.
         // Prix récupéré par checkTakeProfitExit seulement si position ouverte.
         try {
-          await checkTakeProfitExit(supabase, sell.mint, takeProfitPct)
+          await checkTakeProfitExit(supabase, sell.mint, takeProfitPct, takeProfitSellPct)
         } catch (e: any) {
           console.error(`[webhook] checkTakeProfitExit sell ${sell.mint.slice(0, 8)}…:`, e.message)
         }

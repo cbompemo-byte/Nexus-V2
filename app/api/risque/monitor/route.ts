@@ -19,7 +19,7 @@ export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse }                     from 'next/server'
 import { createClient }                                  from '@supabase/supabase-js'
 import { getTokenMarketData, HeliusRateLimitError }      from '@/lib/risque/pumpfun'
-import { closePosition, trailingStopPrice, loadSettings, PositionRow } from '@/lib/risque/positions'
+import { closePosition, trailingStopPrice, loadSettings, takePartialProfit, PositionRow } from '@/lib/risque/positions'
 
 function isAuthorized(req: NextRequest): boolean {
   const cronSecret = process.env.CRON_SECRET
@@ -48,7 +48,8 @@ export async function GET(req: NextRequest) {
     .from('kymia_risque_positions')
     .select(
       'id, token_mint, token_symbol, entry_at, entry_price_usd, size_usd,' +
-      'stop_price_usd, high_since_entry, trailing_active, trigger_wallets, is_paper'
+      'stop_price_usd, high_since_entry, trailing_active, trigger_wallets, is_paper,' +
+      'partial_tp_taken, realized_pnl_usd, original_size_usd, strategy_tag'
     )
     .eq('status', 'OPEN')
 
@@ -131,16 +132,23 @@ export async function GET(req: NextRequest) {
     }
 
     // ── TAKE PROFIT ───────────────────────────────────────────────────────
-    if (settings.takeProfitPct > 0) {
+    if (settings.takeProfitPct > 0 && !pos.partial_tp_taken) {
       const tpPrice = pos.entry_price_usd * (1 + settings.takeProfitPct / 100)
       if (currentPrice >= tpPrice) {
         const gainP = ((currentPrice - pos.entry_price_usd) / pos.entry_price_usd * 100).toFixed(1)
-        const closed = await closePosition(
-          supabase, pos, currentPrice, 'CLOSED_TAKE_PROFIT',
-          `take profit +${gainP}% ≥ seuil +${settings.takeProfitPct}%` +
-          ` (price $${currentPrice} ≥ tp $${tpPrice.toFixed(8)})`,
-        )
-        if (closed) exits.take_profit++
+        if (settings.takeProfitSellPct >= 100) {
+          // Sortie totale
+          const closed = await closePosition(
+            supabase, pos, currentPrice, 'CLOSED_TAKE_PROFIT',
+            `take profit +${gainP}% ≥ seuil +${settings.takeProfitPct}%` +
+            ` (price $${currentPrice} ≥ tp $${tpPrice.toFixed(8)})`,
+          )
+          if (closed) exits.take_profit++
+        } else {
+          // Vente partielle — position reste OPEN, trailing activé, stop = breakeven
+          const taken = await takePartialProfit(supabase, pos, currentPrice, settings.takeProfitSellPct)
+          if (taken) exits.take_profit++
+        }
         continue
       }
     }

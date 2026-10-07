@@ -41,6 +41,10 @@ export interface RisqueSettings {
   minPriceVsFirstTriggerPct:        number   // skip si prix courant < X% du mcap du 1er déclencheur — couteau qui tombe (0 = désactivé)
   maxDrawdownFromPeakPct:           number   // skip si mcap courant a baissé de plus de X% depuis le pic dans la fenêtre (0 = désactivé)
   takeProfitPct:                    number   // clôture dès que le prix atteint entry × (1 + pct/100) ; 0 = désactivé
+  takeProfitSellPct:                number   // % de la position vendu au TP ; 100 = fermeture totale (défaut 50)
+  scoutSizeUsd:                     number   // taille position éclaireur en $ (défaut 25)
+  scoutMaxMcapUsd:                  number   // mcap max pour déclencher un éclaireur (défaut 300K$)
+  scoutMinUsd:                      number   // achat min $ d'un wallet tier A pour qualifier (défaut 1000$)
 }
 
 export async function loadSettings(supabase: SupabaseClient): Promise<RisqueSettings> {
@@ -83,6 +87,10 @@ export async function loadSettings(supabase: SupabaseClient): Promise<RisqueSett
     minPriceVsFirstTriggerPct:        num('min_price_vs_first_trigger_pct',         70),
     maxDrawdownFromPeakPct:           num('max_drawdown_from_peak_pct',             20),
     takeProfitPct:                    num('take_profit_pct',                         15),
+    takeProfitSellPct:                num('take_profit_sell_pct',                    50),
+    scoutSizeUsd:                     num('scout_size_usd',                          25),
+    scoutMaxMcapUsd:                  num('scout_max_mcap_usd',                 300_000),
+    scoutMinUsd:                      num('scout_min_usd',                        1_000),
   }
 }
 
@@ -157,17 +165,30 @@ export async function checkEntry(
   // ── Condition 5 : pas de position ouverte sur ce mint ────────────────────────
   const { data: openPos } = await supabase
     .from('kymia_risque_positions')
-    .select('id')
+    .select('id, strategy_tag, size_usd, entry_price_usd, partial_tp_taken')
     .eq('token_mint', mint)
     .eq('status', 'OPEN')
     .limit(1)
     .maybeSingle()
 
-  if (openPos) {
+  type OpenPosRow = {
+    id:               string
+    strategy_tag:     string | null
+    size_usd:         number
+    entry_price_usd:  number
+    partial_tp_taken: boolean
+  }
+  const openPosRow = openPos as OpenPosRow | null
+
+  // Bloquer si : position non-SCOUT ouverte, OU SCOUT avec partial TP déjà pris
+  // (phase trailing seule — on ne remet pas de capital dessus).
+  if (openPosRow && (openPosRow.strategy_tag !== 'SCOUT' || openPosRow.partial_tp_taken)) {
     const reason = 'position déjà ouverte sur ce mint'
     console.log(`${tag} SKIP: ${reason}`)
     return { entered: false, reason }
   }
+  // openPosRow?.strategy_tag === 'SCOUT' && !openPosRow.partial_tp_taken
+  // → laisser passer tous les filtres, puis compléter en SCOUT+CONV si tout passe.
 
   // ── Condition 7 : pas de ré-entrée (token déjà clôturé) ──────────────────────
   const { data: closedPos } = await supabase
@@ -598,6 +619,45 @@ export async function checkEntry(
     )
   }
 
+  // ── Upgrade SCOUT → SCOUT+CONV (complément avec entrée en prix moyen pondéré) ──
+  if (openPosRow?.strategy_tag === 'SCOUT') {
+    const addedSize   = Math.max(0, settings.positionSizeUsd - openPosRow.size_usd)
+    const totalSize   = openPosRow.size_usd + addedSize
+    // Prix moyen pondéré : (entry_scout × size_scout + prix_actuel × complément) / total
+    const newEntry    = addedSize > 0
+      ? (openPosRow.entry_price_usd * openPosRow.size_usd + currentPrice * addedSize) / totalSize
+      : openPosRow.entry_price_usd
+    const newStopUsd  = newEntry * (1 - settings.stopLossPct / 100)
+
+    const { error: upgradeErr } = await supabase
+      .from('kymia_risque_positions')
+      .update({
+        strategy_tag:       'SCOUT+CONV',
+        size_usd:           totalSize,
+        original_size_usd:  totalSize,
+        entry_price_usd:    parseFloat(newEntry.toFixed(12)),
+        stop_price_usd:     parseFloat(newStopUsd.toFixed(12)),
+        trigger_reason:     triggerReason,
+        trigger_wallets:    triggerLabels,
+        updated_at:         new Date().toISOString(),
+      })
+      .eq('id', openPosRow.id)
+      .eq('status', 'OPEN')
+
+    if (upgradeErr) throw new Error(`scout upgrade: ${upgradeErr.message}`)
+
+    console.log(
+      `[positions] SCOUT→SCOUT+CONV ${mint.slice(0, 8)}…` +
+      ` entry: $${openPosRow.entry_price_usd}×$${openPosRow.size_usd}` +
+      ` + $${currentPrice}×$${addedSize}` +
+      ` → new entry=$${newEntry.toFixed(8)} stop=$${newStopUsd.toFixed(8)} total=$${totalSize}` +
+      ` trigger="${triggerReason}"`
+    )
+
+    return { entered: true, positionId: openPosRow.id, reason: `SCOUT→SCOUT+CONV: ${triggerReason}` }
+  }
+
+  // ── Insert CONV normal ────────────────────────────────────────────────────────
   const { data: inserted, error: insertErr } = await supabase
     .from('kymia_risque_positions')
     .insert({
@@ -606,15 +666,17 @@ export async function checkEntry(
       entry_price_usd:    currentPrice,
       entry_market_cap:   marketCapUsd,
       size_usd:           settings.positionSizeUsd,
+      original_size_usd:  settings.positionSizeUsd,
       trigger_reason:     triggerReason,
       trigger_wallets:    triggerLabels,
       security_score:     token?.risque_score ?? null,
       stop_price_usd:     stopPriceUsd,
       high_since_entry:   currentPrice,
       trailing_active:    false,
+      strategy_tag:       'CONV',
       status:             'OPEN',
-      is_paper:           isPaper,          // ← SAFETY BELT : toujours dérivé de live_mode
-      tx_signature_entry: null,             // null en paper, tx hash en live
+      is_paper:           isPaper,
+      tx_signature_entry: null,
     })
     .select('id')
     .single()
@@ -645,17 +707,21 @@ export type ClosedStatus =
   | 'CLOSED_TAKE_PROFIT'
 
 export interface PositionRow {
-  id:               string
-  token_mint:       string
-  token_symbol:     string | null
-  entry_at:         string
-  entry_price_usd:  number
-  size_usd:         number
-  stop_price_usd:   number
-  high_since_entry: number | null
-  trailing_active:  boolean
-  trigger_wallets:  string[]
-  is_paper:         boolean
+  id:                string
+  token_mint:        string
+  token_symbol:      string | null
+  entry_at:          string
+  entry_price_usd:   number
+  size_usd:          number
+  original_size_usd: number | null   // fixé à l'ouverture, jamais modifié — base du pnl_pct final
+  stop_price_usd:    number
+  high_since_entry:  number | null
+  trailing_active:   boolean
+  trigger_wallets:   string[]
+  is_paper:          boolean
+  partial_tp_taken:  boolean
+  realized_pnl_usd:  number | null   // PnL encaissé lors de la vente partielle
+  strategy_tag:      string | null   // 'CONV' | 'SCOUT' | 'SCOUT+CONV'
 }
 
 export async function closePosition(
@@ -665,8 +731,13 @@ export async function closePosition(
   status:     ClosedStatus,
   exitReason: string,
 ): Promise<boolean> {
-  const pnlUsd = (exitPrice - position.entry_price_usd) / position.entry_price_usd * position.size_usd
-  const pnlPct = (exitPrice - position.entry_price_usd) / position.entry_price_usd * 100
+  // PnL total = gain déjà encaissé (vente partielle) + gain sur la part restante.
+  // pnl_pct calculé sur original_size_usd pour rester cohérent avec la taille initiale.
+  const realizedPnl     = position.realized_pnl_usd ?? 0
+  const remainingPnlUsd = (exitPrice - position.entry_price_usd) / position.entry_price_usd * position.size_usd
+  const pnlUsd          = realizedPnl + remainingPnlUsd
+  const baseSizeUsd     = position.original_size_usd ?? position.size_usd
+  const pnlPct          = pnlUsd / baseSizeUsd * 100
   const now    = new Date().toISOString()
 
   let txSignatureExit: string | null = null
@@ -715,4 +786,203 @@ export async function closePosition(
   )
 
   return true
+}
+
+// ── takePartialProfit ─────────────────────────────────────────────────────────
+// Vend sellPct% de la position au prix exitPrice sans clôturer.
+// Après l'appel :
+//   - realized_pnl_usd = PnL sur la part vendue
+//   - size_usd         = part restante
+//   - stop_price_usd   = entry_price_usd (breakeven — on ne peut plus perdre)
+//   - trailing_active  = true (force l'activation dès le TP)
+// Guard idempotent : .eq('partial_tp_taken', false).
+
+export async function takePartialProfit(
+  supabase:  SupabaseClient,
+  position:  PositionRow,
+  exitPrice: number,
+  sellPct:   number,
+): Promise<boolean> {
+  const soldFraction     = sellPct / 100
+  const pnlOnSold        = (exitPrice - position.entry_price_usd) / position.entry_price_usd
+                           * position.size_usd * soldFraction
+  const remainingSizeUsd = position.size_usd * (1 - soldFraction)
+  const gainPct          = ((exitPrice - position.entry_price_usd) / position.entry_price_usd * 100).toFixed(1)
+  const now              = new Date().toISOString()
+
+  const { data: updated } = await supabase
+    .from('kymia_risque_positions')
+    .update({
+      partial_tp_taken:  true,
+      realized_pnl_usd:  parseFloat(pnlOnSold.toFixed(4)),
+      size_usd:          parseFloat(remainingSizeUsd.toFixed(4)),
+      stop_price_usd:    position.entry_price_usd,         // breakeven
+      trailing_active:   true,                              // force activation du trailing
+      high_since_entry:  Math.max(position.high_since_entry ?? exitPrice, exitPrice),
+      updated_at:        now,
+    })
+    .eq('id', position.id)
+    .eq('status', 'OPEN')
+    .eq('partial_tp_taken', false)   // idempotent
+    .select('id')
+    .maybeSingle()
+
+  if (!updated) {
+    console.log(`[positions] ${position.id} partial TP déjà pris ou position fermée — skip`)
+    return false
+  }
+
+  console.log(
+    `[positions] ${position.is_paper ? 'PAPER' : 'LIVE'} PARTIAL TP` +
+    ` ${position.token_mint.slice(0, 8)}…` +
+    ` +${gainPct}% → vente ${sellPct}% ($${pnlOnSold.toFixed(2)} réalisé)` +
+    ` reste: $${remainingSizeUsd.toFixed(2)}, stop=breakeven $${position.entry_price_usd}`
+  )
+
+  return true
+}
+
+// ── checkScoutEntry ───────────────────────────────────────────────────────────
+// Ouvre une position SCOUT (taille réduite) quand un wallet tier A achète
+// ≥ scout_min_usd sur un token < scout_max_mcap_usd, sans vente récente ni
+// position existante, score ≠ DANGER.
+// L'appelant (webhook) vérifie déjà que le wallet est tier A avant d'appeler.
+
+export async function checkScoutEntry(
+  supabase:      SupabaseClient,
+  mint:          string,
+  walletAddress: string,
+  walletLabel:   string,
+  buyUsd:        number,
+  currentPrice:  number,
+  marketCapUsd:  number | null,
+): Promise<EntryResult> {
+  const settings = await loadSettings(supabase)
+  const isPaper  = !settings.liveMode
+  const tag      = `[scout] ${mint.slice(0, 8)}…`
+
+  // Seuil $ d'achat
+  if (buyUsd < settings.scoutMinUsd) {
+    console.log(`${tag} SKIP: achat $${buyUsd.toFixed(0)} < min $${settings.scoutMinUsd}`)
+    return { entered: false, reason: `scout: achat $${buyUsd.toFixed(0)} < min $${settings.scoutMinUsd}` }
+  }
+
+  // Seuil mcap
+  if (marketCapUsd !== null && marketCapUsd > settings.scoutMaxMcapUsd) {
+    console.log(`${tag} SKIP: mcap $${marketCapUsd.toFixed(0)} > seuil $${settings.scoutMaxMcapUsd}`)
+    return { entered: false, reason: `scout: mcap $${marketCapUsd.toFixed(0)} > seuil $${settings.scoutMaxMcapUsd}` }
+  }
+
+  // Pas de position déjà ouverte (SCOUT ou autre)
+  const { data: existingOpen } = await supabase
+    .from('kymia_risque_positions')
+    .select('id')
+    .eq('token_mint', mint)
+    .eq('status', 'OPEN')
+    .limit(1)
+    .maybeSingle()
+
+  if (existingOpen) {
+    console.log(`${tag} SKIP: position déjà ouverte`)
+    return { entered: false, reason: 'scout: position déjà ouverte' }
+  }
+
+  // Pas de ré-entrée sur un token clôturé
+  const { data: closedPos } = await supabase
+    .from('kymia_risque_positions')
+    .select('id')
+    .eq('token_mint', mint)
+    .neq('status', 'OPEN')
+    .limit(1)
+    .maybeSingle()
+
+  if (closedPos) {
+    console.log(`${tag} SKIP: token déjà tradé`)
+    return { entered: false, reason: 'scout: token déjà tradé' }
+  }
+
+  // Pas de vente récente d'un wallet suivi
+  if (settings.blockIfSoldWithinMinutes > 0) {
+    const cutoffIso = new Date(Date.now() - settings.blockIfSoldWithinMinutes * 60_000).toISOString()
+    const { data: recentSells } = await supabase
+      .from('kymia_risque_sells')
+      .select('wallet_address')
+      .eq('token_mint', mint)
+      .gte('sold_at', cutoffIso)
+      .limit(1)
+
+    if ((recentSells ?? []).length > 0) {
+      console.log(`${tag} SKIP: vente récente (block_if_sold_within=${settings.blockIfSoldWithinMinutes}min)`)
+      return { entered: false, reason: `scout: vente récente d'un wallet suivi` }
+    }
+  }
+
+  // Plafond concurrent (même garde-fou que checkEntry)
+  const safeConcurrentMax = settings.liveMode
+    ? Math.min(settings.maxConcurrentPositions, Math.floor(settings.capitalUsd / Math.max(settings.positionSizeUsd, 1)))
+    : settings.maxConcurrentPositions
+
+  const { count: openCount } = await supabase
+    .from('kymia_risque_positions')
+    .select('*', { count: 'exact', head: true })
+    .eq('status', 'OPEN')
+
+  if ((openCount ?? 0) >= safeConcurrentMax) {
+    console.log(`${tag} SKIP: ${openCount}/${safeConcurrentMax} positions concurrent max`)
+    return { entered: false, reason: `scout: ${openCount}/${safeConcurrentMax} concurrent max` }
+  }
+
+  // Score sécurité
+  const { data: token } = await supabase
+    .from('kymia_risque_tokens')
+    .select('risque_score, symbol')
+    .eq('mint', mint)
+    .maybeSingle()
+
+  if (token?.risque_score === 'DANGER') {
+    console.log(`${tag} SKIP: score DANGER`)
+    return { entered: false, reason: 'scout: score DANGER' }
+  }
+
+  // Ouvrir la position scout
+  const stopPriceUsd = currentPrice * (1 - settings.stopLossPct / 100)
+
+  console.log(
+    `${tag} SCOUT ENTRY: ${walletLabel} a acheté $${buyUsd.toFixed(0)}` +
+    ` mcap ${marketCapUsd ? '$' + marketCapUsd.toFixed(0) : 'n/a'}` +
+    ` price=$${currentPrice} size=$${settings.scoutSizeUsd} stop=$${stopPriceUsd.toFixed(8)}`
+  )
+
+  const { data: inserted, error: insertErr } = await supabase
+    .from('kymia_risque_positions')
+    .insert({
+      token_mint:         mint,
+      token_symbol:       token?.symbol ?? null,
+      entry_price_usd:    currentPrice,
+      entry_market_cap:   marketCapUsd,
+      size_usd:           settings.scoutSizeUsd,
+      original_size_usd:  settings.scoutSizeUsd,
+      trigger_reason:     `scout: ${walletLabel} acheté $${buyUsd.toFixed(0)}`,
+      trigger_wallets:    [walletLabel],
+      security_score:     token?.risque_score ?? null,
+      stop_price_usd:     stopPriceUsd,
+      high_since_entry:   currentPrice,
+      trailing_active:    false,
+      strategy_tag:       'SCOUT',
+      status:             'OPEN',
+      is_paper:           isPaper,
+      tx_signature_entry: null,
+    })
+    .select('id')
+    .single()
+
+  if (insertErr) throw new Error(`scout insert: ${insertErr.message}`)
+
+  console.log(
+    `[positions] ${isPaper ? 'PAPER' : 'LIVE'} SCOUT ENTRY ${mint.slice(0, 8)}…` +
+    ` price=$${currentPrice} size=$${settings.scoutSizeUsd}` +
+    ` stop=$${stopPriceUsd.toFixed(8)} trigger="${walletLabel}"`
+  )
+
+  return { entered: true, positionId: (inserted as any).id, reason: `scout: ${walletLabel}` }
 }
