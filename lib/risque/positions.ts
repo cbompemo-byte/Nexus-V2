@@ -45,6 +45,8 @@ export interface RisqueSettings {
   scoutSizeUsd:                     number   // taille position éclaireur en $ (défaut 25)
   scoutMaxMcapUsd:                  number   // mcap max pour déclencher un éclaireur (défaut 300K$)
   scoutMinUsd:                      number   // achat min $ d'un wallet tier A pour qualifier (défaut 1000$)
+  paperFeePct:                      number   // frais appliqués à l'entrée ET à la sortie en paper (défaut 1%)
+  paperSlippagePct:                 number   // slippage paper : prix d'entrée majoré, prix de sortie minoré (défaut 2%)
 }
 
 export async function loadSettings(supabase: SupabaseClient): Promise<RisqueSettings> {
@@ -91,6 +93,8 @@ export async function loadSettings(supabase: SupabaseClient): Promise<RisqueSett
     scoutSizeUsd:                     num('scout_size_usd',                          25),
     scoutMaxMcapUsd:                  num('scout_max_mcap_usd',                 300_000),
     scoutMinUsd:                      num('scout_min_usd',                        1_000),
+    paperFeePct:                      num('paper_fee_pct',                            1),
+    paperSlippagePct:                 num('paper_slippage_pct',                       2),
   }
 }
 
@@ -731,11 +735,36 @@ export async function closePosition(
   status:     ClosedStatus,
   exitReason: string,
 ): Promise<boolean> {
-  // PnL total = gain déjà encaissé (vente partielle) + gain sur la part restante.
-  // pnl_pct calculé sur original_size_usd pour rester cohérent avec la taille initiale.
+  // ── Coûts paper (frais + slippage) ─────────────────────────────────────────
+  // Chargés ici plutôt que via loadSettings pour éviter de changer la signature.
+  // Uniquement pour les positions paper ; live = 0 coûts (transaction réelle).
+  let paperFeePct = 0
+  let paperSlippagePct = 0
+  if (position.is_paper) {
+    const { data: costRows } = await supabase
+      .from('kymia_risque_settings')
+      .select('key, value')
+      .in('key', ['paper_fee_pct', 'paper_slippage_pct'])
+    const cm = new Map((costRows ?? []).map(r => [r.key as string, Number(r.value)]))
+    paperFeePct      = cm.get('paper_fee_pct')      ?? 1
+    paperSlippagePct = cm.get('paper_slippage_pct') ?? 2
+  }
+
+  // Prix effectifs : slippage majore l'entrée, minore la sortie.
+  const effectiveExitPrice  = position.is_paper
+    ? exitPrice                  * (1 - paperSlippagePct / 100)
+    : exitPrice
+  const effectiveEntryPrice = position.is_paper
+    ? position.entry_price_usd   * (1 + paperSlippagePct / 100)
+    : position.entry_price_usd
+
+  // PnL total = gain déjà encaissé (vente partielle, déjà ajusté) + gain sur la part restante.
+  // Frais = feePct × 2 (entrée + sortie) sur la part restante seulement
+  // (la part vendue au TP partiel a déjà payé ses frais dans takePartialProfit).
   const realizedPnl     = position.realized_pnl_usd ?? 0
-  const remainingPnlUsd = (exitPrice - position.entry_price_usd) / position.entry_price_usd * position.size_usd
-  const pnlUsd          = realizedPnl + remainingPnlUsd
+  const remainingPnlUsd = (effectiveExitPrice - effectiveEntryPrice) / effectiveEntryPrice * position.size_usd
+  const feesUsd         = position.is_paper ? position.size_usd * (paperFeePct / 100) * 2 : 0
+  const pnlUsd          = realizedPnl + remainingPnlUsd - feesUsd
   const baseSizeUsd     = position.original_size_usd ?? position.size_usd
   const pnlPct          = pnlUsd / baseSizeUsd * 100
   const now    = new Date().toISOString()
@@ -776,12 +805,16 @@ export async function closePosition(
   }
 
   const sign = pnlUsd >= 0 ? '+' : ''
+  const costsNote = position.is_paper && (paperFeePct > 0 || paperSlippagePct > 0)
+    ? ` costs=$${feesUsd.toFixed(2)} (slip=${paperSlippagePct}% fee=${paperFeePct}%×2)`
+    : ''
   console.log(
     `[positions] ${position.is_paper ? 'PAPER' : 'LIVE'} EXIT` +
     ` ${position.token_mint.slice(0, 8)}…` +
     ` ${status}` +
     ` entry=$${position.entry_price_usd} exit=$${exitPrice}` +
     ` pnl=${pnlPct.toFixed(1)}% (${sign}$${pnlUsd.toFixed(2)})` +
+    costsNote +
     ` reason="${exitReason}"`
   )
 
@@ -803,10 +836,32 @@ export async function takePartialProfit(
   exitPrice: number,
   sellPct:   number,
 ): Promise<boolean> {
+  // ── Coûts paper ─────────────────────────────────────────────────────────────
+  let paperFeePct = 0
+  let paperSlippagePct = 0
+  if (position.is_paper) {
+    const { data: costRows } = await supabase
+      .from('kymia_risque_settings')
+      .select('key, value')
+      .in('key', ['paper_fee_pct', 'paper_slippage_pct'])
+    const cm = new Map((costRows ?? []).map(r => [r.key as string, Number(r.value)]))
+    paperFeePct      = cm.get('paper_fee_pct')      ?? 1
+    paperSlippagePct = cm.get('paper_slippage_pct') ?? 2
+  }
+
   const soldFraction     = sellPct / 100
-  const pnlOnSold        = (exitPrice - position.entry_price_usd) / position.entry_price_usd
-                           * position.size_usd * soldFraction
+  const soldSizeUsd      = position.size_usd * soldFraction
   const remainingSizeUsd = position.size_usd * (1 - soldFraction)
+
+  // Prix effectifs avec slippage
+  const effectiveExitPrice  = position.is_paper ? exitPrice                * (1 - paperSlippagePct / 100) : exitPrice
+  const effectiveEntryPrice = position.is_paper ? position.entry_price_usd * (1 + paperSlippagePct / 100) : position.entry_price_usd
+
+  // PnL sur la fraction vendue, ajusté slippage + frais (entrée + sortie pro-rata)
+  const pnlOnSoldPrice   = (effectiveExitPrice - effectiveEntryPrice) / effectiveEntryPrice * soldSizeUsd
+  const feesOnSoldUsd    = position.is_paper ? soldSizeUsd * (paperFeePct / 100) * 2 : 0
+  const pnlOnSold        = pnlOnSoldPrice - feesOnSoldUsd
+
   const gainPct          = ((exitPrice - position.entry_price_usd) / position.entry_price_usd * 100).toFixed(1)
   const now              = new Date().toISOString()
 
@@ -832,10 +887,14 @@ export async function takePartialProfit(
     return false
   }
 
+  const costsNote = position.is_paper && (paperFeePct > 0 || paperSlippagePct > 0)
+    ? ` costs=$${feesOnSoldUsd.toFixed(2)} (slip=${paperSlippagePct}% fee=${paperFeePct}%×2)`
+    : ''
   console.log(
     `[positions] ${position.is_paper ? 'PAPER' : 'LIVE'} PARTIAL TP` +
     ` ${position.token_mint.slice(0, 8)}…` +
     ` +${gainPct}% → vente ${sellPct}% ($${pnlOnSold.toFixed(2)} réalisé)` +
+    costsNote +
     ` reste: $${remainingSizeUsd.toFixed(2)}, stop=breakeven $${position.entry_price_usd}`
   )
 

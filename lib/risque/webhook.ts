@@ -479,7 +479,7 @@ async function checkTriggerExit(
 ): Promise<void> {
   const { data: pos } = await supabase
     .from('kymia_risque_positions')
-    .select('id, token_mint, token_symbol, entry_at, entry_price_usd, size_usd, stop_price_usd, high_since_entry, trailing_active, trigger_wallets, is_paper')
+    .select('id, token_mint, token_symbol, entry_at, entry_price_usd, size_usd, original_size_usd, stop_price_usd, high_since_entry, trailing_active, trigger_wallets, is_paper, partial_tp_taken, realized_pnl_usd, strategy_tag')
     .eq('token_mint', mint)
     .eq('status', 'OPEN')
     .maybeSingle()
