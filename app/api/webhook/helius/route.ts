@@ -75,7 +75,9 @@ export async function POST(req: NextRequest) {
   // after() s'exécute après l'envoi de la réponse, dans la même instance Vercel.
   after(async () => {
     try {
-      const { buysInserted, sellsInserted } = await processWebhookEvent(rawId, payload, supabase)
+      const { buysInserted, sellsInserted, buyErrors, entryErrors } =
+        await processWebhookEvent(rawId, payload, supabase)
+      const allErrors = [...buyErrors, ...entryErrors]
       await supabase
         .from('kymia_risque_webhooks_raw')
         .update({
@@ -83,7 +85,7 @@ export async function POST(req: NextRequest) {
           processed_at:   new Date().toISOString(),
           buys_inserted:  buysInserted,
           sells_inserted: sellsInserted,
-          // Note : buyErrors non persistées — visibles dans les logs Vercel
+          ...(allErrors.length > 0 ? { error: allErrors.join(' | ') } : {}),
         })
         .eq('id', rawId)
     } catch (e: any) {

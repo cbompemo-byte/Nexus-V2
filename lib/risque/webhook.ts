@@ -18,7 +18,7 @@
 
 import { SupabaseClient }             from '@supabase/supabase-js'
 import { fetchRugCheck }              from '@/lib/memecoin/screen'
-import { getTokenMarketData }         from '@/lib/risque/pumpfun'
+import { getTokenMarketData, fetchSolPriceUsd } from '@/lib/risque/pumpfun'
 import { checkRug }                   from '@/lib/risque/rug'
 import { checkEntry, closePosition, takePartialProfit, checkScoutEntry, PositionRow } from '@/lib/risque/positions'
 
@@ -569,10 +569,10 @@ export async function processWebhookEvent(
   rawId:   string,
   payload: unknown,
   supabase: SupabaseClient,
-): Promise<{ buysInserted: number; sellsInserted: number; buyErrors: string[]; tokenErrors: string[] }> {
+): Promise<{ buysInserted: number; sellsInserted: number; buyErrors: string[]; tokenErrors: string[]; entryErrors: string[] }> {
   if (!Array.isArray(payload) || payload.length === 0) {
     console.log(`[webhook] raw ${rawId.slice(0, 8)}: payload vide ou invalide`)
-    return { buysInserted: 0, sellsInserted: 0, buyErrors: [], tokenErrors: [] }
+    return { buysInserted: 0, sellsInserted: 0, buyErrors: [], tokenErrors: [], entryErrors: [] }
   }
 
   // ── Charger les wallets surveillés ──────────────────────────────────────
@@ -583,7 +583,7 @@ export async function processWebhookEvent(
   if (walletErr) throw new Error(`wallet select: ${walletErr.message}`)
   if (!wallets?.length) {
     console.warn('[webhook] kymia_risque_wallets vide')
-    return { buysInserted: 0, sellsInserted: 0, buyErrors: [], tokenErrors: [] }
+    return { buysInserted: 0, sellsInserted: 0, buyErrors: [], tokenErrors: [], entryErrors: [] }
   }
 
   const walletMap = new Map<string, string>(
@@ -614,6 +614,7 @@ export async function processWebhookEvent(
   let sellsInserted = 0
   const buyErrors:   string[] = []
   const tokenErrors: string[] = []
+  const entryErrors: string[] = []
 
   for (const tx of txs) {
     if (tx.transactionError !== null) continue
@@ -674,7 +675,9 @@ export async function processWebhookEvent(
           buyErrors.push(`processBuy threw: ${e.message}`)
         }
 
-        // Vérifier les conditions d'entrée après chaque buy
+        // ── checkEntry (convergence) ─────────────────────────────────────────
+        // Nécessite priceUsd — impossible si source=onchain_sol_only (priceUsd null).
+        let convOpened = false
         if (marketResult.priceUsd !== null) {
           try {
             const entry = await checkEntry(
@@ -684,35 +687,70 @@ export async function processWebhookEvent(
             )
             if (entry.entered) {
               console.log(`[webhook] POSITION OUVERTE ${buy.mint.slice(0, 8)}…: ${entry.reason}`)
-            }
-
-            // Éclaireur : si la convergence n'a pas ouvert (ni CONV ni SCOUT+CONV),
-            // et que ce wallet est tier A → tenter une entrée scout.
-            if (!entry.entered && tierAWallets.has(walletAddress)) {
-              const buyUsdApprox = buy.net > 0 ? buy.net * marketResult.priceUsd : 0
-              try {
-                const scout = await checkScoutEntry(
-                  supabase, buy.mint, walletAddress, walletLabel,
-                  buyUsdApprox, marketResult.priceUsd, marketResult.marketCapUsd,
-                )
-                if (scout.entered) {
-                  console.log(`[webhook] POSITION SCOUT ${buy.mint.slice(0, 8)}…: ${scout.reason}`)
-                }
-              } catch (e: any) {
-                console.error(`[webhook] checkScoutEntry ${buy.mint.slice(0, 8)}…:`, e.message)
-              }
+              convOpened = true
             }
           } catch (e: any) {
-            console.error(`[webhook] checkEntry ${buy.mint.slice(0, 8)}…:`, e.message)
+            const msg = `checkEntry ${buy.mint.slice(0, 8)}… ${walletLabel}: ${(e as Error).message}`
+            console.error(`[webhook] ${msg}`)
+            entryErrors.push(msg)
           }
 
           // Take profit : vérifier sur la position ouverte avec le prix déjà connu.
-          // Garde-fou : onchain_sol_only → priceUsd null/0 → checkTakeProfitExit no-op.
-          if (marketResult.priceUsd != null && marketResult.priceUsd > 0) {
+          if (marketResult.priceUsd > 0) {
             try {
               await checkTakeProfitExit(supabase, buy.mint, takeProfitPct, takeProfitSellPct, marketResult.priceUsd)
             } catch (e: any) {
               console.error(`[webhook] checkTakeProfitExit buy ${buy.mint.slice(0, 8)}…:`, e.message)
+            }
+          }
+        }
+
+        // ── Éclaireur (SCOUT) ────────────────────────────────────────────────
+        // Tenté si : pas de position CONV ouverte ET wallet tier A.
+        // Résolution du prix : priceUsd direct si disponible, sinon dérivé depuis
+        // marketCapSol × prix SOL (source onchain_sol_only — pump.fun très frais).
+        // BUG CORRIGÉ : l'ancien code imbriquait le scout dans if(priceUsd !== null),
+        // bloquant silencieusement les tokens sans prix Jupiter.
+        if (!convOpened && tierAWallets.has(walletAddress)) {
+          let scoutPriceUsd: number | null = marketResult.priceUsd
+          let scoutMcapUsd:  number | null = marketResult.marketCapUsd
+
+          // Dériver le prix depuis marketCapSol quand Jupiter est indisponible
+          if (scoutPriceUsd === null && marketResult.marketCapSol != null) {
+            try {
+              const solPrice = await fetchSolPriceUsd()
+              scoutMcapUsd  = marketResult.marketCapSol * solPrice
+              scoutPriceUsd = scoutMcapUsd / 1_000_000_000   // pump.fun supply = 1B
+            } catch (e: any) {
+              console.warn(`[scout] ${buy.mint.slice(0, 8)}… dérivation prix SOL échouée: ${(e as Error).message}`)
+            }
+          }
+
+          if (scoutPriceUsd === null) {
+            console.log(
+              `[scout] SKIP ${buy.mint.slice(0, 8)}… : prix USD indisponible` +
+              ` (marketCapSol=${marketResult.marketCapSol ?? 'null'})` +
+              ` — éclaireur impossible sans prix d'entrée`
+            )
+          } else {
+            const buyUsdApprox = buy.net > 0 ? buy.net * scoutPriceUsd : 0
+            console.log(
+              `[scout] évaluation ${buy.mint.slice(0, 8)}… wallet=${walletLabel}` +
+              ` buyUsd=$${buyUsdApprox.toFixed(0)} price=$${scoutPriceUsd.toFixed(8)}` +
+              ` mcap=${scoutMcapUsd ? '$' + scoutMcapUsd.toFixed(0) : 'null'}`
+            )
+            try {
+              const scout = await checkScoutEntry(
+                supabase, buy.mint, walletAddress, walletLabel,
+                buyUsdApprox, scoutPriceUsd, scoutMcapUsd,
+              )
+              if (scout.entered) {
+                console.log(`[webhook] POSITION SCOUT ${buy.mint.slice(0, 8)}…: ${scout.reason}`)
+              }
+            } catch (e: any) {
+              const msg = `checkScoutEntry ${buy.mint.slice(0, 8)}… ${walletLabel}: ${(e as Error).message}`
+              console.error(`[webhook] ${msg}`)
+              entryErrors.push(msg)
             }
           }
         }
@@ -754,14 +792,18 @@ export async function processWebhookEvent(
   console.log(
     `[webhook] raw ${rawId.slice(0, 8)}: ${txs.length} txs` +
     ` → buys=${buysInserted} sells=${sellsInserted}` +
-    (buyErrors.length > 0 ? ` buy_errors=${buyErrors.length}` : '')
+    (buyErrors.length   > 0 ? ` buy_errors=${buyErrors.length}`   : '') +
+    (entryErrors.length > 0 ? ` entry_errors=${entryErrors.length}` : '')
   )
   if (buyErrors.length > 0) {
     console.error(`[webhook] buy errors raw ${rawId.slice(0, 8)}:`, buyErrors)
+  }
+  if (entryErrors.length > 0) {
+    console.error(`[webhook] entry errors raw ${rawId.slice(0, 8)}:`, entryErrors)
   }
   if (tokenErrors.length > 0) {
     console.error(`[webhook] token errors raw ${rawId.slice(0, 8)}:`, tokenErrors)
   }
 
-  return { buysInserted, sellsInserted, buyErrors, tokenErrors }
+  return { buysInserted, sellsInserted, buyErrors, tokenErrors, entryErrors }
 }
