@@ -685,7 +685,15 @@ export async function checkEntry(
     .select('id')
     .single()
 
-  if (insertErr) throw new Error(`position insert: ${insertErr.message}`)
+  // 23505 = unique_violation : index uniq_risque_open_position a été touché
+  // en même temps par deux webhooks → traiter comme un SKIP normal.
+  if (insertErr) {
+    if ((insertErr as any).code === '23505') {
+      console.log(`[positions] ${mint.slice(0, 8)}… position insert 23505 — race condition, position déjà ouverte`)
+      return { entered: false, reason: 'position déjà ouverte (race condition)' }
+    }
+    throw new Error(`position insert: ${insertErr.message}`)
+  }
 
   console.log(
     `[positions] ${isPaper ? 'PAPER' : 'LIVE'} ENTRY ${mint.slice(0, 8)}…` +
@@ -1035,7 +1043,13 @@ export async function checkScoutEntry(
     .select('id')
     .single()
 
-  if (insertErr) throw new Error(`scout insert: ${insertErr.message}`)
+  if (insertErr) {
+    if ((insertErr as any).code === '23505') {
+      console.log(`[scout] ${mint.slice(0, 8)}… insert 23505 — race condition, position déjà ouverte`)
+      return { entered: false, reason: 'scout: position déjà ouverte (race condition)' }
+    }
+    throw new Error(`scout insert: ${insertErr.message}`)
+  }
 
   console.log(
     `[positions] ${isPaper ? 'PAPER' : 'LIVE'} SCOUT ENTRY ${mint.slice(0, 8)}…` +
